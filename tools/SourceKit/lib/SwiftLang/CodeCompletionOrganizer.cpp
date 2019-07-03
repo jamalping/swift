@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -103,7 +103,7 @@ std::vector<Completion *> SourceKit::CodeCompletion::extendCompletions(
     if (result->getSemanticContext() == SemanticContextKind::OtherModule) {
       builder.setModuleImportDepth(depth.lookup(result->getModuleName()));
 
-      if (info.completionContext->HasExpectedTypeRelation &&
+      if (info.completionContext->typeContextKind == TypeContextKind::Required &&
           result->getKind() == Completion::Declaration) {
         // FIXME: because other-module results are cached, they will not be
         // given a type-relation of invalid.  As a hack, we look at the text of
@@ -158,7 +158,7 @@ bool SourceKit::CodeCompletion::addCustomCompletions(
     CodeCompletion::SwiftResult swiftResult(
         CodeCompletion::SwiftResult::ResultKind::Pattern,
         SemanticContextKind::ExpressionSpecific,
-        /*numBytesToErase=*/0, completionString);
+        /*NumBytesToErase=*/0, completionString);
 
     CompletionBuilder builder(sink, swiftResult);
     builder.setCustomKind(customCompletion.Kind);
@@ -179,11 +179,19 @@ bool SourceKit::CodeCompletion::addCustomCompletions(
     case CompletionKind::AssignmentRHS:
     case CompletionKind::CallArg:
     case CompletionKind::ReturnStmtExpr:
+    case CompletionKind::YieldStmtExpr:
       if (custom.Contexts.contains(CustomCompletionInfo::Expr)) {
         changed = true;
         addCompletion(custom);
       }
       break;
+    case CompletionKind::ForEachSequence:
+      if (custom.Contexts.contains(CustomCompletionInfo::ForEachSequence)) {
+        changed = true;
+        addCompletion(custom);
+      }
+      break;
+    case CompletionKind::TypeDeclResultBeginning:
     case CompletionKind::TypeSimpleBeginning:
       if (custom.Contexts.contains(CustomCompletionInfo::Type)) {
         changed = true;
@@ -205,13 +213,13 @@ bool SourceKit::CodeCompletion::addCustomCompletions(
 class CodeCompletionOrganizer::Impl {
   std::unique_ptr<Group> rootGroup;
   CompletionKind completionKind;
-  bool completionHasExpectedTypes;
+  TypeContextKind typeContextKind;
 
   void groupStemsRecursive(Group *group, bool recurseIntoNewGroups,
                            StringRef(getStem)(StringRef));
 
 public:
-  Impl(CompletionKind kind, bool hasExpectedTypes);
+  Impl(CompletionKind kind, TypeContextKind typeContextKind);
 
   void addCompletionsWithFilter(ArrayRef<Completion *> completions,
                                 StringRef filterText, Options options,
@@ -268,8 +276,8 @@ public:
 
 CodeCompletionOrganizer::CodeCompletionOrganizer(const Options &options,
                                                  CompletionKind kind,
-                                                 bool hasExpectedTypes)
-    : impl(*new Impl(kind, hasExpectedTypes)), options(options) {}
+                                                 TypeContextKind typeContextKind)
+    : impl(*new Impl(kind, typeContextKind)), options(options) {}
 CodeCompletionOrganizer::~CodeCompletionOrganizer() { delete &impl; }
 
 void CodeCompletionOrganizer::preSortCompletions(
@@ -314,8 +322,8 @@ CodeCompletionViewRef CodeCompletionOrganizer::takeResultsView() {
 //===----------------------------------------------------------------------===//
 
 ImportDepth::ImportDepth(ASTContext &context, CompilerInvocation &invocation) {
-  llvm::DenseSet<Module *> seen;
-  std::deque<std::pair<Module *, uint8_t>> worklist;
+  llvm::DenseSet<ModuleDecl *> seen;
+  std::deque<std::pair<ModuleDecl *, uint8_t>> worklist;
 
   StringRef mainModule = invocation.getModuleName();
   auto *main = context.getLoadedModule(context.getIdentifier(mainModule));
@@ -331,8 +339,11 @@ ImportDepth::ImportDepth(ASTContext &context, CompilerInvocation &invocation) {
 
   // Private imports from this module.
   // FIXME: only the private imports from the current source file.
-  SmallVector<Module::ImportedModule, 16> mainImports;
-  main->getImportedModules(mainImports, Module::ImportFilter::Private);
+  ModuleDecl::ImportFilter importFilter;
+  importFilter |= ModuleDecl::ImportFilterKind::Private;
+  importFilter |= ModuleDecl::ImportFilterKind::ImplementationOnly;
+  SmallVector<ModuleDecl::ImportedModule, 16> mainImports;
+  main->getImportedModules(mainImports, importFilter);
   for (auto &import : mainImports) {
     uint8_t depth = 1;
     if (auxImports.count(import.second->getName().str()))
@@ -342,7 +353,7 @@ ImportDepth::ImportDepth(ASTContext &context, CompilerInvocation &invocation) {
 
   // Fill depths with BFS over module imports.
   while (!worklist.empty()) {
-    Module *module;
+    ModuleDecl *module;
     uint8_t depth;
     std::tie(module, depth) = worklist.front();
     worklist.pop_front();
@@ -359,7 +370,7 @@ ImportDepth::ImportDepth(ASTContext &context, CompilerInvocation &invocation) {
     }
 
     // Add imports to the worklist.
-    SmallVector<Module::ImportedModule, 16> imports;
+    SmallVector<ModuleDecl::ImportedModule, 16> imports;
     module->getImportedModules(imports);
     for (auto &import : imports) {
       uint8_t next = std::max(depth, uint8_t(depth + 1)); // unsigned wrap
@@ -402,8 +413,8 @@ static std::unique_ptr<Result> make_result(Completion *result) {
 // CodeCompletionOrganizer::Impl implementation
 //===----------------------------------------------------------------------===//
 
-CodeCompletionOrganizer::Impl::Impl(CompletionKind kind, bool hasExpectedTypes)
-    : completionKind(kind), completionHasExpectedTypes(hasExpectedTypes) {
+CodeCompletionOrganizer::Impl::Impl(CompletionKind kind, TypeContextKind typeContextKind)
+    : completionKind(kind), typeContextKind(typeContextKind) {
   assert(!rootGroup && "initialized twice");
   rootGroup = make_group("");
 }
@@ -447,22 +458,32 @@ static bool isHighPriorityKeyword(CodeCompletionKeywordKind kind) {
   }
 }
 
-bool FilterRules::hideName(StringRef name) const {
-  auto I = hideByName.find(name);
-  if (I != hideByName.end())
-      return I->getValue();
+bool FilterRules::hideFilterName(StringRef name) const {
+  auto I = hideByFilterName.find(name);
+  if (I != hideByFilterName.end())
+    return I->getValue();
   return hideAll;
 }
 
 bool FilterRules::hideCompletion(Completion *completion) const {
-  return hideCompletion(completion, completion->getName(), completion->getCustomKind());
+  return hideCompletion(completion, completion->getName(),
+                        completion->getDescription(),
+                        completion->getCustomKind());
 }
 
-bool FilterRules::hideCompletion(SwiftResult *completion, StringRef name, void *customKind) const {
+bool FilterRules::hideCompletion(SwiftResult *completion, StringRef filterName,
+                                 StringRef description,
+                                 void *customKind) const {
 
-  if (!name.empty()) {
-    auto I = hideByName.find(name);
-    if (I != hideByName.end())
+  if (!description.empty()) {
+    auto I = hideByDescription.find(description);
+    if (I != hideByDescription.end())
+      return I->getValue();
+  }
+
+  if (!filterName.empty()) {
+    auto I = hideByFilterName.find(filterName);
+    if (I != hideByFilterName.end())
       return I->getValue();
   }
 
@@ -517,6 +538,7 @@ void CodeCompletionOrganizer::Impl::addCompletionsWithFilter(
   if (filterText.empty()) {
     bool hideLowPriority =
         options.hideLowPriority &&
+        completionKind != CompletionKind::TypeDeclResultBeginning &&
         completionKind != CompletionKind::TypeSimpleBeginning &&
         completionKind != CompletionKind::PostfixExpr;
     for (Completion *completion : completions) {
@@ -552,7 +574,7 @@ void CodeCompletionOrganizer::Impl::addCompletionsWithFilter(
         if (completion->getExpectedTypeRelation() >= Completion::Convertible ||
             (completion->getKind() == Completion::Literal &&
              completionKind != CompletionKind::StmtOrExpr &&
-             !completionHasExpectedTypes))
+             typeContextKind < TypeContextKind::Required))
           break;
 
         if (completion->getKind() == Completion::Keyword &&
@@ -582,7 +604,7 @@ void CodeCompletionOrganizer::Impl::addCompletionsWithFilter(
     // Hide literals other than the ones that are also keywords if they don't
     // match the expected types.
     if (completion->getKind() == Completion::Literal &&
-        completionHasExpectedTypes &&
+        typeContextKind == TypeContextKind::Required &&
         completion->getExpectedTypeRelation() < Completion::Convertible &&
         completion->getLiteralKind() !=
             CodeCompletionLiteralKind::BooleanLiteral &&
@@ -698,7 +720,7 @@ enum class ResultBucket {
 };
 } // end anonymous namespace
 
-static ResultBucket getResultBucket(Item &item, bool hasExpectedTypes,
+static ResultBucket getResultBucket(Item &item, bool hasRequiredTypes,
                                     bool skipMetaGroups = false) {
   if (item.isExactMatch && !skipMetaGroups)
     return ResultBucket::ExactMatch;
@@ -725,7 +747,7 @@ static ResultBucket getResultBucket(Item &item, bool hasExpectedTypes,
   case Completion::Literal:
     if (matchesType) {
       return ResultBucket::LiteralTypeMatch;
-    } else if (!hasExpectedTypes) {
+    } else if (!hasRequiredTypes) {
       return ResultBucket::Literal;
     } else {
       // When we have type context, we still show literals that are keywords,
@@ -890,19 +912,19 @@ static bool isTopNonLiteralResult(Item &item, ResultBucket literalBucket) {
 }
 
 static void sortTopN(const Options &options, Group *group,
-                     bool hasExpectedTypes) {
+                     bool hasRequiredTypes) {
 
   auto &contents = group->contents;
   if (contents.empty() || options.showTopNonLiteralResults == 0)
     return;
 
-  auto best = getResultBucket(*contents[0], hasExpectedTypes);
+  auto best = getResultBucket(*contents[0], hasRequiredTypes);
   if (best == ResultBucket::LiteralTypeMatch || best == ResultBucket::Literal) {
 
     unsigned beginNewIndex = 0;
     unsigned endNewIndex = 0;
     for (unsigned i = 1; i < contents.size(); ++i) {
-      auto bucket = getResultBucket(*contents[i], hasExpectedTypes);
+      auto bucket = getResultBucket(*contents[i], hasRequiredTypes);
       if (bucket < best) {
         // This algorithm assumes we don't have both literal and
         // literal-type-match at the start of the list.
@@ -947,13 +969,13 @@ static void sortTopN(const Options &options, Group *group,
 }
 
 static void sortRecursive(const Options &options, Group *group,
-                          bool hasExpectedTypes) {
+                          bool hasRequiredTypes) {
   // Sort all of the subgroups first, and fill in the bucket for each result.
   auto &contents = group->contents;
   double best = -1.0;
   for (auto &item : contents) {
-    if (Group *g = dyn_cast<Group>(item.get())) {
-      sortRecursive(options, g, hasExpectedTypes);
+    if (auto *g = dyn_cast<Group>(item.get())) {
+      sortRecursive(options, g, hasRequiredTypes);
     } else {
       Result *r = cast<Result>(item.get());
       item->finalScore = combinedScore(options, item->matchScore, r->value);
@@ -979,8 +1001,8 @@ static void sortRecursive(const Options &options, Group *group,
     Item &a = *a_;
     Item &b = *b_;
 
-    auto bucketA = getResultBucket(a, hasExpectedTypes);
-    auto bucketB = getResultBucket(b, hasExpectedTypes);
+    auto bucketA = getResultBucket(a, hasRequiredTypes);
+    auto bucketB = getResultBucket(b, hasRequiredTypes);
     if (bucketA < bucketB)
       return false;
     else if (bucketB < bucketA)
@@ -991,8 +1013,8 @@ static void sortRecursive(const Options &options, Group *group,
     if (bucketA == ResultBucket::ExactMatch ||
         bucketA == ResultBucket::ExpressionSpecific ||
         bucketA == ResultBucket::NotRecommended) {
-      bucketA = getResultBucket(a, hasExpectedTypes, /*skipMetaGroups*/ true);
-      bucketB = getResultBucket(b, hasExpectedTypes, /*skipMetaGroups*/ true);
+      bucketA = getResultBucket(a, hasRequiredTypes, /*skipMetaGroups*/ true);
+      bucketB = getResultBucket(b, hasRequiredTypes, /*skipMetaGroups*/ true);
       if (bucketA < bucketB)
         return false;
       else if (bucketB < bucketA)
@@ -1027,9 +1049,10 @@ static void sortRecursive(const Options &options, Group *group,
 }
 
 void CodeCompletionOrganizer::Impl::sort(Options options) {
-  sortRecursive(options, rootGroup.get(), completionHasExpectedTypes);
+  bool hasRequiredTypes = typeContextKind == TypeContextKind::Required;
+  sortRecursive(options, rootGroup.get(), hasRequiredTypes);
   if (options.showTopNonLiteralResults != 0)
-    sortTopN(options, rootGroup.get(), completionHasExpectedTypes);
+    sortTopN(options, rootGroup.get(), hasRequiredTypes);
 }
 
 void CodeCompletionOrganizer::Impl::groupStemsRecursive(
@@ -1047,7 +1070,7 @@ void CodeCompletionOrganizer::Impl::groupStemsRecursive(
 
   auto start = worklist.begin();
   while (start != worklist.end()) {
-    if (Group *g = dyn_cast<Group>(start->get())) {
+    if (auto *g = dyn_cast<Group>(start->get())) {
       groupStemsRecursive(g, recurseIntoNewGroups, getStem);
       newContents.push_back(std::move(*start));
       ++start;
@@ -1178,7 +1201,7 @@ void CompletionBuilder::getFilterName(CodeCompletionString *str,
     for (auto C : str->getChunks().slice(*FirstTextChunk)) {
 
       if (C.is(ChunkKind::BraceStmtWithCursor))
-        break;
+        break; // Don't include brace-stmt in filter name.
 
       if (C.is(ChunkKind::Equal)) {
         OS << C.getText();
@@ -1191,11 +1214,12 @@ void CompletionBuilder::getFilterName(CodeCompletionString *str,
       case ChunkKind::CallParameterInternalName:
       case ChunkKind::CallParameterClosureType:
       case ChunkKind::CallParameterType:
-      case ChunkKind::DeclAttrParamEqual:
+      case ChunkKind::DeclAttrParamColon:
       case ChunkKind::Comma:
       case ChunkKind::Whitespace:
       case ChunkKind::Ellipsis:
       case ChunkKind::Ampersand:
+      case ChunkKind::OptionalMethodCallTail:
         continue;
       case ChunkKind::CallParameterColon:
         // Since we don't add the type, also don't add the space after ':'.
@@ -1222,8 +1246,6 @@ void CompletionBuilder::getDescription(SwiftResult *result, raw_ostream &OS,
   if (FirstTextChunk.hasValue()) {
     for (auto C : str->getChunks().slice(*FirstTextChunk)) {
       using ChunkKind = CodeCompletionString::Chunk::ChunkKind;
-      if (C.is(ChunkKind::BraceStmtWithCursor))
-        break;
 
       // FIXME: we need a more uniform way to handle operator completions.
       if (C.is(ChunkKind::Equal))
@@ -1358,7 +1380,6 @@ NameStyle::NameStyle(StringRef name)
   unsigned underscores = 0;
   unsigned caseCount[3] = {0, 0, 0};
   Case leadingCase = None;
-  Case prevCase = None;
   for (; pos < center.size(); ++pos) {
     char c = center[pos];
     Case curCase = caseOf(c);
@@ -1367,7 +1388,6 @@ NameStyle::NameStyle(StringRef name)
 
     underscores += (c == '_');
     caseCount[curCase] += 1;
-    prevCase = curCase;
   }
 
   assert(caseCount[leadingCase] > 0);

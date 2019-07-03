@@ -1,4 +1,4 @@
-// RUN: %target-swift-frontend(mock-sdk: %clang-importer-sdk) -parse %s -verify
+// RUN: %target-swift-frontend(mock-sdk: %clang-importer-sdk) -typecheck %s -verify
 
 // REQUIRES: objc_interop
 
@@ -60,17 +60,18 @@ func testAnyObjectToCF(_ anyObject: AnyObject) {
 func testUncheckableCasts(_ anyObject: AnyObject, nsObject: NSObject,
                           anyObjectType: AnyObject.Type, 
                           nsObjectType: NSObject.Type) {
-  if let _ = anyObject as? CFString { } // expected-error{{conditional downcast to CoreFoundation type 'CFString' will always succeed}}
-  if let _ = nsObject as? CFString { } // expected-error{{conditional downcast to CoreFoundation type 'CFString' will always succeed}}
+  if let _ = anyObject as? CFString { } // expected-error{{conditional downcast to CoreFoundation type 'CFString' will always succeed}} expected-note{{did you mean to explicitly compare the CFTypeIDs of 'anyObject' and 'CFString'}}
+  if let _ = nsObject as? CFString { } // expected-error{{conditional downcast to CoreFoundation type 'CFString' will always succeed}} expected-note{{did you mean to explicitly compare the CFTypeIDs of 'nsObject' and 'CFString'}}
 
-  if let _ = anyObject as? CFTree { } // expected-error{{conditional downcast to CoreFoundation type 'CFTree' will always succeed}}
-  if let _ = nsObject as? CFTree { } // expected-error{{will always succeed}}
+  if let _ = anyObject as? CFTree { } // expected-error{{conditional downcast to CoreFoundation type 'CFTree' will always succeed}} expected-note{{did you mean to explicitly compare the CFTypeIDs of 'anyObject' and 'CFTree'}}
+  if let _ = nsObject as? CFTree { } // expected-error{{will always succeed}} expected-note{{did you mean to explicitly compare the CFTypeIDs of 'nsObject' and 'CFTree'}}
 
-  if let _ = anyObjectType as? CFString.Type { } // expected-error{{conditional downcast to CoreFoundation type 'CFString.Type' will always succeed}}
-  if let _ = nsObjectType as? CFString.Type { } // expected-error{{conditional downcast to CoreFoundation type 'CFString.Type' will always succeed}}
+  if let _ = anyObjectType as? CFString.Type { } // expected-error{{conditional downcast to CoreFoundation type 'CFString.Type' will always succeed}} expected-note{{did you mean to explicitly compare the CFTypeIDs of 'anyObjectType' and 'CFString.Type'}}
+  if let _ = nsObjectType as? CFString.Type { } // expected-error{{conditional downcast to CoreFoundation type 'CFString.Type' will always succeed}} expected-note{{did you mean to explicitly compare the CFTypeIDs of 'nsObjectType' and 'CFString.Type'}}
 
-  if let _ = anyObjectType as? CFTree.Type { } // expected-error{{conditional downcast to CoreFoundation type 'CFTree.Type' will always succeed}}
-  if let _ = nsObjectType as? CFTree.Type { } // expected-error{{will always succeed}}
+  if let _ = anyObjectType as? CFTree.Type { } // expected-error{{conditional downcast to CoreFoundation type 'CFTree.Type' will always succeed}} expected-note{{did you mean to explicitly compare the CFTypeIDs of 'anyObjectType' and 'CFTree.Type'}}
+  if let _ = nsObjectType as? CFTree.Type { } // expected-error{{will always succeed}} expected-note{{did you mean to explicitly compare the CFTypeIDs of 'nsObjectType' and 'CFTree.Type'}}
+
 }
 
 func testCFConvWithIUO(_ x: CFString!, y: NSString!) {
@@ -79,4 +80,26 @@ func testCFConvWithIUO(_ x: CFString!, y: NSString!) {
 
   acceptNSString(x)
   acceptCFString(y)
+}
+
+func testBridgedCFDowncast(array: [Any], dictionary: [AnyHashable : Any], set: Set<AnyHashable>) {
+  let cfArray = array as CFArray
+  let cfDictionary = dictionary as CFDictionary
+  let cfSet = set as CFSet
+
+  _ = array as? CFArray // expected-warning {{conditional cast from '[Any]' to 'CFArray' always succeeds}}
+  _ = dictionary as? CFDictionary // expected-warning {{conditional cast from '[AnyHashable : Any]' to 'CFDictionary' always succeeds}}
+  _ = set as? CFSet // expected-warning {{conditional cast from 'Set<AnyHashable>' to 'CFSet' always succeeds}}
+
+  _ = array as! CFArray // expected-warning {{forced cast from '[Any]' to 'CFArray' always succeeds}}
+  _ = dictionary as! CFDictionary // expected-warning {{forced cast from '[AnyHashable : Any]' to 'CFDictionary' always succeeds}}
+  _ = set as! CFSet // expected-warning {{forced cast from 'Set<AnyHashable>' to 'CFSet' always succeeds}}
+
+  _ = cfArray as! [Any]
+  _ = cfDictionary as! [AnyHashable : Any]
+  _ = cfSet as! Set<AnyHashable>
+
+  _ = cfArray as? [Any]
+  _ = cfDictionary as? [AnyHashable : Any]
+  _ = cfSet as? Set<AnyHashable>
 }

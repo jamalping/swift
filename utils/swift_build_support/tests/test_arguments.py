@@ -2,16 +2,17 @@
 #
 # This source file is part of the Swift.org open source project
 #
-# Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+# Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 # Licensed under Apache License v2.0 with Runtime Library Exception
 #
-# See http://swift.org/LICENSE.txt for license information
-# See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+# See https://swift.org/LICENSE.txt for license information
+# See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 #
 # ----------------------------------------------------------------------------
 
 import argparse
 import os
+import platform
 import sys
 import unittest
 try:
@@ -49,8 +50,20 @@ class ArgumentsTypeTestCase(unittest.TestCase):
 
     def test_clang_compiler_version(self):
         self.assertEqual(
-            argtype.clang_compiler_version('1.23.456'),
-            ("1", "23", "456"))
+            argtype.clang_compiler_version('1.23.456').components,
+            ("1", "23", "456", None))
+        self.assertEqual(
+            argtype.clang_compiler_version('1.2.3').components,
+            ("1", "2", "3", None))
+        self.assertEqual(
+            argtype.clang_compiler_version('1.2.3.4').components,
+            ("1", "2", "3", "4"))
+        self.assertEqual(
+            argtype.clang_compiler_version('12.34.56').components,
+            ("12", "34", "56", None))
+        self.assertEqual(
+            argtype.clang_compiler_version('12.34.56.78').components,
+            ("12", "34", "56", "78"))
         self.assertRaises(
             argparse.ArgumentTypeError,
             argtype.clang_compiler_version,
@@ -73,6 +86,9 @@ class ArgumentsTypeTestCase(unittest.TestCase):
             "1..2")
 
     def test_executable(self):
+        if platform.system() == 'Windows':
+            self.skipTest('Every file is considered executable in Windows')
+
         python = sys.executable
         self.assertTrue(os.path.isabs(argtype.executable(python)))
 
@@ -175,3 +191,46 @@ class ArgumentsActionTestCase(unittest.TestCase):
             parser.parse_args(['--list-opt', 'foo 12', '--list-opt=bar 42']),
             argparse.Namespace(
                 str_opt=None, list_opt=["foo", "12", "bar", "42"]))
+
+    def test_optional_bool(self):
+        parser = argparse.ArgumentParser()
+        parser.add_argument(
+            "--test-default-default",
+            action=argaction.optional_bool)
+        parser.add_argument(
+            "--test-default-true",
+            action=argaction.optional_bool,
+            default=True)
+        parser.add_argument(
+            "--test-default-false",
+            action=argaction.optional_bool,
+            default=False)
+
+        args, unknown_args = parser.parse_known_args([])
+        self.assertEqual(args.test_default_default, False)
+        self.assertEqual(args.test_default_true, True)
+        self.assertEqual(args.test_default_false, False)
+
+        args, unknown_args = parser.parse_known_args(
+            ['--test-default-default', '0',
+             '--test-default-true', '0',
+             '--test-default-false', '0'])
+        self.assertEqual(args.test_default_default, False)
+        self.assertEqual(args.test_default_true, False)
+        self.assertEqual(args.test_default_false, False)
+
+        args, unknown_args = parser.parse_known_args(
+            ['--test-default-default', '1',
+             '--test-default-true', '1',
+             '--test-default-false', '1'])
+        self.assertEqual(args.test_default_default, True)
+        self.assertEqual(args.test_default_true, True)
+        self.assertEqual(args.test_default_false, True)
+
+        args, unknown_args = parser.parse_known_args(
+            ['--test-default-default',
+             '--test-default-true',
+             '--test-default-false'])
+        self.assertEqual(args.test_default_default, True)
+        self.assertEqual(args.test_default_true, True)
+        self.assertEqual(args.test_default_false, True)

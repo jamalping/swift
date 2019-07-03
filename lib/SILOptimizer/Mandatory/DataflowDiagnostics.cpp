@@ -2,25 +2,30 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
 #include "swift/SILOptimizer/PassManager/Passes.h"
 #include "swift/SILOptimizer/PassManager/Transforms.h"
+#include "swift/SILOptimizer/Utils/ConstExpr.h"
 #include "swift/AST/ASTContext.h"
 #include "swift/AST/DiagnosticEngine.h"
+#include "swift/AST/DiagnosticsSema.h"
 #include "swift/AST/DiagnosticsSIL.h"
 #include "swift/AST/Expr.h"
+#include "swift/AST/Stmt.h"
 #include "swift/SIL/SILFunction.h"
 #include "swift/SIL/SILInstruction.h"
 #include "swift/SIL/SILLocation.h"
 #include "swift/SIL/SILModule.h"
 #include "swift/SIL/SILVisitor.h"
+#include "swift/SIL/SILConstants.h"
+
 using namespace swift;
 
 template<typename...T, typename...U>
@@ -37,30 +42,44 @@ static void diagnoseMissingReturn(const UnreachableInst *UI,
   SILLocation FLoc = F->getLocation();
 
   Type ResTy;
+  BraceStmt *BS;
 
   if (auto *FD = FLoc.getAsASTNode<FuncDecl>()) {
-    ResTy = FD->getResultType();
+    ResTy = FD->getResultInterfaceType();
+    BS = FD->getBody(/*canSynthesize=*/false);
+  } else if (auto *CD = FLoc.getAsASTNode<ConstructorDecl>()) {
+    ResTy = CD->getResultInterfaceType();
+    BS = FD->getBody();
   } else if (auto *CE = FLoc.getAsASTNode<ClosureExpr>()) {
     ResTy = CE->getResultType();
+    BS = CE->getBody();
   } else {
     llvm_unreachable("unhandled case in MissingReturn");
   }
 
-  bool isNoReturn = F->getLoweredFunctionType()->isNoReturn();
-
-  // No action required if the function returns 'Void' or that the
-  // function is marked 'noreturn'.
-  if (ResTy->isVoid() || isNoReturn)
-    return;
-
   SILLocation L = UI->getLoc();
   assert(L && ResTy);
+  auto numElements = BS->getNumElements();
+  if (numElements > 0) {
+    auto element = BS->getElement(numElements - 1);
+    if (auto expr = element.dyn_cast<Expr *>()) {
+      if (expr->getType()->isEqual(ResTy)) {
+        Context.Diags.diagnose(
+          expr->getStartLoc(),
+          diag::missing_return_last_expr, ResTy,
+          FLoc.isASTNode<ClosureExpr>() ? 1 : 0)
+        .fixItInsert(expr->getStartLoc(), "return ");
+        return;
+      }
+    }
+  }
+  auto diagID = F->isNoReturnFunction() ? diag::missing_never_call
+                                        : diag::missing_return;
   diagnose(Context,
            L.getEndSourceLoc(),
-           diag::missing_return, ResTy,
+           diagID, ResTy,
            FLoc.isASTNode<ClosureExpr>() ? 1 : 0);
 }
-
 
 static void diagnoseUnreachable(const SILInstruction *I,
                                 ASTContext &Context) {
@@ -86,12 +105,6 @@ static void diagnoseUnreachable(const SILInstruction *I,
       return;
     }
 
-    // A non-exhaustive switch would also produce an unreachable instruction.
-    if (L.isASTNode<SwitchStmt>()) {
-      diagnose(Context, L.getEndSourceLoc(), diag::non_exhaustive_switch);
-      return;
-    }
-
     if (auto *Guard = L.getAsASTNode<GuardStmt>()) {
       diagnose(Context, Guard->getBody()->getEndLoc(),
                diag::guard_body_must_not_fallthrough);
@@ -100,25 +113,7 @@ static void diagnoseUnreachable(const SILInstruction *I,
   }
 }
 
-static void diagnoseReturn(const SILInstruction *I, ASTContext &Context) {
-  auto *TI = dyn_cast<TermInst>(I);
-  if (!TI || !(isa<BranchInst>(TI) || isa<ReturnInst>(TI)))
-    return;
-
-  const SILBasicBlock *BB = TI->getParent();
-  const SILFunction *F = BB->getParent();
-
-  // Warn if we reach a return inside a noreturn function.
-  if (F->getLoweredFunctionType()->isNoReturn()) {
-    SILLocation L = TI->getLoc();
-    if (L.is<ReturnLocation>())
-      diagnose(Context, L.getSourceLoc(), diag::return_from_noreturn);
-    if (L.is<ImplicitReturnLocation>())
-      diagnose(Context, L.getSourceLoc(), diag::return_from_noreturn);
-  }
-}
-
-/// \brief Issue diagnostics whenever we see Builtin.static_report(1, ...).
+/// Issue diagnostics whenever we see Builtin.static_report(1, ...).
 static void diagnoseStaticReports(const SILInstruction *I,
                                   SILModule &M) {
 
@@ -129,7 +124,7 @@ static void diagnoseStaticReports(const SILInstruction *I,
 
       // Report diagnostic if the first argument has been folded to '1'.
       OperandValueArrayRef Args = BI->getArguments();
-      IntegerLiteralInst *V = dyn_cast<IntegerLiteralInst>(Args[0]);
+      auto *V = dyn_cast<IntegerLiteralInst>(Args[0]);
       if (!V || V->getValue() != 1)
         return;
 
@@ -139,21 +134,71 @@ static void diagnoseStaticReports(const SILInstruction *I,
   }
 }
 
+/// Emit a diagnostic for `poundAssert` builtins whose condition is
+/// false or whose condition cannot be evaluated.
+static void diagnosePoundAssert(const SILInstruction *I,
+                                SILModule &M,
+                                ConstExprEvaluator &constantEvaluator) {
+  auto *builtinInst = dyn_cast<BuiltinInst>(I);
+  if (!builtinInst ||
+      builtinInst->getBuiltinKind() != BuiltinValueKind::PoundAssert)
+    return;
+
+  SmallVector<SymbolicValue, 1> values;
+  constantEvaluator.computeConstantValues({builtinInst->getArguments()[0]},
+                                          values);
+  SymbolicValue value = values[0];
+  if (!value.isConstant()) {
+    diagnose(M.getASTContext(), I->getLoc().getSourceLoc(),
+             diag::pound_assert_condition_not_constant);
+
+    // If we have more specific information about what went wrong, emit
+    // notes.
+    if (value.getKind() == SymbolicValue::Unknown)
+      value.emitUnknownDiagnosticNotes(builtinInst->getLoc());
+    return;
+  }
+  assert(value.getKind() == SymbolicValue::Integer &&
+         "sema prevents non-integer #assert condition");
+
+  APInt intValue = value.getIntegerValue();
+  assert(intValue.getBitWidth() == 1 &&
+         "sema prevents non-int1 #assert condition");
+  if (intValue.isNullValue()) {
+    auto *message = cast<StringLiteralInst>(builtinInst->getArguments()[1]);
+    StringRef messageValue = message->getValue();
+    if (messageValue.empty())
+      messageValue = "assertion failed";
+    diagnose(M.getASTContext(), I->getLoc().getSourceLoc(),
+             diag::pound_assert_failure, messageValue);
+    return;
+  }
+}
+
 namespace {
 class EmitDFDiagnostics : public SILFunctionTransform {
-  virtual ~EmitDFDiagnostics() {}
-
-  StringRef getName() override { return "Emit Dataflow Diagnostics"; }
+  ~EmitDFDiagnostics() override {}
 
   /// The entry point to the transformation.
   void run() override {
+    // Don't rerun diagnostics on deserialized functions.
+    if (getFunction()->wasDeserializedCanonical())
+      return;
+
     SILModule &M = getFunction()->getModule();
     for (auto &BB : *getFunction())
       for (auto &I : BB) {
         diagnoseUnreachable(&I, M.getASTContext());
-        diagnoseReturn(&I, M.getASTContext());
         diagnoseStaticReports(&I, M);
       }
+
+    if (M.getASTContext().LangOpts.EnableExperimentalStaticAssert) {
+      SymbolicValueBumpAllocator allocator;
+      ConstExprEvaluator constantEvaluator(allocator);
+      for (auto &BB : *getFunction())
+        for (auto &I : BB)
+          diagnosePoundAssert(&I, M, constantEvaluator);
+    }
   }
 };
 } // end anonymous namespace

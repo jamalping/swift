@@ -4,18 +4,24 @@
 #
 #  This source file is part of the Swift.org open source project
 #
-#  Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+#  Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 #  Licensed under Apache License v2.0 with Runtime Library Exception
 #
-#  See http://swift.org/LICENSE.txt for license information
-#  See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+#  See https://swift.org/LICENSE.txt for license information
+#  See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 #
 # ===---------------------------------------------------------------------===//
 
+from __future__ import print_function
+
+import functools
 import multiprocessing
 import os
 import re
 import subprocess
+
+
+BENCHMARK_OUTPUT_RE = re.compile('([^,]+),')
 
 
 class Result(object):
@@ -51,10 +57,29 @@ class Result(object):
         print(fmt.format(self.get_name(), self.get_result()))
 
 
+def run_with_timeout(func, args):
+    # We timeout after 10 minutes.
+    timeout_seconds = 10 * 60
+
+    # We just use this to create a timeout since we use an older python. Once
+    # we update to use python >= 3.3, use the timeout API on communicate
+    # instead.
+    import multiprocessing.dummy
+    fakeThreadPool = multiprocessing.dummy.Pool(1)
+    try:
+        result = fakeThreadPool.apply_async(func, args=args)
+        return result.get(timeout_seconds)
+    except multiprocessing.TimeoutError:
+        fakeThreadPool.terminate()
+        raise RuntimeError("Child process aborted due to timeout. "
+                           "Timeout: %s seconds" % timeout_seconds)
+
+
 def _unwrap_self(args):
     return type(args[0]).process_input(*args)
 
-BenchmarkDriver_OptLevels = ['Onone', 'O', 'Ounchecked']
+
+BenchmarkDriver_OptLevels = ['Onone', 'O', 'Osize']
 
 
 class BenchmarkDriver(object):
@@ -79,8 +104,12 @@ class BenchmarkDriver(object):
 
     def run_for_opt_level(self, binary, opt_level, test_filter):
         print("testing driver at path: %s" % binary)
-        names = [n.strip() for n in subprocess.check_output(
-            [binary, "--list"]).split()[2:]]
+        names = []
+        for l in subprocess.check_output([binary, "--list"]).split("\n")[1:]:
+            m = BENCHMARK_OUTPUT_RE.match(l)
+            if m is None:
+                continue
+            names.append(m.group(1))
         if test_filter:
             regex = re.compile(test_filter)
             names = [n for n in names if regex.match(n)]
@@ -95,7 +124,7 @@ class BenchmarkDriver(object):
         if self.enable_parallel:
             p = multiprocessing.Pool()
             z = zip([self] * len(prepared_input), prepared_input)
-            results = p.map(_unwrap_self, z)
+            results = p.map_async(_unwrap_self, z).get(999999)
         else:
             results = map(self.process_input, prepared_input)
 
@@ -106,7 +135,7 @@ class BenchmarkDriver(object):
             acc['extra_data'] = r.merge_in_extra_data(acc['extra_data'])
             return acc
 
-        return reduce(reduce_results, results, {
+        return functools.reduce(reduce_results, results, {
             'result': [],
             'has_failure': False,
             'max_test_len': 0,
@@ -124,7 +153,9 @@ class BenchmarkDriver(object):
         self.data = [
             self.run_for_opt_level(binary, opt_level, test_filter)
             for binary, opt_level in self.targets]
-        max_test_len = reduce(max, [d['max_test_len']for d in self.data])
-        has_failure = reduce(max, [d['has_failure']for d in self.data])
+        max_test_len = functools.reduce(max,
+                                        [d['max_test_len'] for d in self.data])
+        has_failure = functools.reduce(max,
+                                       [d['has_failure'] for d in self.data])
         self.print_data(self.data, max_test_len)
         return not has_failure

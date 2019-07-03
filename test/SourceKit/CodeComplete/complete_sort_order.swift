@@ -7,12 +7,12 @@ func test() {
 
 }
 
+// XFAIL: broken_std_regex, linux
 // RUN: %sourcekitd-test -req=complete -req-opts=hidelowpriority=0 -pos=7:1 %s -- %s > %t.orig
-// RUN: FileCheck -check-prefix=NAME %s < %t.orig
+// RUN: %FileCheck -check-prefix=NAME %s < %t.orig
 // Make sure the order is as below, foo(Int) should come before foo(String).
 
 // NAME: key.description: "#column"
-// NAME: key.description: "AbsoluteValuable"
 // NAME: key.description: "foo(a: Int)"
 // NAME-NOT: key.description
 // NAME: key.description: "foo(a: String)"
@@ -24,11 +24,11 @@ func test() {
 // RUN: %sourcekitd-test -req=complete.open -pos=7:1 -req-opts=hidelowpriority=0,hideunderscores=0 %s -- %s > %t.default
 // RUN: %sourcekitd-test -req=complete.open -pos=7:1 -req-opts=sort.byname=0,hidelowpriority=0,hideunderscores=0 %s -- %s > %t.on
 // RUN: %sourcekitd-test -req=complete.open -pos=7:1 -req-opts=sort.byname=1,hidelowpriority=0,hideunderscores=0 %s -- %s > %t.off
-// RUN: FileCheck -check-prefix=CONTEXT %s < %t.default
-// RUN: FileCheck -check-prefix=NAME %s < %t.off
+// RUN: %FileCheck -check-prefix=CONTEXT %s < %t.default
+// RUN: %FileCheck -check-prefix=NAME %s < %t.off
 // FIXME: rdar://problem/20109989 non-deterministic sort order
 // RUN-disabled: diff %t.on %t.default
-// RUN: FileCheck -check-prefix=CONTEXT %s < %t.on
+// RUN: %FileCheck -check-prefix=CONTEXT %s < %t.on
 
 // CONTEXT: key.kind: source.lang.swift.decl
 // CONTEXT-NEXT: key.name: "x"
@@ -41,9 +41,8 @@ func test() {
 // CONTEXT-NOT: key.name:
 // CONTEXT: key.name: "test()"
 // CONTEXT: key.name: "#column"
-// CONTEXT: key.name: "AbsoluteValuable"
 
-// RUN: %complete-test -tok=STMT_0 %s | FileCheck %s -check-prefix=STMT
+// RUN: %complete-test -tok=STMT_0 %s | %FileCheck %s -check-prefix=STMT
 func test1() {
   #^STMT_0^#
 }
@@ -56,7 +55,7 @@ func test1() {
 // STMT: func
 // STMT: foo(a: Int)
 
-// RUN: %complete-test -tok=STMT_1 %s | FileCheck %s -check-prefix=STMT_1
+// RUN: %complete-test -tok=STMT_1 %s | %FileCheck %s -check-prefix=STMT_1
 func test5() {
   var retLocal: Int
   #^STMT_1,r,ret,retur,return^#
@@ -79,7 +78,7 @@ func test5() {
 // STMT_1-NEXT:    return
 // STMT_1: ]
 
-// RUN: %complete-test -top=0 -tok=EXPR_0 %s | FileCheck %s -check-prefix=EXPR
+// RUN: %complete-test -top=0 -tok=EXPR_0 %s | %FileCheck %s -check-prefix=EXPR
 func test2() {
   (#^EXPR_0^#)
 }
@@ -96,7 +95,7 @@ func test2() {
 // EXPR: foo(a: Int)
 
 // Top 1
-// RUN: %complete-test -top=1 -tok=EXPR_1 %s | FileCheck %s -check-prefix=EXPR_TOP_1
+// RUN: %complete-test -top=1 -tok=EXPR_1 %s | %FileCheck %s -check-prefix=EXPR_TOP_1
 func test3(x: Int) {
   let y = x
   let z = x
@@ -119,7 +118,7 @@ func test3(x: Int) {
 // EXPR_TOP_1: zzz
 
 // Test where there are fewer results than 'top'.
-// RUN: %complete-test -top=1000 -tok=FEW_1 %s | FileCheck %s -check-prefix=FEW_1
+// RUN: %complete-test -top=1000 -tok=FEW_1 %s | %FileCheck %s -check-prefix=FEW_1
 func test3b() -> Int {
   return #^FEW_1^#
 }
@@ -128,7 +127,7 @@ func test3b() -> Int {
 // FEW_1: 0
 
 // Top 3
-// RUN: %complete-test -top=3 -tok=EXPR_2 %s | FileCheck %s -check-prefix=EXPR_TOP_3
+// RUN: %complete-test -top=3 -tok=EXPR_2 %s | %FileCheck %s -check-prefix=EXPR_TOP_3
 func test4(x: Int) {
   let y = x
   let z = x
@@ -151,7 +150,7 @@ func test4(x: Int) {
 // EXPR_TOP_3: zzz
 
 // Top 3 with type matching
-// RUN: %complete-test -top=3 -tok=EXPR_3 %s | FileCheck %s -check-prefix=EXPR_TOP_3_TYPE_MATCH
+// RUN: %complete-test -top=3 -tok=EXPR_3 %s | %FileCheck %s -check-prefix=EXPR_TOP_3_TYPE_MATCH
 func test4(x: Int) {
   let y: String = ""
   let z: String = y
@@ -164,8 +163,8 @@ func test4(x: Int) {
 // EXPR_TOP_3_TYPE_MATCH: y
 // EXPR_TOP_3_TYPE_MATCH: z
 
-// RUN: %complete-test -tok=VOID_1 %s | FileCheck %s -check-prefix=VOID_1
-// RUN: %complete-test -tok=VOID_1 %s -raw | FileCheck %s -check-prefix=VOID_1_RAW
+// RUN: %complete-test -tok=VOID_1 %s | %FileCheck %s -check-prefix=VOID_1
+// RUN: %complete-test -tok=VOID_1 %s -raw | %FileCheck %s -check-prefix=VOID_1_RAW
 func test6() {
   func foo1() {}
   func foo2() -> Int {}
@@ -196,7 +195,7 @@ func test6() {
 
 
 
-// RUN: %complete-test -tok=CASE_0 %s | FileCheck %s -check-prefix=CASE_0
+// RUN: %complete-test -tok=CASE_0 %s | %FileCheck %s -check-prefix=CASE_0
 func test7() {
   struct CaseSensitiveCheck {
     var member: Int = 0

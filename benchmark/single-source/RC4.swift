@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -14,10 +14,15 @@
 // for performance measuring.
 import TestsUtils
 
+public let RC4Test = BenchmarkInfo(
+  name: "RC4",
+  runFunction: run_RC4,
+  tags: [.validation, .algorithm])
+
 struct RC4 {
   var State : [UInt8]
-  var I : UInt8 = 0
-  var J : UInt8 = 0
+  var I: UInt8 = 0
+  var J: UInt8 = 0
 
   init() {
     State = [UInt8](repeating: 0, count: 256)
@@ -29,7 +34,7 @@ struct RC4 {
       State[i] = UInt8(i)
     }
 
-    var j : UInt8 = 0
+    var j: UInt8 = 0
     for i in 0..<256 {
       let K : UInt8 = Key[i % Key.count]
       let S : UInt8 = State[i]
@@ -99,6 +104,6 @@ public func run_RC4(_ N: Int) {
       Enc.encrypt(&LongData)
     }
 
-    CheckResults(LongData == RefResults, "Incorrect result in RC4")
+    CheckResults(LongData == RefResults)
   }
 }

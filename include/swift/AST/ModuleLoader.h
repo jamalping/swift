@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -21,59 +21,82 @@
 #include "swift/Basic/LLVM.h"
 #include "swift/Basic/SourceLoc.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/TinyPtrVector.h"
+
+namespace clang {
+class DependencyCollector;
+}
 
 namespace swift {
 
 class AbstractFunctionDecl;
+class ClangImporterOptions;
 class ClassDecl;
 class ModuleDecl;
 class NominalTypeDecl;
 
 enum class KnownProtocolKind : uint8_t;
 
-/// Records dependencies on files outside of the current module.
-class DependencyTracker {
-  llvm::SetVector<std::string, std::vector<std::string>,
-                  llvm::SmallSet<std::string, 16>> paths;
+enum class Bridgeability : unsigned {
+  /// This context does not permit bridging at all.  For example, the
+  /// target of a C pointer.
+  None,
 
-public:
-  /// Adds a file as a dependency.
-  ///
-  /// The contents of \p file are taken literally, and should be appropriate
-  /// for appearing in a list of dependencies suitable for tooling like Make.
-  /// No path canonicalization is done.
-  void addDependency(StringRef file) {
-    paths.insert(file);
-  }
-
-  /// Fetches the list of dependencies.
-  ArrayRef<std::string> getDependencies() const {
-    if (paths.empty())
-      return None;
-    assert((&paths[0]) + (paths.size() - 1) == &paths.back() &&
-           "elements not stored contiguously");
-    return llvm::makeArrayRef(&paths[0], paths.size());
-  }
+  /// This context permits all kinds of bridging.  For example, the
+  /// imported result of a method declaration.
+  Full
 };
 
-/// \brief Abstract interface that loads named modules into the AST.
+/// Records dependencies on files outside of the current module;
+/// implemented in terms of a wrapped clang::DependencyCollector.
+class DependencyTracker {
+  std::shared_ptr<clang::DependencyCollector> clangCollector;
+public:
+
+  explicit DependencyTracker(bool TrackSystemDeps);
+
+  /// Adds a file as a dependency.
+  ///
+  /// The contents of \p File are taken literally, and should be appropriate
+  /// for appearing in a list of dependencies suitable for tooling like Make.
+  /// No path canonicalization is done.
+  void addDependency(StringRef File, bool IsSystem);
+
+  /// Fetches the list of dependencies.
+  ArrayRef<std::string> getDependencies() const;
+
+  /// Return the underlying clang::DependencyCollector that this
+  /// class wraps.
+  std::shared_ptr<clang::DependencyCollector> getClangCollector();
+};
+
+/// Abstract interface that loads named modules into the AST.
 class ModuleLoader {
-  DependencyTracker * const dependencyTracker;
   virtual void anchor();
 
 protected:
+  DependencyTracker * const dependencyTracker;
   ModuleLoader(DependencyTracker *tracker) : dependencyTracker(tracker) {}
-
-  void addDependency(StringRef file) {
-    if (dependencyTracker)
-      dependencyTracker->addDependency(file);
-  }
 
 public:
   virtual ~ModuleLoader() = default;
 
-  /// \brief Import a module with the given module path.
+  /// Collect visible module names.
+  ///
+  /// Append visible module names to \p names. Note that names are possibly
+  /// duplicated, and not guaranteed to be ordered in any way.
+  virtual void collectVisibleTopLevelModuleNames(
+      SmallVectorImpl<Identifier> &names) const = 0;
+
+  /// Check whether the module with a given name can be imported without
+  /// importing it.
+  ///
+  /// Note that even if this check succeeds, errors may still occur if the
+  /// module is loaded in full.
+  virtual bool canImportModule(std::pair<Identifier, SourceLoc> named) = 0;
+
+  /// Import a module with the given module path.
   ///
   /// \param importLoc The location of the 'import' keyword.
   ///
@@ -86,7 +109,7 @@ public:
   ModuleDecl *loadModule(SourceLoc importLoc,
                          ArrayRef<std::pair<Identifier, SourceLoc>> path) = 0;
 
-  /// \brief Load extensions to the given nominal type.
+  /// Load extensions to the given nominal type.
   ///
   /// \param nominal The nominal type whose extensions should be loaded.
   ///
@@ -96,7 +119,7 @@ public:
   virtual void loadExtensions(NominalTypeDecl *nominal,
                               unsigned previousGeneration) { }
 
-  /// \brief Load the methods within the given class that produce
+  /// Load the methods within the given class that produce
   /// Objective-C class or instance methods with the given selector.
   ///
   /// \param classDecl The class in which we are searching for @objc methods.
@@ -122,7 +145,7 @@ public:
                  unsigned previousGeneration,
                  llvm::TinyPtrVector<AbstractFunctionDecl *> &methods) = 0;
 
-  /// \brief Verify all modules loaded by this loader.
+  /// Verify all modules loaded by this loader.
   virtual void verifyAllModules() { }
 };
 

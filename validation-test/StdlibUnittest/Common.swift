@@ -1,5 +1,7 @@
-// RUN: %target-run-simple-swift | FileCheck %s
+// RUN: %target-run-simple-swift | %FileCheck %s
 // REQUIRES: executable_test
+// FIXME: this test is failing for watchos <rdar://problem/29996991>
+// UNSUPPORTED: OS=watchos
 
 import SwiftPrivate
 import StdlibUnittest
@@ -351,7 +353,7 @@ TestSuiteWithSetUp.test("passes") {
 
 // CHECK: [ RUN      ] TestSuiteWithSetUp.fails
 // CHECK: stdout>>> setUp
-// CHECK-NEXT: stdout>>> check failed at {{.*}}/StdlibUnittest/Common.swift, line
+// CHECK-NEXT: stdout>>> check failed at {{.*}}{{[/\\]}}StdlibUnittest{{[/\\]}}Common.swift, line
 // CHECK: stdout>>> test body
 // CHECK: [     FAIL ] TestSuiteWithSetUp.fails
 TestSuiteWithSetUp.test("fails") {
@@ -364,7 +366,7 @@ TestSuiteWithSetUp.test("fails") {
 // CHECK: [       OK ] TestSuiteWithSetUp.passesFails/parameterized/0
 // CHECK: [ RUN      ] TestSuiteWithSetUp.passesFails/parameterized/1
 // CHECK: stdout>>> setUp
-// CHECK-NEXT: stdout>>> check failed at {{.*}}/StdlibUnittest/Common.swift, line
+// CHECK-NEXT: stdout>>> check failed at {{.*}}{{[/\\]}}StdlibUnittest{{[/\\]}}Common.swift, line
 // CHECK: stdout>>> test body
 // CHECK: [     FAIL ] TestSuiteWithSetUp.passesFails/parameterized/1
 TestSuiteWithSetUp.test("passesFails/parameterized")
@@ -396,7 +398,7 @@ TestSuiteWithTearDown.test("passes") {
 // CHECK: [ RUN      ] TestSuiteWithTearDown.fails
 // CHECK: stdout>>> test body
 // CHECK: stdout>>> tearDown
-// CHECK-NEXT: stdout>>> check failed at {{.*}}/StdlibUnittest/Common.swift, line
+// CHECK-NEXT: stdout>>> check failed at {{.*}}{{[/\\]}}StdlibUnittest{{[/\\]}}Common.swift, line
 // CHECK: [     FAIL ] TestSuiteWithTearDown.fails
 TestSuiteWithTearDown.test("fails") {
   print("test body")
@@ -410,7 +412,7 @@ TestSuiteWithTearDown.test("fails") {
 // CHECK: [ RUN      ] TestSuiteWithTearDown.passesFails/parameterized/1
 // CHECK: stdout>>> test body
 // CHECK: stdout>>> tearDown
-// CHECK-NEXT: stdout>>> check failed at {{.*}}/StdlibUnittest/Common.swift, line
+// CHECK-NEXT: stdout>>> check failed at {{.*}}{{[/\\]}}StdlibUnittest{{[/\\]}}Common.swift, line
 // CHECK: [     FAIL ] TestSuiteWithTearDown.passesFails/parameterized/1
 TestSuiteWithTearDown.test("passesFails/parameterized")
   .forEach(in: [1010, 2020]) {
@@ -435,7 +437,7 @@ AssertionsTestSuite.test("expectFailure/Pass") {
   }
 }
 // CHECK: [ RUN      ] Assertions.expectFailure/Pass
-// CHECK-NEXT: stdout>>> check failed at {{.*}}/StdlibUnittest/Common.swift, line
+// CHECK-NEXT: stdout>>> check failed at {{.*}}{{[/\\]}}StdlibUnittest{{[/\\]}}Common.swift, line
 // CHECK: stdout>>> expected: 1 (of type Swift.Int)
 // CHECK: stdout>>> actual: 2 (of type Swift.Int)
 // CHECK: [       OK ] Assertions.expectFailure/Pass
@@ -449,7 +451,7 @@ AssertionsTestSuite.test("expectFailure/UXPass")
   }
 }
 // CHECK: [ RUN      ] Assertions.expectFailure/UXPass ({{X}}FAIL: [Custom(reason: test)])
-// CHECK-NEXT: stdout>>> check failed at {{.*}}/StdlibUnittest/Common.swift, line
+// CHECK-NEXT: stdout>>> check failed at {{.*}}{{[/\\]}}StdlibUnittest{{[/\\]}}Common.swift, line
 // CHECK: stdout>>> expected: 1 (of type Swift.Int)
 // CHECK: stdout>>> actual: 2 (of type Swift.Int)
 // CHECK: [   UXPASS ] Assertions.expectFailure/UXPass
@@ -460,7 +462,7 @@ AssertionsTestSuite.test("expectFailure/Fail") {
   }
 }
 // CHECK: [ RUN      ] Assertions.expectFailure/Fail
-// CHECK-NEXT: stdout>>> check failed at {{.*}}/StdlibUnittest/Common.swift, line
+// CHECK-NEXT: stdout>>> check failed at {{.*}}{{[/\\]}}StdlibUnittest{{[/\\]}}Common.swift, line
 // CHECK: stdout>>> expected: true
 // CHECK: stdout>>> running `body` should produce an expected failure
 // CHECK: [     FAIL ] Assertions.expectFailure/Fail
@@ -473,7 +475,7 @@ AssertionsTestSuite.test("expectFailure/XFail")
   }
 }
 // CHECK: [ RUN      ] Assertions.expectFailure/XFail ({{X}}FAIL: [Custom(reason: test)])
-// CHECK-NEXT: stdout>>> check failed at {{.*}}/StdlibUnittest/Common.swift, line
+// CHECK-NEXT: stdout>>> check failed at {{.*}}{{[/\\]}}StdlibUnittest{{[/\\]}}Common.swift, line
 // CHECK: stdout>>> expected: true
 // CHECK: stdout>>> running `body` should produce an expected failure
 // CHECK: [    XFAIL ] Assertions.expectFailure/XFail
@@ -486,10 +488,10 @@ AssertionsTestSuite.test("expectFailure/AfterFailure/Fail") {
   }
 }
 // CHECK: [ RUN      ] Assertions.expectFailure/AfterFailure/Fail
-// CHECK-NEXT: stdout>>> check failed at {{.*}}/StdlibUnittest/Common.swift, line
+// CHECK-NEXT: stdout>>> check failed at {{.*}}{{[/\\]}}StdlibUnittest{{[/\\]}}Common.swift, line
 // CHECK: stdout>>> expected: 1 (of type Swift.Int)
 // CHECK: stdout>>> actual: 2 (of type Swift.Int)
-// CHECK: stdout>>> check failed at {{.*}}/StdlibUnittest/Common.swift, line
+// CHECK: stdout>>> check failed at {{.*}}{{[/\\]}}StdlibUnittest{{[/\\]}}Common.swift, line
 // CHECK: stdout>>> expected: 3 (of type Swift.Int)
 // CHECK: stdout>>> actual: 4 (of type Swift.Int)
 // CHECK: [     FAIL ] Assertions.expectFailure/AfterFailure/Fail
@@ -504,10 +506,10 @@ AssertionsTestSuite.test("expectFailure/AfterFailure/XFail")
   }
 }
 // CHECK: [ RUN      ] Assertions.expectFailure/AfterFailure/XFail ({{X}}FAIL: [Custom(reason: test)])
-// CHECK-NEXT: stdout>>> check failed at {{.*}}/StdlibUnittest/Common.swift, line
+// CHECK-NEXT: stdout>>> check failed at {{.*}}{{[/\\]}}StdlibUnittest{{[/\\]}}Common.swift, line
 // CHECK: stdout>>> expected: 1 (of type Swift.Int)
 // CHECK: stdout>>> actual: 2 (of type Swift.Int)
-// CHECK: stdout>>> check failed at {{.*}}/StdlibUnittest/Common.swift, line
+// CHECK: stdout>>> check failed at {{.*}}{{[/\\]}}StdlibUnittest{{[/\\]}}Common.swift, line
 // CHECK: stdout>>> expected: 3 (of type Swift.Int)
 // CHECK: stdout>>> actual: 4 (of type Swift.Int)
 // CHECK: [    XFAIL ] Assertions.expectFailure/AfterFailure/XFail
@@ -516,7 +518,7 @@ AssertionsTestSuite.test("expectUnreachable") {
   expectUnreachable()
 }
 // CHECK: [ RUN      ] Assertions.expectUnreachable
-// CHECK-NEXT: stdout>>> check failed at {{.*}}/StdlibUnittest/Common.swift, line
+// CHECK-NEXT: stdout>>> check failed at {{.*}}{{[/\\]}}StdlibUnittest{{[/\\]}}Common.swift, line
 // CHECK: stdout>>> this code should not be executed
 // CHECK: [     FAIL ] Assertions.expectUnreachable
 
@@ -580,7 +582,8 @@ AssertionsTestSuite.test("expectTrapping(_: Bound, in: RangeProtocol)") {
   expectTrapping(0, in: 1..<10)
 }
 // CHECK: [ RUN      ] Assertions.expectTrapping(_: Bound, in: RangeProtocol)
-// CHECK-NEXT: stdout>>> check failed at {{.*}}.swift, line [[@LINE-3]]
+// stderr>>> CRASHED: SIGABRT
+// CHECK: stdout>>> check failed at {{.*}}.swift, line [[@LINE-4]]
 // CHECK: stdout>>> 0 in 1..<10{{$}}
 // CHECK: the test crashed unexpectedly
 // CHECK: [     FAIL ] Assertions.expectTrapping(_: Bound, in: RangeProtocol)
@@ -589,7 +592,8 @@ AssertionsTestSuite.test("expectTrapping(_: RangeProtocol, in: RangeProtocol)") 
   expectTrapping(0..<5, in: 1..<10)
 }
 // CHECK: [ RUN      ] Assertions.expectTrapping(_: RangeProtocol, in: RangeProtocol)
-// CHECK-NEXT: stdout>>> check failed at {{.*}}.swift, line [[@LINE-3]]
+// stderr>>> CRASHED: SIGABRT
+// CHECK: stdout>>> check failed at {{.*}}.swift, line [[@LINE-4]]
 // CHECK: stdout>>> 0..<5 in 1..<10{{$}}
 // CHECK: the test crashed unexpectedly
 // CHECK: [     FAIL ] Assertions.expectTrapping(_: RangeProtocol, in: RangeProtocol)

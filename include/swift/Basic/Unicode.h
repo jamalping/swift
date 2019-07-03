@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -53,17 +53,6 @@ extern const uint16_t ExtendedGraphemeClusterNoBoundaryRulesMatrix[];
 /// Returns the value of the Grapheme_Cluster_Break property for a given code
 /// point.
 GraphemeClusterBreakProperty getGraphemeClusterBreakProperty(uint32_t C);
-
-/// Returns true if there is always an extended grapheme cluster boundary
-/// after a code point with a given property value.  Use only for optimization,
-/// to skip calculating Grapheme_Cluster_Break property for the second code
-/// point.
-static inline bool
-isExtendedGraphemeClusterBoundaryAfter(GraphemeClusterBreakProperty GCB1) {
-  auto RuleRow =
-      ExtendedGraphemeClusterNoBoundaryRulesMatrix[static_cast<unsigned>(GCB1)];
-  return RuleRow == 0;
-}
 
 /// Determine if there is an extended grapheme cluster boundary between code
 /// points with given Grapheme_Cluster_Break property values.

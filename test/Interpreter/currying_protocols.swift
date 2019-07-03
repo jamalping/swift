@@ -1,4 +1,4 @@
-// RUN: %target-run-simple-swift | FileCheck %s
+// RUN: %target-run-simple-swift | %FileCheck %s
 // REQUIRES: executable_test
 
 enum Medal {
@@ -94,10 +94,10 @@ genericOlympicGames(Archimedes())
 func olympicGames(_ g1: Gymnast) -> Gymnast {
   // FIXME -- <rdar://problem/21391055>
 #if false
-  let f1: Double -> Gymnast = g1.backflip
+  let f1: (Double) -> Gymnast = g1.backflip
   let g2: Gymnast = f1(180)
 
-  let f2: Medal -> Gymnast = g2.compete
+  let f2: (Medal) -> Gymnast = g2.compete
   let g4: Gymnast = f2()(Medal.Gold)
 #endif
 
@@ -105,7 +105,7 @@ func olympicGames(_ g1: Gymnast) -> Gymnast {
   let f4: (Steroids) -> () = f3()
   f4(Steroids())
 
-  let f5: () -> Int = g1.dynamicType.currentYear
+  let f5: () -> Int = type(of: g1).currentYear
   print(f5())
 
   return g1

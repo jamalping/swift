@@ -2,16 +2,27 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
 import TestsUtils
+#if os(Linux)
+import Glibc
+#elseif os(Windows)
+import MSVCRT
+#else
 import Darwin
+#endif
+
+public let Walsh = BenchmarkInfo(
+  name: "Walsh",
+  runFunction: run_Walsh,
+  tags: [.validation, .algorithm])
 
 func IsPowerOfTwo(_ x: Int) -> Bool { return (x & (x - 1)) == 0 }
 
@@ -19,7 +30,7 @@ func IsPowerOfTwo(_ x: Int) -> Bool { return (x & (x - 1)) == 0 }
 func WalshTransform(_ data: inout [Double]) {
   assert(IsPowerOfTwo(data.count), "Not a power of two")
   var temp = [Double](repeating: 0, count: data.count)
-  var ret = WalshImpl(&data, &temp, 0, data.count)
+  let ret = WalshImpl(&data, &temp, 0, data.count)
   for i in 0..<data.count {
     data[i] = ret[i]
   }
@@ -50,17 +61,17 @@ func WalshImpl(_ data: inout [Double], _ temp: inout [Double], _ start: Int, _ s
 }
 
 func checkCorrectness() {
-  var In : [Double] = [1,0,1,0,0,1,1,0]
-  var Out : [Double] = [4,2,0,-2,0,2,0,2]
+  let In : [Double] = [1,0,1,0,0,1,1,0]
+  let Out : [Double] = [4,2,0,-2,0,2,0,2]
   var data : [Double] = In
   WalshTransform(&data)
-  var mid = data
+  let mid = data
   InverseWalshTransform(&data)
   for i in 0..<In.count {
     // Check encode.
-    CheckResults(abs(data[i] - In[i]) < 0.0001, "Incorrect results in Walsh.")
+    CheckResults(abs(data[i] - In[i]) < 0.0001)
     // Check decode.
-    CheckResults(abs(mid[i] - Out[i]) < 0.0001, "Incorrect results in Walsh.")
+    CheckResults(abs(mid[i] - Out[i]) < 0.0001)
   }
 }
 
@@ -80,4 +91,3 @@ public func run_Walsh(_ N: Int) {
     InverseWalshTransform(&data2)
   }
 }
-

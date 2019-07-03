@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 // REQUIRES: objc_interop
 
@@ -8,7 +8,7 @@
 public extension _ObjectiveCBridgeable {
   static func _unconditionallyBridgeFromObjectiveC(_ source: _ObjectiveCType?)
       -> Self {
-    var result: Self? = nil
+    var result: Self?
     _forceBridgeFromObjectiveC(source!, result: &result)
     return result!
   }
@@ -22,10 +22,6 @@ class BridgedClass : NSObject {
 class SubclassOfBridgedClass : BridgedClass { }
 
 struct BridgedStruct : _ObjectiveCBridgeable {
-  static func _isBridgedToObjectiveC() -> Bool {
-    return true
-  }
-  
   func _bridgeToObjectiveC() -> BridgedClass {
     return BridgedClass()
   }
@@ -42,6 +38,10 @@ struct BridgedStruct : _ObjectiveCBridgeable {
     return true
   }
 }
+
+protocol P { }
+
+extension NSObject : P { }
 
 func testBridgeDowncast(_ obj: AnyObject, objOpt: AnyObject?, 
                         objImplicitOpt: AnyObject!) -> BridgedStruct? {
@@ -77,8 +77,16 @@ func testBridgeDowncastSuperclass(_ obj: NSObject, objOpt: NSObject?,
 func testBridgeDowncastExact(_ obj: BridgedClass, objOpt: BridgedClass?,
                              objImplicitOpt: BridgedClass!) -> BridgedStruct? {
   _ = obj as? BridgedStruct // expected-warning{{conditional cast from 'BridgedClass' to 'BridgedStruct' always succeeds}}
-  _ = objOpt as? BridgedStruct
-  _ = objImplicitOpt as? BridgedStruct // expected-warning{{conditional cast from 'BridgedClass!' to 'BridgedStruct' always succeeds}}
+  _ = objOpt as? BridgedStruct // expected-warning{{conditional downcast from 'BridgedClass?' to 'BridgedStruct' is a bridging conversion; did you mean to use 'as'?}}{{14-17=as}}{{31-31=?}}
+  _ = objImplicitOpt as? BridgedStruct // expected-warning{{conditional downcast from 'BridgedClass?' to 'BridgedStruct' is a bridging conversion; did you mean to use 'as'?}}{{22-25=as}}{{39-39=?}}
+
+  _ = obj as! BridgedStruct // expected-warning{{forced cast from 'BridgedClass' to 'BridgedStruct' always succeeds; did you mean to use 'as'?}}{{11-14=as}}
+  _ = objOpt as! BridgedStruct // expected-warning{{forced cast from 'BridgedClass?' to 'BridgedStruct' only unwraps and bridges; did you mean to use '!' with 'as'?}}{{13-13=!}}{{14-17=as}}
+  _ = objImplicitOpt as! BridgedStruct // expected-warning{{forced cast from 'BridgedClass?' to 'BridgedStruct' only unwraps and bridges; did you mean to use '!' with 'as'?}}{{21-21=!}}{{22-25=as}}
+
+  _ = obj is BridgedStruct // expected-warning{{'is' test is always true}}
+  _ = objOpt is BridgedStruct // expected-warning{{checking a value with optional type 'BridgedClass?' against dynamic type 'BridgedStruct' succeeds whenever the value is non-nil; did you mean to use '!= nil'?}}{{14-30=!= nil}}
+  _ = objImplicitOpt is BridgedStruct // expected-warning{{checking a value with optional type 'BridgedClass?' against dynamic type 'BridgedStruct' succeeds whenever the value is non-nil; did you mean to use '!= nil'?}}{{22-38=!= nil}}
 }
 
 func testExplicitBridging(_ object: BridgedClass, value: BridgedStruct) {
@@ -91,4 +99,13 @@ func testExplicitBridging(_ object: BridgedClass, value: BridgedStruct) {
 func testBridgingFromSubclass(_ obj: SubclassOfBridgedClass) {
   _ = obj as! BridgedStruct // expected-warning{{forced cast from 'SubclassOfBridgedClass' to 'BridgedStruct' always succeeds; did you mean to use 'as'?}} {{11-14=as}}
   _ = obj as BridgedStruct
+}
+
+// rdar://problem/30195862
+func testCVarArg(bs: BridgedStruct, bsOpt: BridgedStruct?,
+                 bsIUO: BridgedStruct!) {
+	_ = bs as P
+  _ = bsOpt! as P
+  _ = bsIUO! as P
+  _ = bsIUO as P
 }

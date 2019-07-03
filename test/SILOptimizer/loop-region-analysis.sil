@@ -1,6 +1,6 @@
-// All bbs should have IDs that match the rpo order put out when printing with -sil-sort-output
+// All bbs should have IDs that match the rpo order put out when printing with -emit-sorted-sil
 
-// RUN: %target-sil-opt %s -loop-region-view-text -o /dev/null | FileCheck %s
+// RUN: %target-sil-opt %s -module-name Swift -loop-region-view-text -o /dev/null | %FileCheck %s
 
 import Builtin
 
@@ -8,13 +8,15 @@ import Builtin
 // Declarations //
 //////////////////
 
+enum Never {}
+
 enum ManyCase {
   case One
   case Two
   case Three
 }
 
-sil @no_return_func : $@convention(thin) @noreturn () -> ()
+sil @no_return_func : $@convention(thin) () -> Never
 
 ///////////
 // Tests //
@@ -336,7 +338,7 @@ bb5:
 // CHECK-NEXT:     (non-local-succs
 // CHECK-NEXT:         (parentindex:0))
 // CHECK-NEXT:     (exiting-subregs)
-// CHECK-NEXT:     (backedge-regs)) 
+// CHECK-NEXT:     (backedge-regs))
 // CHECK: (region id:2 kind:bb   ucfh:false ucft:true  parent:6
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:1))
@@ -345,7 +347,7 @@ bb5:
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
-// CHECK-NEXT:     (backedge-regs)) 
+// CHECK-NEXT:     (backedge-regs))
 // CHECK: (region id:1 kind:bb   ucfh:true  ucft:false parent:6
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
@@ -353,7 +355,7 @@ bb5:
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
-// CHECK-NEXT:     (backedge-regs)) 
+// CHECK-NEXT:     (backedge-regs))
 // CHECK: (region id:0 kind:bb   ucfh:false ucft:false parent:5
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
@@ -361,7 +363,7 @@ bb5:
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
-// CHECK-NEXT:     (backedge-regs)) 
+// CHECK-NEXT:     (backedge-regs))
 sil @one_natural_loop_multiple_backedges : $@convention(thin) () -> () {
 bb0:
   br bb1
@@ -387,62 +389,83 @@ bb4:
 // This is an example that can not happen in sil with canonicalized loops.
 //
 // CHECK-LABEL: @inner_natural_loop_with_multiple_backedges@
-// CHECK: (region id:6 kind:func ucfh:false ucft:false
+// CHECK: (region id:8 kind:func ucfh:false ucft:false
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs
 // CHECK-NEXT:         (region id:0)
-// CHECK-NEXT:         (region id:7)
+// CHECK-NEXT:         (region id:9)
 // CHECK-NEXT:         (region id:5))
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:5 kind:bb   ucfh:false ucft:false parent:6
+// CHECK: (region id:5 kind:bb   ucfh:false ucft:false parent:8
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:7))
+// CHECK-NEXT:         (region id:9))
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:7 kind:loop ucfh:false ucft:true  parent:6
+// CHECK: (region id:9 kind:loop ucfh:false ucft:false  parent:8
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:0))
 // CHECK-NEXT:     (succs
 // CHECK-NEXT:         (region id:5))
 // CHECK-NEXT:     (subregs
 // CHECK-NEXT:         (region id:1)
-// CHECK-NEXT:         (region id:8))
+// CHECK-NEXT:         (region id:10)
+// CHECK-NEXT:         (region id:7))
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs
-// CHECK-NEXT:         (region id:8))
+// CHECK-NEXT:         (region id:10))
 // CHECK-NEXT:     (backedge-regs
-// CHECK-NEXT:         (region id:8)))
-// CHECK: (region id:8 kind:loop ucfh:true  ucft:true  parent:7
+// CHECK-NEXT:         (region id:7)))
+// CHECK: (region id:7 kind:bb   ucfh:false ucft:false parent:9
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:10))
+// CHECK-NEXT:     (succs)
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:10 kind:loop ucfh:true  ucft:false  parent:9
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:1))
-// CHECK-NEXT:     (succs)
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:7))
 // CHECK-NEXT:     (subregs
 // CHECK-NEXT:         (region id:2)
 // CHECK-NEXT:         (region id:3)
-// CHECK-NEXT:         (region id:4))
+// CHECK-NEXT:         (region id:4)
+// CHECK-NEXT:         (region id:6))
 // CHECK-NEXT:     (non-local-succs
 // CHECK-NEXT:         (parentindex:0))
 // CHECK-NEXT:     (exiting-subregs
 // CHECK-NEXT:         (region id:4))
 // CHECK-NEXT:     (backedge-regs
 // CHECK-NEXT:         (region id:3)
-// CHECK-NEXT:         (region id:4)))
-// CHECK: (region id:4 kind:bb   ucfh:false ucft:true  parent:8
+// CHECK-NEXT:         (region id:6)))
+// CHECK: (region id:6 kind:bb   ucfh:false ucft:true  parent:10
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:3))
+// CHECK-NEXT:         (region id:4))
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:4 kind:bb   ucfh:false ucft:false  parent:10
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:3))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:6))
+// CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs
+// CHECK-NEXT:         (parentindex:0)
 // CHECK-NEXT:         (parentindex:1))
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:3 kind:bb   ucfh:false ucft:true  parent:8
+// CHECK: (region id:3 kind:bb   ucfh:false  ucft:true parent:10
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:2))
 // CHECK-NEXT:     (succs
@@ -451,7 +474,7 @@ bb4:
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:2 kind:bb   ucfh:true  ucft:false parent:8
+// CHECK: (region id:2 kind:bb   ucfh:true ucft:false parent:10
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
 // CHECK-NEXT:         (region id:3))
@@ -459,18 +482,18 @@ bb4:
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:1 kind:bb   ucfh:false ucft:false parent:7
+// CHECK: (region id:1 kind:bb   ucfh:false ucft:false parent:9
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:8))
+// CHECK-NEXT:         (region id:10))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:0 kind:bb   ucfh:false ucft:false parent:6
+// CHECK: (region id:0 kind:bb   ucfh:false ucft:false parent:8
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:7))
+// CHECK-NEXT:         (region id:9))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
@@ -489,9 +512,15 @@ bb3:
   cond_br undef, bb2, bb4
 
 bb4:
-  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bb1, case #ManyCase.Two!enumelt: bb2, case #ManyCase.Three!enumelt: bb5
+  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bb5, case #ManyCase.Two!enumelt: bb6, case #ManyCase.Three!enumelt: bb7
 
 bb5:
+  br bb1
+
+bb6:
+  br bb2
+
+bb7:
   return undef : $()
 }
 
@@ -624,106 +653,7 @@ bb5:
 //         --------        --------
 //
 // CHECK-LABEL: @two_separate_natural_loops_separated_by_diamond@
-// CHECK: (region id:7 kind:func ucfh:false ucft:false
-// CHECK-NEXT:     (preds)
-// CHECK-NEXT:     (succs)
-// CHECK-NEXT:     (subregs
-// CHECK-NEXT:         (region id:0)
-// CHECK-NEXT:         (region id:8)
-// CHECK-NEXT:         (region id:3)
-// CHECK-NEXT:         (region id:9)
-// CHECK-NEXT:         (region id:6))
-// CHECK-NEXT:     (non-local-succs)
-// CHECK-NEXT:     (exiting-subregs)
-// CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:6 kind:bb   ucfh:false ucft:false parent:7
-// CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:9))
-// CHECK-NEXT:     (succs)
-// CHECK-NEXT:     (subregs)
-// CHECK-NEXT:     (non-local-succs)
-// CHECK-NEXT:     (exiting-subregs)
-// CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:9 kind:loop ucfh:false ucft:false parent:7
-// CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:3)
-// CHECK-NEXT:         (region id:8))
-// CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:6))
-// CHECK-NEXT:     (subregs
-// CHECK-NEXT:         (region id:4)
-// CHECK-NEXT:         (region id:5))
-// CHECK-NEXT:     (non-local-succs)
-// CHECK-NEXT:     (exiting-subregs
-// CHECK-NEXT:         (region id:5))
-// CHECK-NEXT:     (backedge-regs
-// CHECK-NEXT:         (region id:5)))
-// CHECK: (region id:5 kind:bb   ucfh:false ucft:false parent:9
-// CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:4))
-// CHECK-NEXT:     (succs)
-// CHECK-NEXT:     (subregs)
-// CHECK-NEXT:     (non-local-succs
-// CHECK-NEXT:         (parentindex:0))
-// CHECK-NEXT:     (exiting-subregs)
-// CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:4 kind:bb   ucfh:false ucft:false parent:9
-// CHECK-NEXT:     (preds)
-// CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:5))
-// CHECK-NEXT:     (subregs)
-// CHECK-NEXT:     (non-local-succs)
-// CHECK-NEXT:     (exiting-subregs)
-// CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:3 kind:bb   ucfh:false ucft:false parent:7
-// CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:8))
-// CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:9))
-// CHECK-NEXT:     (subregs)
-// CHECK-NEXT:     (non-local-succs)
-// CHECK-NEXT:     (exiting-subregs)
-// CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:8 kind:loop ucfh:false ucft:false parent:7
-// CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:0))
-// CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:3)
-// CHECK-NEXT:         (region id:9))
-// CHECK-NEXT:     (subregs
-// CHECK-NEXT:         (region id:1)
-// CHECK-NEXT:         (region id:2))
-// CHECK-NEXT:     (non-local-succs)
-// CHECK-NEXT:     (exiting-subregs
-// CHECK-NEXT:         (region id:2))
-// CHECK-NEXT:     (backedge-regs
-// CHECK-NEXT:         (region id:2)))
-// CHECK: (region id:2 kind:bb   ucfh:false ucft:false parent:8
-// CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:1))
-// CHECK-NEXT:     (succs)
-// CHECK-NEXT:     (subregs)
-// CHECK-NEXT:     (non-local-succs
-// CHECK-NEXT:         (parentindex:0)
-// CHECK-NEXT:         (parentindex:1))
-// CHECK-NEXT:     (exiting-subregs)
-// CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:1 kind:bb   ucfh:false ucft:false parent:8
-// CHECK-NEXT:     (preds)
-// CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:2))
-// CHECK-NEXT:     (subregs)
-// CHECK-NEXT:     (non-local-succs)
-// CHECK-NEXT:     (exiting-subregs)
-// CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:0 kind:bb   ucfh:false ucft:false parent:7
-// CHECK-NEXT:     (preds)
-// CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:8))
-// CHECK-NEXT:     (subregs)
-// CHECK-NEXT:     (non-local-succs)
-// CHECK-NEXT:     (exiting-subregs)
-// CHECK-NEXT:     (backedge-regs))
+// CHECK(region id:6 kind:func ucfh:false ucft:false
 sil @two_separate_natural_loops_separated_by_diamond : $@convention(thin) () -> () {
 bb0:
   br bb1
@@ -732,9 +662,15 @@ bb1:
   br bb2
 
 bb2:
-  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bb1, case #ManyCase.Two!enumelt: bb3, case #ManyCase.Three!enumelt: bb4
+  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bbcase1, case #ManyCase.Two!enumelt: bbcase2, case #ManyCase.Three!enumelt: bbcase3
 
-bb3:
+bbcase1:
+  br bb1
+
+bbcase2:
+  br bb4
+
+bbcase3:
   br bb4
 
 bb4:
@@ -763,115 +699,156 @@ bb6:
 //         --------           --------
 //
 // CHECK-LABEL: @two_separate_natural_loops_separated_by_diamond_with_loop@
-// CHECK: (region id:8 kind:func ucfh:false ucft:false
+// CHECK: (region id:13 kind:func ucfh:false ucft:false
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs
 // CHECK-NEXT:         (region id:0)
+// CHECK-NEXT:         (region id:14)
+// CHECK-NEXT:         (region id:3)
+// CHECK-NEXT:         (region id:4)
+// CHECK-NEXT:         (region id:15)
+// CHECK-NEXT:         (region id:6)
+// CHECK-NEXT:         (region id:7)
+// CHECK-NEXT:         (region id:8)
 // CHECK-NEXT:         (region id:9)
-// CHECK-NEXT:         (region id:10)
-// CHECK-NEXT:         (region id:11)
-// CHECK-NEXT:         (region id:7))
+// CHECK-NEXT:         (region id:10))
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:7 kind:bb   ucfh:false ucft:false parent:8
+// CHECK: (region id:10 kind:bb   ucfh:true  ucft:true  parent:13
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:10)
-// CHECK-NEXT:         (region id:11))
+// CHECK-NEXT:         (region id:3)
+// CHECK-NEXT:         (region id:8))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:8))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:9 kind:bb   ucfh:false ucft:false parent:13
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:6)
+// CHECK-NEXT:         (region id:8))
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:11 kind:loop ucfh:false ucft:false parent:8
+// CHECK: (region id:8 kind:bb   ucfh:true  ucft:true  parent:13
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:9)
+// CHECK-NEXT:         (region id:7)
 // CHECK-NEXT:         (region id:10))
 // CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:9)
+// CHECK-NEXT:         (region id:10))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:7 kind:bb   ucfh:false ucft:false parent:13
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:15))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:8))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:6 kind:bb   ucfh:false ucft:false parent:13
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:15))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:9))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:15 kind:loop ucfh:false ucft:false parent:13
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:4))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:6)
 // CHECK-NEXT:         (region id:7))
 // CHECK-NEXT:     (subregs
 // CHECK-NEXT:         (region id:5)
-// CHECK-NEXT:         (region id:6))
+// CHECK-NEXT:         (region id:11))
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs
-// CHECK-NEXT:         (region id:6))
+// CHECK-NEXT:         (region id:5))
 // CHECK-NEXT:     (backedge-regs
-// CHECK-NEXT:         (region id:6)))
-// CHECK: (region id:6 kind:bb   ucfh:false ucft:false parent:11
+// CHECK-NEXT:         (region id:11)))
+// CHECK: (region id:11 kind:bb   ucfh:false ucft:false parent:15
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:5))
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs)
-// CHECK-NEXT:     (non-local-succs
-// CHECK-NEXT:         (parentindex:0))
+// CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:5 kind:bb   ucfh:false ucft:false parent:11
+// CHECK: (region id:5 kind:bb   ucfh:false ucft:false parent:15
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:6))
-// CHECK-NEXT:     (subregs)
-// CHECK-NEXT:     (non-local-succs)
-// CHECK-NEXT:     (exiting-subregs)
-// CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:10 kind:loop ucfh:false ucft:false parent:8
-// CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:9))
-// CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:7)
 // CHECK-NEXT:         (region id:11))
-// CHECK-NEXT:     (subregs
-// CHECK-NEXT:         (region id:3)
-// CHECK-NEXT:         (region id:4))
-// CHECK-NEXT:     (non-local-succs)
-// CHECK-NEXT:     (exiting-subregs
-// CHECK-NEXT:         (region id:4))
-// CHECK-NEXT:     (backedge-regs
-// CHECK-NEXT:         (region id:4)))
-// CHECK: (region id:4 kind:bb   ucfh:false ucft:false parent:10
-// CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:3))
-// CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs
 // CHECK-NEXT:         (parentindex:0)
 // CHECK-NEXT:         (parentindex:1))
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:3 kind:bb   ucfh:false ucft:false parent:10
-// CHECK-NEXT:     (preds)
+// CHECK: (region id:4 kind:bb   ucfh:false ucft:false parent:13
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:14))
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:4))
+// CHECK-NEXT:         (region id:15))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:9 kind:loop ucfh:false ucft:false parent:8
+// CHECK: (region id:3 kind:bb   ucfh:false ucft:false parent:13
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:14))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:10))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:14 kind:loop ucfh:false ucft:false parent:13
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:0))
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:10)
-// CHECK-NEXT:         (region id:11))
+// CHECK-NEXT:         (region id:3)
+// CHECK-NEXT:         (region id:4))
 // CHECK-NEXT:     (subregs
 // CHECK-NEXT:         (region id:1)
-// CHECK-NEXT:         (region id:2))
+// CHECK-NEXT:         (region id:2)
+// CHECK-NEXT:         (region id:12))
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs
 // CHECK-NEXT:         (region id:2))
 // CHECK-NEXT:     (backedge-regs
-// CHECK-NEXT:         (region id:2)))
-// CHECK: (region id:2 kind:bb   ucfh:false ucft:false parent:9
+// CHECK-NEXT:         (region id:12)))
+// CHECK: (region id:12 kind:bb   ucfh:false ucft:false parent:14
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:2))
+// CHECK-NEXT:     (succs)
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:2 kind:bb   ucfh:false ucft:false parent:14
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:1))
-// CHECK-NEXT:     (succs)
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:12))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs
 // CHECK-NEXT:         (parentindex:0)
 // CHECK-NEXT:         (parentindex:1))
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:1 kind:bb   ucfh:false ucft:false parent:9
+// CHECK: (region id:1 kind:bb   ucfh:false ucft:false parent:14
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
 // CHECK-NEXT:         (region id:2))
@@ -879,10 +856,10 @@ bb6:
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:0 kind:bb   ucfh:false ucft:false parent:8
+// CHECK: (region id:0 kind:bb   ucfh:false ucft:false parent:13
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:9))
+// CHECK:         (region id:14))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
@@ -895,13 +872,28 @@ bb1:
   br bb2
 
 bb2:
-  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bb1, case #ManyCase.Two!enumelt: bb3, case #ManyCase.Three!enumelt: bb5
+  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bbcase1, case #ManyCase.Two!enumelt: bbcase2, case #ManyCase.Three!enumelt: bbcase3
 
-bb3:
+bbcase1:
+  br bb1
+
+bbcase2:
   br bb4
 
+bbcase3:
+  br bb5
+
 bb4:
-  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bb3, case #ManyCase.Two!enumelt: bb5, case #ManyCase.Three!enumelt: bb7
+  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bbcase41, case #ManyCase.Two!enumelt: bbcase42, case #ManyCase.Three!enumelt: bbcase43
+
+bbcase41:
+  br bb4
+
+bbcase42:
+  br bb6
+
+bbcase43:
+  br bb7
 
 bb5:
   br bb6
@@ -915,112 +907,142 @@ bb7:
 }
 
 // CHECK-LABEL: @three_separate_natural_loops@
-// CHECK: (region id:8 kind:func ucfh:false ucft:false
+// CHECK: (region id:11 kind:func ucfh:false ucft:false
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs
 // CHECK-NEXT:         (region id:0)
-// CHECK-NEXT:         (region id:9)
+// CHECK-NEXT:         (region id:12)
 // CHECK-NEXT:         (region id:3)
-// CHECK-NEXT:         (region id:10)
-// CHECK-NEXT:         (region id:11)
-// CHECK-NEXT:         (region id:7))
+// CHECK-NEXT:         (region id:4)
+// CHECK-NEXT:         (region id:13)
+// CHECK-NEXT:         (region id:6)
+// CHECK-NEXT:         (region id:14)
+// CHECK-NEXT:         (region id:9))
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:7 kind:bb   ucfh:false ucft:false parent:8
+// CHECK: (region id:9 kind:bb   ucfh:false ucft:false parent:11
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:10)
-// CHECK-NEXT:         (region id:11))
+// CHECK-NEXT:         (region id:13)
+// CHECK-NEXT:         (region id:14))
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:11 kind:loop ucfh:false ucft:false parent:8
+// CHECK: (region id:14 kind:loop ucfh:false ucft:false parent:11
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:9))
-// CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:7))
-// CHECK-NEXT:     (subregs
-// CHECK-NEXT:         (region id:5)
 // CHECK-NEXT:         (region id:6))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:9))
+// CHECK-NEXT:     (subregs
+// CHECK-NEXT:         (region id:7)
+// CHECK-NEXT:         (region id:8))
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs
-// CHECK-NEXT:         (region id:6))
+// CHECK-NEXT:         (region id:8))
 // CHECK-NEXT:     (backedge-regs
-// CHECK-NEXT:         (region id:6)))
-// CHECK: (region id:6 kind:bb   ucfh:false ucft:false parent:11
+// CHECK-NEXT:         (region id:8)))
+// CHECK: (region id:8 kind:bb   ucfh:false ucft:false parent:14
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:5))
+// CHECK-NEXT:         (region id:7))
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs
 // CHECK-NEXT:         (parentindex:0))
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:5 kind:bb   ucfh:false ucft:false parent:11
+// CHECK: (region id:7 kind:bb   ucfh:false ucft:false parent:14
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:6))
+// CHECK-NEXT:         (region id:8))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:10 kind:loop ucfh:false ucft:false parent:8
+// CHECK: (region id:6 kind:bb   ucfh:false ucft:false parent:11
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:12))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:14))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:13 kind:loop ucfh:false ucft:false parent:11
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:4))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:9))
+// CHECK-NEXT:     (subregs
+// CHECK-NEXT:         (region id:5))
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs
+// CHECK-NEXT:         (region id:5))
+// CHECK-NEXT:     (backedge-regs
+// CHECK-NEXT:         (region id:5)))
+// CHECK: (region id:5 kind:bb   ucfh:false ucft:false parent:13
+// CHECK-NEXT:     (preds)
+// CHECK-NEXT:     (succs)
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs
+// CHECK-NEXT:         (parentindex:0))
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:4 kind:bb   ucfh:false ucft:false parent:11
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:3))
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:7))
-// CHECK-NEXT:     (subregs
-// CHECK-NEXT:         (region id:4))
-// CHECK-NEXT:     (non-local-succs)
-// CHECK-NEXT:     (exiting-subregs
-// CHECK-NEXT:         (region id:4))
-// CHECK-NEXT:     (backedge-regs
-// CHECK-NEXT:         (region id:4)))
-// CHECK: (region id:4 kind:bb   ucfh:false ucft:false parent:10
-// CHECK-NEXT:     (preds)
-// CHECK-NEXT:     (succs)
+// CHECK-NEXT:         (region id:13))
 // CHECK-NEXT:     (subregs)
-// CHECK-NEXT:     (non-local-succs
-// CHECK-NEXT:         (parentindex:0))
+// CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:3 kind:bb   ucfh:false ucft:false parent:8
+// CHECK: (region id:3 kind:bb   ucfh:false ucft:false parent:11
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:9))
+// CHECK-NEXT:         (region id:12))
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:10))
+// CHECK-NEXT:         (region id:4))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:9 kind:loop ucfh:false ucft:false parent:8
+// CHECK: (region id:12 kind:loop ucfh:false ucft:false parent:11
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:0))
 // CHECK-NEXT:     (succs
 // CHECK-NEXT:         (region id:3)
-// CHECK-NEXT:         (region id:11))
+// CHECK-NEXT:         (region id:6))
 // CHECK-NEXT:     (subregs
 // CHECK-NEXT:         (region id:1)
-// CHECK-NEXT:         (region id:2))
+// CHECK-NEXT:         (region id:2)
+// CHECK-NEXT:         (region id:10))
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs
 // CHECK-NEXT:         (region id:2))
 // CHECK-NEXT:     (backedge-regs
-// CHECK-NEXT:         (region id:2)))
-// CHECK: (region id:2 kind:bb   ucfh:false ucft:false parent:9
+// CHECK-NEXT:         (region id:10)))
+// CHECK: (region id:10 kind:bb   ucfh:false ucft:false parent:12
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:2))
+// CHECK-NEXT:     (succs)
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:2 kind:bb   ucfh:false ucft:false parent:12
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:1))
-// CHECK-NEXT:     (succs)
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:10))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs
 // CHECK-NEXT:         (parentindex:0)
 // CHECK-NEXT:         (parentindex:1))
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:1 kind:bb   ucfh:false ucft:false parent:9
+// CHECK: (region id:1 kind:bb   ucfh:false ucft:false parent:12
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
 // CHECK-NEXT:         (region id:2))
@@ -1028,10 +1050,10 @@ bb7:
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:0 kind:bb   ucfh:false ucft:false parent:8
+// CHECK: (region id:0 kind:bb   ucfh:false ucft:false parent:11
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:9))
+// CHECK-NEXT:         (region id:12))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
@@ -1044,7 +1066,16 @@ bb1:
   br bb2
 
 bb2:
-  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bb1, case #ManyCase.Two!enumelt: bb3, case #ManyCase.Three!enumelt: bb5
+  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bbcase1, case #ManyCase.Two!enumelt: bbcase2, case #ManyCase.Three!enumelt: bbcase3
+
+bbcase1:
+  br bb1
+
+bbcase2:
+  br bb3
+
+bbcase3:
+  br bb5
 
 bb3:
   br bb4
@@ -1175,92 +1206,124 @@ bb4:
 //         ---------------
 //
 // CHECK-LABEL: @two_level_natural_loop_with_diamond_and_multiple_loop_exits@
-// CHECK: (region id:6 kind:func ucfh:false ucft:false
+// CHECK: (region id:9 kind:func ucfh:false ucft:false
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs
 // CHECK-NEXT:         (region id:0)
-// CHECK-NEXT:         (region id:7)
-// CHECK-NEXT:         (region id:5))
+// CHECK-NEXT:         (region id:10)
+// CHECK-NEXT:         (region id:7))
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:5 kind:bb   ucfh:false ucft:false parent:6
+// CHECK: (region id:7 kind:bb   ucfh:false ucft:false parent:9
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:7))
+// CHECK-NEXT:         (region id:10))
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:7 kind:loop ucfh:false ucft:false parent:6
+// CHECK: (region id:10 kind:loop ucfh:false ucft:false parent:9
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:0))
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:5))
+// CHECK-NEXT:         (region id:7))
 // CHECK-NEXT:     (subregs
 // CHECK-NEXT:         (region id:1)
-// CHECK-NEXT:         (region id:8)
+// CHECK-NEXT:         (region id:11)
 // CHECK-NEXT:         (region id:3)
-// CHECK-NEXT:         (region id:4))
+// CHECK-NEXT:         (region id:4)
+// CHECK-NEXT:         (region id:5)
+// CHECK-NEXT:         (region id:6))
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs
-// CHECK-NEXT:         (region id:4))
+// CHECK-NEXT:         (region id:6))
 // CHECK-NEXT:     (backedge-regs
-// CHECK-NEXT:         (region id:4))
-// CHECK: (region id:4 kind:bb   ucfh:false ucft:false parent:7
+// CHECK-NEXT:         (region id:6)))
+// CHECK: (region id:6 kind:bb   ucfh:false ucft:false parent:10
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:3)
-// CHECK-NEXT:         (region id:8))
+// CHECK-NEXT:         (region id:5))
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs
 // CHECK-NEXT:         (parentindex:0))
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:3 kind:bb   ucfh:false ucft:false parent:7
+// CHECK: (region id:5 kind:bb   ucfh:false ucft:false parent:10
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:1)
-// CHECK-NEXT:         (region id:8))
-// CHECK-NEXT:     (succs
 // CHECK-NEXT:         (region id:4))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:6))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:8 kind:loop ucfh:false ucft:false parent:7
+// CHECK: (region id:4 kind:bb   ucfh:false ucft:false parent:10
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:11))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:5))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:3 kind:bb   ucfh:false ucft:false parent:10
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:11))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:6))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:11 kind:loop ucfh:false ucft:false parent:10
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:1))
 // CHECK-NEXT:     (succs
 // CHECK-NEXT:         (region id:3)
 // CHECK-NEXT:         (region id:4))
 // CHECK-NEXT:     (subregs
-// CHECK-NEXT:         (region id:2))
+// CHECK-NEXT:         (region id:2)
+// CHECK-NEXT:         (region id:8))
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs
 // CHECK-NEXT:         (region id:2))
 // CHECK-NEXT:     (backedge-regs
+// CHECK-NEXT:         (region id:8)))
+// CHECK: (region id:8 kind:bb   ucfh:false ucft:false parent:11
+// CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:2))
-// CHECK: (region id:2 kind:bb   ucfh:false ucft:false parent:8
-// CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs)
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:2 kind:bb   ucfh:false ucft:false parent:11
+// CHECK-NEXT:     (preds)
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:8))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs
 // CHECK-NEXT:         (parentindex:0)
 // CHECK-NEXT:         (parentindex:1))
 // CHECK-NEXT:     (exiting-subregs)
-// CHECK: (region id:1 kind:bb   ucfh:false ucft:false parent:7
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:1 kind:bb   ucfh:false ucft:false parent:10
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:3)
-// CHECK-NEXT:         (region id:8))
+// CHECK-NEXT:         (region id:5)
+// CHECK-NEXT:         (region id:11))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
-// CHECK: (region id:0 kind:bb   ucfh:false ucft:false parent:6
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:0 kind:bb   ucfh:false ucft:false parent:9
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:7))
+// CHECK-NEXT:         (region id:10))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
@@ -1273,7 +1336,16 @@ bb1:
   cond_br undef, bb2, bb3
 
 bb2:
-  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bb2, case #ManyCase.Two!enumelt: bb3, case #ManyCase.Three!enumelt: bb4
+  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bbcase1, case #ManyCase.Two!enumelt: bbcase2, case #ManyCase.Three!enumelt: bbcase3
+
+bbcase1:
+  br bb2
+
+bbcase2:
+  br bb3
+
+bbcase3:
+  br bb4
 
 bb3:
   br bb4
@@ -1402,7 +1474,7 @@ bb5:
 // Make sure that we properly identify irreducible loop boundaries.
 //
 // CHECK-LABEL: @one_level_irreducible_loop@
-// CHECK: (region id:5 kind:func ucfh:false ucft:false
+// CHECK: (region id:8 kind:func ucfh:false ucft:false
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs
@@ -1410,55 +1482,85 @@ bb5:
 // CHECK-NEXT:         (region id:1)
 // CHECK-NEXT:         (region id:2)
 // CHECK-NEXT:         (region id:3)
-// CHECK-NEXT:         (region id:4))
+// CHECK-NEXT:         (region id:4)
+// CHECK-NEXT:         (region id:5)
+// CHECK-NEXT:         (region id:6)
+// CHECK-NEXT:         (region id:7))
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:4 kind:bb   ucfh:false ucft:false parent:5
+// CHECK: (region id:7 kind:bb   ucfh:true  ucft:true  parent:8
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:2))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:1))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:6 kind:bb   ucfh:false ucft:false parent:8
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:5))
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:3 kind:bb   ucfh:true  ucft:true  parent:5
+// CHECK: (region id:5 kind:bb   ucfh:false ucft:false parent:8
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:2))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:6))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:4 kind:bb   ucfh:true  ucft:true  parent:8
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:0)
-// CHECK-NEXT:         (region id:2))
+// CHECK-NEXT:         (region id:3))
 // CHECK-NEXT:     (succs
 // CHECK-NEXT:         (region id:2))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:2 kind:bb   ucfh:true  ucft:true  parent:5
+// CHECK: (region id:3 kind:bb   ucfh:false ucft:false parent:8
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:1)
-// CHECK-NEXT:         (region id:3))
+// CHECK-NEXT:         (region id:2))
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:1)
-// CHECK-NEXT:         (region id:3)
 // CHECK-NEXT:         (region id:4))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:1 kind:bb   ucfh:true  ucft:true  parent:5
+// CHECK: (region id:2 kind:bb   ucfh:true  ucft:true  parent:8
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:1)
+// CHECK-NEXT:         (region id:4))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:3)
+// CHECK-NEXT:         (region id:5)
+// CHECK-NEXT:         (region id:7))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:1 kind:bb   ucfh:true  ucft:true  parent:8
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:0)
-// CHECK-NEXT:         (region id:2))
+// CHECK-NEXT:         (region id:7))
 // CHECK-NEXT:     (succs
 // CHECK-NEXT:         (region id:2))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:0 kind:bb   ucfh:false ucft:false parent:5
+// CHECK: (region id:0 kind:bb   ucfh:false ucft:false parent:8
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
 // CHECK-NEXT:         (region id:1)
-// CHECK-NEXT:         (region id:3))
+// CHECK-NEXT:         (region id:4))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
@@ -1471,7 +1573,16 @@ bb1:
   br bb2
 
 bb2:
-  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bb1, case #ManyCase.Two!enumelt: bb5, case #ManyCase.Three!enumelt: bb3
+  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bbcase1, case #ManyCase.Two!enumelt: bbcase2, case #ManyCase.Three!enumelt: bbcase3
+
+bbcase1:
+  br bb1
+
+bbcase2:
+  br bb5
+
+bbcase3:
+  br bb3
 
 bb3:
   br bb2
@@ -1484,94 +1595,124 @@ bb5:
 // One natural loop with one internal irreducible loop
 //
 // CHECK-LABEL: @natural_loop_containing_irreducible_loop@
-// CHECK: (region id:7 kind:func ucfh:false ucft:false
+// CHECK: (region id:10 kind:func ucfh:false ucft:false
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs
 // CHECK-NEXT:         (region id:0)
-// CHECK-NEXT:         (region id:8)
-// CHECK-NEXT:         (region id:6))
+// CHECK-NEXT:         (region id:11)
+// CHECK-NEXT:         (region id:8))
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:6 kind:bb   ucfh:false ucft:false parent:7
+// CHECK: (region id:8 kind:bb   ucfh:false ucft:false parent:10
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:8))
+// CHECK-NEXT:         (region id:11))
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:8 kind:loop ucfh:false ucft:false parent:7
+// CHECK: (region id:11 kind:loop ucfh:false ucft:false parent:10
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:0))
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:6))
+// CHECK-NEXT:         (region id:8))
 // CHECK-NEXT:     (subregs
 // CHECK-NEXT:         (region id:1)
 // CHECK-NEXT:         (region id:2)
 // CHECK-NEXT:         (region id:3)
 // CHECK-NEXT:         (region id:4)
-// CHECK-NEXT:         (region id:5))
+// CHECK-NEXT:         (region id:5)
+// CHECK-NEXT:         (region id:6)
+// CHECK-NEXT:         (region id:7)
+// CHECK-NEXT:         (region id:9))
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs
-// CHECK-NEXT:         (region id:5))
+// CHECK-NEXT:         (region id:7))
 // CHECK-NEXT:     (backedge-regs
-// CHECK-NEXT:         (region id:5)))
-// CHECK: (region id:5 kind:bb   ucfh:false ucft:false parent:8
+// CHECK-NEXT:         (region id:7)))
+// CHECK: (region id:9 kind:bb   ucfh:true  ucft:true  parent:11
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:3))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:2))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:7 kind:bb   ucfh:false ucft:false parent:11
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:6))
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs
 // CHECK-NEXT:         (parentindex:0))
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:4 kind:bb   ucfh:true  ucft:true  parent:8
+// CHECK: (region id:6 kind:bb   ucfh:false ucft:false parent:11
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:3))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:7))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:5 kind:bb   ucfh:true  ucft:true  parent:11
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:1)
-// CHECK-NEXT:         (region id:3))
+// CHECK-NEXT:         (region id:4))
 // CHECK-NEXT:     (succs
 // CHECK-NEXT:         (region id:3))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:3 kind:bb   ucfh:true  ucft:true  parent:8
+// CHECK: (region id:4 kind:bb   ucfh:false ucft:false parent:11
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:2)
-// CHECK-NEXT:         (region id:4))
+// CHECK-NEXT:         (region id:3))
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:2)
-// CHECK-NEXT:         (region id:4)
 // CHECK-NEXT:         (region id:5))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:2 kind:bb   ucfh:true  ucft:true  parent:8
+// CHECK: (region id:3 kind:bb   ucfh:true  ucft:true  parent:11
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:2)
+// CHECK-NEXT:         (region id:5))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:4)
+// CHECK-NEXT:         (region id:6)
+// CHECK-NEXT:         (region id:9))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:2 kind:bb   ucfh:true  ucft:true  parent:11
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:1)
-// CHECK-NEXT:         (region id:3))
+// CHECK-NEXT:         (region id:9))
 // CHECK-NEXT:     (succs
 // CHECK-NEXT:         (region id:3))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:1 kind:bb   ucfh:false ucft:false parent:8
+// CHECK: (region id:1 kind:bb   ucfh:false ucft:false parent:11
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
 // CHECK-NEXT:         (region id:2)
-// CHECK-NEXT:         (region id:4))
+// CHECK-NEXT:         (region id:5))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:0 kind:bb   ucfh:false ucft:false parent:7
+// CHECK: (region id:0 kind:bb   ucfh:false ucft:false parent:10
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:8))
+// CHECK-NEXT:         (region id:11))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
@@ -1587,7 +1728,16 @@ bb1:
   br bb2
 
 bb2:
-  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bb1, case #ManyCase.Two!enumelt: bb5, case #ManyCase.Three!enumelt: bb3
+  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bbcase1, case #ManyCase.Two!enumelt: bbcase2, case #ManyCase.Three!enumelt: bbcase3
+
+bbcase1:
+  br bb1
+
+bbcase2:
+  br bb5
+
+bbcase3:
+  br bb3
 
 bb3:
   br bb2
@@ -1606,39 +1756,84 @@ bb7:
 // into siblings.
 //
 // CHECK-LABEL: @two_natural_loop_one_with_irreducible_loop@
-// CHECK: (region id:9 kind:func ucfh:false ucft:false
+// CHECK: (region id:12 kind:func ucfh:false ucft:false
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs
 // CHECK-NEXT:         (region id:0)
-// CHECK-NEXT:         (region id:10)
-// CHECK-NEXT:         (region id:11)
-// CHECK-NEXT:         (region id:8))
+// CHECK-NEXT:         (region id:13)
+// CHECK-NEXT:         (region id:14)
+// CHECK-NEXT:         (region id:10))
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:8 kind:bb   ucfh:false ucft:false parent:9
+// CHECK: (region id:10 kind:bb   ucfh:false ucft:false parent:12
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:11))
+// CHECK-NEXT:         (region id:14))
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:11 kind:loop ucfh:false ucft:false parent:9
+// CHECK: (region id:14 kind:loop ucfh:false ucft:false parent:12
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:10))
+// CHECK-NEXT:         (region id:13))
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:8))
+// CHECK-NEXT:         (region id:10))
 // CHECK-NEXT:     (subregs
+// CHECK-NEXT:         (region id:8)
+// CHECK-NEXT:         (region id:9))
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs
+// CHECK-NEXT:         (region id:9))
+// CHECK-NEXT:     (backedge-regs
+// CHECK-NEXT:         (region id:9)))
+// CHECK: (region id:9 kind:bb   ucfh:false ucft:false parent:14
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:8))
+// CHECK-NEXT:     (succs)
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs
+// CHECK-NEXT:         (parentindex:0))
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:8 kind:bb   ucfh:false ucft:false parent:14
+// CHECK-NEXT:     (preds)
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:9))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:13 kind:loop ucfh:false ucft:false parent:12
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:0))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:14))
+// CHECK-NEXT:     (subregs
+// CHECK-NEXT:         (region id:1)
+// CHECK-NEXT:         (region id:2)
+// CHECK-NEXT:         (region id:3)
+// CHECK-NEXT:         (region id:4)
+// CHECK-NEXT:         (region id:5)
 // CHECK-NEXT:         (region id:6)
-// CHECK-NEXT:         (region id:7))
+// CHECK-NEXT:         (region id:7)
+// CHECK-NEXT:         (region id:11))
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs
 // CHECK-NEXT:         (region id:7))
 // CHECK-NEXT:     (backedge-regs
 // CHECK-NEXT:         (region id:7)))
-// CHECK: (region id:7 kind:bb   ucfh:false ucft:false parent:11
+// CHECK: (region id:11 kind:bb   ucfh:true  ucft:true  parent:13
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:3))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:2))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:7 kind:bb   ucfh:false ucft:false parent:13
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:6))
 // CHECK-NEXT:     (succs)
@@ -1647,84 +1842,69 @@ bb7:
 // CHECK-NEXT:         (parentindex:0))
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:6 kind:bb   ucfh:false ucft:false parent:11
-// CHECK-NEXT:     (preds)
+// CHECK: (region id:6 kind:bb   ucfh:false ucft:false parent:13
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:3))
 // CHECK-NEXT:     (succs
 // CHECK-NEXT:         (region id:7))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:10 kind:loop ucfh:false ucft:false parent:9
+// CHECK: (region id:5 kind:bb   ucfh:true  ucft:true  parent:13
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:0))
+// CHECK-NEXT:         (region id:1)
+// CHECK-NEXT:         (region id:4))
 // CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:3))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:4 kind:bb   ucfh:false ucft:false parent:13
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:3))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:5))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:3 kind:bb   ucfh:true  ucft:true  parent:13
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:2)
+// CHECK-NEXT:         (region id:5))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:4)
+// CHECK-NEXT:         (region id:6)
 // CHECK-NEXT:         (region id:11))
-// CHECK-NEXT:     (subregs
-// CHECK-NEXT:         (region id:1)
-// CHECK-NEXT:         (region id:2)
-// CHECK-NEXT:         (region id:3)
-// CHECK-NEXT:         (region id:4)
-// CHECK-NEXT:         (region id:5))
-// CHECK-NEXT:     (non-local-succs)
-// CHECK-NEXT:     (exiting-subregs
-// CHECK-NEXT:         (region id:5))
-// CHECK-NEXT:     (backedge-regs
-// CHECK-NEXT:         (region id:5)))
-// CHECK: (region id:5 kind:bb   ucfh:false ucft:false parent:10
-// CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:3))
-// CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs)
-// CHECK-NEXT:     (non-local-succs
-// CHECK-NEXT:         (parentindex:0))
+// CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:4 kind:bb   ucfh:true  ucft:true  parent:10
+// CHECK: (region id:2 kind:bb   ucfh:true  ucft:true  parent:13
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:1)
-// CHECK-NEXT:         (region id:3))
+// CHECK-NEXT:         (region id:11))
 // CHECK-NEXT:     (succs
 // CHECK-NEXT:         (region id:3))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:3 kind:bb   ucfh:true  ucft:true  parent:10
-// CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:2)
-// CHECK-NEXT:         (region id:4))
-// CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:2)
-// CHECK-NEXT:         (region id:4)
-// CHECK-NEXT:         (region id:5))
-// CHECK-NEXT:     (subregs)
-// CHECK-NEXT:     (non-local-succs)
-// CHECK-NEXT:     (exiting-subregs)
-// CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:2 kind:bb   ucfh:true  ucft:true  parent:10
-// CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:1)
-// CHECK-NEXT:         (region id:3))
-// CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:3))
-// CHECK-NEXT:     (subregs)
-// CHECK-NEXT:     (non-local-succs)
-// CHECK-NEXT:     (exiting-subregs)
-// CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:1 kind:bb   ucfh:false ucft:false parent:10
+// CHECK: (region id:1 kind:bb   ucfh:false ucft:false parent:13
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
 // CHECK-NEXT:         (region id:2)
-// CHECK-NEXT:         (region id:4))
+// CHECK-NEXT:         (region id:5))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:0 kind:bb   ucfh:false ucft:false parent:9
+// CHECK: (region id:0 kind:bb   ucfh:false ucft:false parent:12
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:10))
+// CHECK-NEXT:         (region id:13))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
@@ -1740,7 +1920,16 @@ bb1:
   br bb2
 
 bb2:
-  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bb1, case #ManyCase.Two!enumelt: bb5, case #ManyCase.Three!enumelt: bb3
+  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bbcase1, case #ManyCase.Two!enumelt: bbcase2, case #ManyCase.Three!enumelt: bbcase3
+
+bbcase1:
+  br bb1
+
+bbcase2:
+  br bb5
+
+bbcase3:
+  br bb3
 
 bb3:
   br bb2
@@ -1760,38 +1949,83 @@ bb9:
 }
 
 // CHECK-LABEL: @multiple_level_natural_loop_with_irreducible_loop_sandwich@
-// CHECK: (region id:12 kind:func ucfh:false ucft:false
+// CHECK: (region id:15 kind:func ucfh:false ucft:false
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs
 // CHECK-NEXT:         (region id:0)
-// CHECK-NEXT:         (region id:13)
 // CHECK-NEXT:         (region id:16)
-// CHECK-NEXT:         (region id:11))
+// CHECK-NEXT:         (region id:19)
+// CHECK-NEXT:         (region id:13))
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:11 kind:bb   ucfh:false ucft:false parent:12
+// CHECK: (region id:13 kind:bb   ucfh:false ucft:false parent:15
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:16))
+// CHECK-NEXT:         (region id:19))
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:16 kind:loop ucfh:false ucft:false parent:12
+// CHECK: (region id:19 kind:loop ucfh:false ucft:false parent:15
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:13))
+// CHECK-NEXT:         (region id:16))
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:11))
+// CHECK-NEXT:         (region id:13))
 // CHECK-NEXT:     (subregs
+// CHECK-NEXT:         (region id:11)
+// CHECK-NEXT:         (region id:12))
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs
+// CHECK-NEXT:         (region id:12))
+// CHECK-NEXT:     (backedge-regs
+// CHECK-NEXT:         (region id:12)))
+// CHECK: (region id:12 kind:bb   ucfh:false ucft:false parent:19
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:11))
+// CHECK-NEXT:     (succs)
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs
+// CHECK-NEXT:         (parentindex:0))
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:11 kind:bb   ucfh:false ucft:false parent:19
+// CHECK-NEXT:     (preds)
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:12))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:16 kind:loop ucfh:false ucft:false parent:15
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:0))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:19))
+// CHECK-NEXT:     (subregs
+// CHECK-NEXT:         (region id:1)
+// CHECK-NEXT:         (region id:2)
+// CHECK-NEXT:         (region id:3)
+// CHECK-NEXT:         (region id:4)
+// CHECK-NEXT:         (region id:17)
 // CHECK-NEXT:         (region id:9)
-// CHECK-NEXT:         (region id:10))
+// CHECK-NEXT:         (region id:10)
+// CHECK-NEXT:         (region id:14))
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs
 // CHECK-NEXT:         (region id:10))
 // CHECK-NEXT:     (backedge-regs
 // CHECK-NEXT:         (region id:10)))
+// CHECK: (region id:14 kind:bb   ucfh:true  ucft:true  parent:16
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:3))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:2))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
 // CHECK: (region id:10 kind:bb   ucfh:false ucft:false parent:16
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:9))
@@ -1802,135 +2036,120 @@ bb9:
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
 // CHECK: (region id:9 kind:bb   ucfh:false ucft:false parent:16
-// CHECK-NEXT:     (preds)
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:3))
 // CHECK-NEXT:     (succs
 // CHECK-NEXT:         (region id:10))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:13 kind:loop ucfh:false ucft:false parent:12
-// CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:0))
-// CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:16))
-// CHECK-NEXT:     (subregs
-// CHECK-NEXT:         (region id:1)
-// CHECK-NEXT:         (region id:2)
-// CHECK-NEXT:         (region id:3)
-// CHECK-NEXT:         (region id:14)
-// CHECK-NEXT:         (region id:8))
-// CHECK-NEXT:     (non-local-succs)
-// CHECK-NEXT:     (exiting-subregs
-// CHECK-NEXT:         (region id:8))
-// CHECK-NEXT:     (backedge-regs
-// CHECK-NEXT:         (region id:8)))
-// CHECK: (region id:8 kind:bb   ucfh:false ucft:false parent:13
-// CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:3))
-// CHECK-NEXT:     (succs)
-// CHECK-NEXT:     (subregs)
-// CHECK-NEXT:     (non-local-succs
-// CHECK-NEXT:         (parentindex:0))
-// CHECK-NEXT:     (exiting-subregs)
-// CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:14 kind:loop ucfh:true  ucft:true  parent:13
+// CHECK: (region id:17 kind:loop ucfh:true  ucft:true  parent:16
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:1)
-// CHECK-NEXT:         (region id:3))
-// CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:3))
-// CHECK-NEXT:     (subregs
-// CHECK-NEXT:         (region id:4)
-// CHECK-NEXT:         (region id:15)
-// CHECK-NEXT:         (region id:7))
-// CHECK-NEXT:     (non-local-succs)
-// CHECK-NEXT:     (exiting-subregs
-// CHECK-NEXT:         (region id:4))
-// CHECK-NEXT:     (backedge-regs
-// CHECK-NEXT:         (region id:7)))
-// CHECK: (region id:7 kind:bb   ucfh:false ucft:false parent:14
-// CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:15))
-// CHECK-NEXT:     (succs)
-// CHECK-NEXT:     (subregs)
-// CHECK-NEXT:     (non-local-succs)
-// CHECK-NEXT:     (exiting-subregs)
-// CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:15 kind:loop ucfh:false ucft:false parent:14
-// CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:4))
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:7))
+// CHECK-NEXT:         (region id:3))
 // CHECK-NEXT:     (subregs
 // CHECK-NEXT:         (region id:5)
-// CHECK-NEXT:         (region id:6))
+// CHECK-NEXT:         (region id:18)
+// CHECK-NEXT:         (region id:8))
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs
-// CHECK-NEXT:         (region id:6))
+// CHECK-NEXT:         (region id:5))
 // CHECK-NEXT:     (backedge-regs
-// CHECK-NEXT:         (region id:6)))
-// CHECK: (region id:6 kind:bb   ucfh:false ucft:false parent:15
+// CHECK-NEXT:         (region id:8)))
+// CHECK: (region id:8 kind:bb   ucfh:false ucft:false parent:17
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:18))
+// CHECK-NEXT:     (succs)
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:18 kind:loop ucfh:false ucft:false parent:17
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:5))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:8))
+// CHECK-NEXT:     (subregs
+// CHECK-NEXT:         (region id:6)
+// CHECK-NEXT:         (region id:7))
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs
+// CHECK-NEXT:         (region id:7))
+// CHECK-NEXT:     (backedge-regs
+// CHECK-NEXT:         (region id:7)))
+// CHECK: (region id:7 kind:bb   ucfh:false ucft:false parent:18
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:6))
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs
 // CHECK-NEXT:         (parentindex:0))
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:5 kind:bb   ucfh:false ucft:false parent:15
+// CHECK: (region id:6 kind:bb   ucfh:false ucft:false parent:18
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:6))
+// CHECK-NEXT:         (region id:7))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:4 kind:bb   ucfh:true  ucft:true  parent:14
+// CHECK: (region id:5 kind:bb   ucfh:true  ucft:true  parent:17
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:15))
+// CHECK-NEXT:         (region id:18))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs
 // CHECK-NEXT:         (parentindex:0))
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:3 kind:bb   ucfh:true  ucft:true  parent:13
+// CHECK: (region id:4 kind:bb   ucfh:false ucft:false parent:16
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:3))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:17))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:3 kind:bb   ucfh:true  ucft:true  parent:16
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:2)
-// CHECK-NEXT:         (region id:14))
+// CHECK-NEXT:         (region id:17))
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:2)
-// CHECK-NEXT:         (region id:8)
+// CHECK-NEXT:         (region id:4)
+// CHECK-NEXT:         (region id:9)
 // CHECK-NEXT:         (region id:14))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:2 kind:bb   ucfh:true  ucft:true  parent:13
+// CHECK: (region id:2 kind:bb   ucfh:true  ucft:true  parent:16
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:1)
-// CHECK-NEXT:         (region id:3))
+// CHECK-NEXT:         (region id:14))
 // CHECK-NEXT:     (succs
 // CHECK-NEXT:         (region id:3))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:1 kind:bb   ucfh:false ucft:false parent:13
+// CHECK: (region id:1 kind:bb   ucfh:false ucft:false parent:16
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
 // CHECK-NEXT:         (region id:2)
-// CHECK-NEXT:         (region id:14))
+// CHECK-NEXT:         (region id:17))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:0 kind:bb   ucfh:false ucft:false parent:12
+// CHECK: (region id:0 kind:bb   ucfh:false ucft:false parent:15
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:13))
+// CHECK-NEXT:         (region id:16))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
@@ -1946,7 +2165,16 @@ bb1:
   br bb2
 
 bb2:
-  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bb1, case #ManyCase.Two!enumelt: bb5, case #ManyCase.Three!enumelt: bb3
+  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bbcase1, case #ManyCase.Two!enumelt: bbcase2, case #ManyCase.Three!enumelt: bbcase3
+
+bbcase1:
+  br bb1
+
+bbcase2:
+  br bb5
+
+bbcase3:
+  br bb3
 
 bb3:
   cond_br undef, bb2, bb10
@@ -2172,100 +2400,175 @@ bb6:
 }
 
 // CHECK-LABEL: @unreachable_bb_in_inner_loop_with_multiple_edges@
-// CHECK: (region id:7 kind:func ucfh:false ucft:false
+// CHECK: (region id:13 kind:func ucfh:false ucft:false
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs
 // CHECK-NEXT:         (region id:0)
-// CHECK-NEXT:         (region id:8)
-// CHECK-NEXT:         (region id:5)
-// CHECK-NEXT:         (region id:6))
+// CHECK-NEXT:         (region id:14)
+// CHECK-NEXT:         (region id:3)
+// CHECK-NEXT:         (region id:6)
+// CHECK-NEXT:         (region id:9)
+// CHECK-NEXT:         (region id:11)
+// CHECK-NEXT:         (region id:12))
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
-// CHECK: (region id:6 kind:bb   ucfh:false ucft:false parent:7
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:12 kind:bb   ucfh:false ucft:false parent:13
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:8))
+// CHECK-NEXT:         (region id:3)
+// CHECK-NEXT:         (region id:6)
+// CHECK-NEXT:         (region id:11))
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
-// CHECK: (region id:5 kind:bb   ucfh:false ucft:false parent:7
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:11 kind:bb   ucfh:false ucft:false parent:13
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:8))
+// CHECK-NEXT:         (region id:14))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:12))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:9 kind:bb   ucfh:false ucft:false parent:13
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:14))
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
-// CHECK: (region id:8 kind:loop ucfh:false ucft:false parent:7
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:6 kind:bb   ucfh:false ucft:false parent:13
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:14))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:12))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:3 kind:bb   ucfh:false ucft:false parent:13
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:14))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:12))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:14 kind:loop ucfh:false ucft:false parent:13
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:0))
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:5)
-// CHECK-NEXT:         (region id:6))
+// CHECK-NEXT:         (region id:3)
+// CHECK-NEXT:         (region id:6)
+// CHECK-NEXT:         (region id:9)
+// CHECK-NEXT:         (region id:11))
 // CHECK-NEXT:     (subregs
 // CHECK-NEXT:         (region id:1)
-// CHECK-NEXT:         (region id:9)
-// CHECK-NEXT:         (region id:4))
+// CHECK-NEXT:         (region id:15)
+// CHECK-NEXT:         (region id:7)
+// CHECK-NEXT:         (region id:8))
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs
-// CHECK-NEXT:         (region id:4)
-// CHECK-NEXT:         (region id:9))
+// CHECK-NEXT:         (region id:8)
+// CHECK-NEXT:         (region id:15))
 // CHECK-NEXT:     (backedge-regs
-// CHECK-NEXT:         (region id:4)))
-// CHECK: (region id:4 kind:bb   ucfh:false ucft:false parent:8
+// CHECK-NEXT:         (region id:8)))
+// CHECK: (region id:8 kind:bb   ucfh:false ucft:false parent:14
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:9))
+// CHECK-NEXT:         (region id:7))
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs
 // CHECK-NEXT:         (parentindex:0))
 // CHECK-NEXT:     (exiting-subregs)
-// CHECK: (region id:9 kind:loop ucfh:false ucft:false parent:8
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:7 kind:bb   ucfh:false ucft:false parent:14
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:15))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:8))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:15 kind:loop ucfh:false ucft:false parent:14
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:1))
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:4))
+// CHECK-NEXT:         (region id:7))
 // CHECK-NEXT:     (subregs
 // CHECK-NEXT:         (region id:2)
-// CHECK-NEXT:         (region id:3))
+// CHECK-NEXT:         (region id:4)
+// CHECK-NEXT:         (region id:5)
+// CHECK-NEXT:         (region id:10))
 // CHECK-NEXT:     (non-local-succs
-// CHECK-NEXT:         (parentindex:1))
+// CHECK-NEXT:         (parentindex:1)
+// CHECK-NEXT:         (parentindex:2)
+// CHECK-NEXT:         (parentindex:3))
 // CHECK-NEXT:     (exiting-subregs
 // CHECK-NEXT:         (region id:2)
-// CHECK-NEXT:         (region id:3))
+// CHECK-NEXT:         (region id:5))
 // CHECK-NEXT:     (backedge-regs
-// CHECK-NEXT:         (region id:3)))
-// CHECK: (region id:3 kind:bb   ucfh:false ucft:false parent:9
+// CHECK-NEXT:         (region id:10)))
+// CHECK: (region id:10 kind:bb   ucfh:false ucft:false parent:15
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:5))
+// CHECK-NEXT:     (succs)
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:5 kind:bb   ucfh:false ucft:false parent:15
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:4))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:10))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs
+// CHECK-NEXT:         (parentindex:2)
+// CHECK-NEXT:         (parentindex:3))
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:4 kind:bb   ucfh:false ucft:false parent:15
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:2))
-// CHECK-NEXT:     (succs)
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:5))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:2 kind:bb   ucfh:false ucft:false parent:15
+// CHECK-NEXT:     (preds)
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:4))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs
 // CHECK-NEXT:         (parentindex:0)
 // CHECK-NEXT:         (parentindex:1))
 // CHECK-NEXT:     (exiting-subregs)
-// CHECK: (region id:2 kind:bb   ucfh:false ucft:false parent:9
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:1 kind:bb   ucfh:false ucft:false parent:14
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:3))
-// CHECK-NEXT:     (subregs)
-// CHECK-NEXT:     (non-local-succs
-// CHECK-NEXT:         (parentindex:0))
-// CHECK-NEXT:     (exiting-subregs)
-// CHECK: (region id:1 kind:bb   ucfh:false ucft:false parent:8
-// CHECK-NEXT:     (preds)
-// CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:9))
+// CHECK-NEXT:         (region id:15))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
-// CHECK: (region id:0 kind:bb   ucfh:false ucft:false parent:7
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:0 kind:bb   ucfh:false ucft:false parent:13
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:8))
+// CHECK-NEXT:         (region id:14))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
 sil @unreachable_bb_in_inner_loop_with_multiple_edges : $@convention(thin) () -> () {
 bb0:
   br bb1
@@ -2274,13 +2577,31 @@ bb1:
   br bb2
 
 bb2:
-  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bb3, case #ManyCase.Two!enumelt: bb4, case #ManyCase.Three!enumelt: bb3
+  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bbcase1, case #ManyCase.Two!enumelt: bbcase2, case #ManyCase.Three!enumelt: bbcase3
+
+bbcase1:
+  br bb3
+
+bbcase2:
+  br bb4
+
+bbcase3:
+  br bb3
 
 bb3:
   unreachable
 
 bb4:
-  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bb2, case #ManyCase.Two!enumelt: bb5, case #ManyCase.Three!enumelt: bb3
+  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bbcase41, case #ManyCase.Two!enumelt: bbcase42, case #ManyCase.Three!enumelt: bbcase43
+
+bbcase41:
+  br bb2
+
+bbcase42:
+  br bb5
+
+bbcase43:
+  br bb3
 
 bb5:
   cond_br undef, bb1, bb6
@@ -2359,8 +2680,8 @@ bb1:
   cond_br undef, bb2, bb3
 
 bb2:
-  %0 = function_ref @no_return_func : $@convention(thin) @noreturn () -> ()
-  apply %0() : $@convention(thin) @noreturn () -> ()
+  %0 = function_ref @no_return_func : $@convention(thin) () -> Never
+  apply %0() : $@convention(thin) () -> Never
   unreachable
 
 bb3:
@@ -2506,7 +2827,7 @@ bb1:
   cond_br undef, bb2, bb3
 
 bb2:
-  apply undef() : $@convention(thin) @noreturn () -> ()
+  apply undef() : $@convention(thin) () -> Never
   unreachable
 
 bb3:
@@ -2528,7 +2849,7 @@ bb8:
   cond_br undef, bb4, bb9
 
 bb9:
-  apply undef() : $@convention(thin) @noreturn () -> ()
+  apply undef() : $@convention(thin) () -> Never
   unreachable
 }
 
@@ -2670,115 +2991,177 @@ bb4:
 // This is the double backedge loop case.
 //
 // CHECK-LABEL: @multiple_exit_blocks_that_are_loops@
-// CHECK: (region id:9 kind:func ucfh:false ucft:false
+// CHECK: (region id:15 kind:func ucfh:false ucft:false
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs
 // CHECK-NEXT:         (region id:0)
-// CHECK-NEXT:         (region id:10)
+// CHECK-NEXT:         (region id:16)
 // CHECK-NEXT:         (region id:4)
-// CHECK-NEXT:         (region id:7)
-// CHECK-NEXT:         (region id:8))
+// CHECK-NEXT:         (region id:5)
+// CHECK-NEXT:         (region id:10)
+// CHECK-NEXT:         (region id:11)
+// CHECK-NEXT:         (region id:12))
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:8 kind:bb   ucfh:false ucft:false parent:9
+// CHECK: (region id:12 kind:bb   ucfh:false ucft:false parent:15
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:4)
-// CHECK-NEXT:         (region id:7))
+// CHECK-NEXT:         (region id:5)
+// CHECK-NEXT:         (region id:11))
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:7 kind:bb   ucfh:false ucft:false parent:9
+// CHECK: (region id:11 kind:bb   ucfh:false ucft:false parent:15
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:10))
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:8))
+// CHECK-NEXT:         (region id:12))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:4 kind:bb   ucfh:false ucft:false parent:9
+// CHECK: (region id:10 kind:bb   ucfh:false ucft:false parent:15
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:10))
+// CHECK-NEXT:         (region id:16))
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:8))
+// CHECK-NEXT:         (region id:11))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:10 kind:loop ucfh:true  ucft:true  parent:9
+// CHECK: (region id:5 kind:bb   ucfh:false ucft:false parent:15
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:4))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:12))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:4 kind:bb   ucfh:false ucft:false parent:15
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:16))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:5))
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:16 kind:loop ucfh:true  ucft:false parent:15
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:0))
 // CHECK-NEXT:     (succs
 // CHECK-NEXT:         (region id:4)
-// CHECK-NEXT:         (region id:7))
+// CHECK-NEXT:         (region id:10))
 // CHECK-NEXT:     (subregs
 // CHECK-NEXT:         (region id:1)
-// CHECK-NEXT:         (region id:11)
-// CHECK-NEXT:         (region id:12))
+// CHECK-NEXT:         (region id:17)
+// CHECK-NEXT:         (region id:7)
+// CHECK-NEXT:         (region id:18)
+// CHECK-NEXT:         (region id:14))
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs
-// CHECK-NEXT:         (region id:11)
-// CHECK-NEXT:         (region id:12))
+// CHECK-NEXT:         (region id:17)
+// CHECK-NEXT:         (region id:18))
 // CHECK-NEXT:     (backedge-regs
-// CHECK-NEXT:         (region id:11)
-// CHECK-NEXT:         (region id:12))
-// CHECK: (region id:12 kind:loop ucfh:false ucft:true  parent:10
+// CHECK-NEXT:         (region id:7)
+// CHECK-NEXT:         (region id:14)))
+// CHECK: (region id:14 kind:bb   ucfh:false ucft:true  parent:16
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:18))
+// CHECK-NEXT:     (succs)
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:18 kind:loop ucfh:false ucft:false parent:16
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:1))
-// CHECK-NEXT:     (succs)
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:14))
 // CHECK-NEXT:     (subregs
-// CHECK-NEXT:         (region id:5)
-// CHECK-NEXT:         (region id:6))
+// CHECK-NEXT:         (region id:8)
+// CHECK-NEXT:         (region id:9)
+// CHECK-NEXT:         (region id:13))
 // CHECK-NEXT:     (non-local-succs
 // CHECK-NEXT:         (parentindex:1))
 // CHECK-NEXT:     (exiting-subregs
-// CHECK-NEXT:         (region id:6))
+// CHECK-NEXT:         (region id:9))
 // CHECK-NEXT:     (backedge-regs
-// CHECK-NEXT:         (region id:6)))
-// CHECK: (region id:6 kind:bb   ucfh:false ucft:true  parent:12
+// CHECK-NEXT:         (region id:13)))
+// CHECK: (region id:13 kind:bb   ucfh:false ucft:false parent:18
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:5))
+// CHECK-NEXT:         (region id:9))
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:9 kind:bb   ucfh:false ucft:false parent:18
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:8))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:13))
+// CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs
+// CHECK-NEXT:         (parentindex:0)
 // CHECK-NEXT:         (parentindex:1))
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:5 kind:bb   ucfh:false ucft:false parent:12
+// CHECK: (region id:8 kind:bb   ucfh:false ucft:false parent:18
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:6))
+// CHECK-NEXT:         (region id:9))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:11 kind:loop ucfh:false ucft:true  parent:10
+// CHECK: (region id:7 kind:bb   ucfh:false ucft:true  parent:16
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:17))
+// CHECK-NEXT:     (succs)
+// CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:17 kind:loop ucfh:false ucft:false parent:16
 // CHECK-NEXT:     (preds
 // CHECK-NEXT:         (region id:1))
-// CHECK-NEXT:     (succs)
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:7))
 // CHECK-NEXT:     (subregs
 // CHECK-NEXT:         (region id:2)
-// CHECK-NEXT:         (region id:3))
+// CHECK-NEXT:         (region id:3)
+// CHECK-NEXT:         (region id:6))
 // CHECK-NEXT:     (non-local-succs
 // CHECK-NEXT:         (parentindex:0))
 // CHECK-NEXT:     (exiting-subregs
 // CHECK-NEXT:         (region id:3))
 // CHECK-NEXT:     (backedge-regs
-// CHECK-NEXT:         (region id:3)))
-// CHECK: (region id:3 kind:bb   ucfh:false ucft:true  parent:11
+// CHECK-NEXT:         (region id:6)))
+// CHECK: (region id:6 kind:bb   ucfh:false ucft:false parent:17
 // CHECK-NEXT:     (preds
-// CHECK-NEXT:         (region id:2))
+// CHECK-NEXT:         (region id:3))
 // CHECK-NEXT:     (succs)
 // CHECK-NEXT:     (subregs)
+// CHECK-NEXT:     (non-local-succs)
+// CHECK-NEXT:     (exiting-subregs)
+// CHECK-NEXT:     (backedge-regs))
+// CHECK: (region id:3 kind:bb   ucfh:false ucft:false parent:17
+// CHECK-NEXT:     (preds
+// CHECK-NEXT:         (region id:2))
+// CHECK-NEXT:     (succs
+// CHECK-NEXT:         (region id:6))
+// CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs
+// CHECK-NEXT:         (parentindex:0)
 // CHECK-NEXT:         (parentindex:1))
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:2 kind:bb   ucfh:false ucft:false parent:11
+// CHECK: (region id:2 kind:bb   ucfh:false ucft:false parent:17
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
 // CHECK-NEXT:         (region id:3))
@@ -2786,19 +3169,19 @@ bb4:
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:1 kind:bb   ucfh:true  ucft:false parent:10
+// CHECK: (region id:1 kind:bb   ucfh:true  ucft:false parent:16
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:11)
-// CHECK-NEXT:         (region id:12))
+// CHECK-NEXT:         (region id:17)
+// CHECK-NEXT:         (region id:18))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
 // CHECK-NEXT:     (backedge-regs))
-// CHECK: (region id:0 kind:bb   ucfh:false ucft:false parent:9
+// CHECK: (region id:0 kind:bb   ucfh:false ucft:false parent:15
 // CHECK-NEXT:     (preds)
 // CHECK-NEXT:     (succs
-// CHECK-NEXT:         (region id:10))
+// CHECK-NEXT:         (region id:16))
 // CHECK-NEXT:     (subregs)
 // CHECK-NEXT:     (non-local-succs)
 // CHECK-NEXT:     (exiting-subregs)
@@ -2814,13 +3197,31 @@ bb2:
   br bb3
 
 bb3:
-  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bb1, case #ManyCase.Two!enumelt: bb2, case #ManyCase.Three!enumelt: bb6
+  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bbcase1, case #ManyCase.Two!enumelt: bbcase2, case #ManyCase.Three!enumelt: bbcase3
+
+bbcase1:
+  br bb1
+
+bbcase2:
+  br bb2
+
+bbcase3:
+  br bb6
 
 bb4:
   br bb5
 
 bb5:
-  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bb1, case #ManyCase.Two!enumelt: bb4, case #ManyCase.Three!enumelt: bb7
+  switch_enum undef : $ManyCase, case #ManyCase.One!enumelt: bbcase51, case #ManyCase.Two!enumelt: bbcase52, case #ManyCase.Three!enumelt: bbcase53
+
+bbcase51:
+  br bb1
+
+bbcase52:
+  br bb4
+
+bbcase53:
+  br bb7
 
 bb6:
   br bb8

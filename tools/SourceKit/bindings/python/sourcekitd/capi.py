@@ -2,11 +2,11 @@
 #
 # This source file is part of the Swift.org open source project
 #
-# Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+# Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 # Licensed under Apache License v2.0 with Runtime Library Exception
 #
-# See http://swift.org/LICENSE.txt for license information
-# See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+# See https://swift.org/LICENSE.txt for license information
+# See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 
 from ctypes import (
     CFUNCTYPE,
@@ -64,6 +64,9 @@ class CachedProperty(object):
 class Object(object):
 
     def __init__(self, obj):
+        import sys
+        if sys.version_info > (3,):
+            long = int
         if isinstance(obj, Object):
             self._obj = conf.lib.sourcekitd_request_retain(obj)
         elif isinstance(obj, (int, long, bool)):
@@ -203,6 +206,7 @@ class ErrorKind(object):
     def __repr__(self):
         return 'ErrorKind.%s' % (self.name,)
 
+
 ErrorKind.CONNECTION_INTERRUPTED = ErrorKind(1)
 ErrorKind.REQUEST_INVALID = ErrorKind(2)
 ErrorKind.REQUEST_FAILED = ErrorKind(3)
@@ -290,6 +294,7 @@ class VariantType(object):
 
     def __repr__(self):
         return 'VariantType.%s' % (self.name,)
+
 
 VariantType.NULL = VariantType(0)
 VariantType.DICTIONARY = VariantType(1)
@@ -527,7 +532,7 @@ def register_function(lib, item, ignore_errors):
     try:
         func = getattr(lib, item[0])
     except AttributeError as e:
-        msg = str(e) + ". Please ensure that your python bindings are "\
+        msg = str(e) + ". Please ensure that your Python bindings are "\
                        "compatible with your sourcekitd version."
         if ignore_errors:
             return
@@ -623,6 +628,7 @@ class Config(object):
             raise LibsourcekitdError(msg)
 
         return library
+
 
 conf = Config()
 conf.lib.sourcekitd_initialize()

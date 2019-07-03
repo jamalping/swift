@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -18,6 +18,8 @@
 #ifndef SWIFT_RUNTIME_MUTEX_WIN32_H
 #define SWIFT_RUNTIME_MUTEX_WIN32_H
 
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <windows.h>
 
 namespace swift {
@@ -26,9 +28,9 @@ typedef CONDITION_VARIABLE ConditionHandle;
 typedef SRWLOCK MutexHandle;
 typedef SRWLOCK ReadWriteLockHandle;
 
-#define CONDITION_SUPPORTS_CONSTEXPR 1
-#define MUTEX_SUPPORTS_CONSTEXPR 1
-#define READWRITELOCK_SUPPORTS_CONSTEXPR 1
+#define SWIFT_CONDITION_SUPPORTS_CONSTEXPR 1
+#define SWIFT_MUTEX_SUPPORTS_CONSTEXPR 1
+#define SWIFT_READWRITELOCK_SUPPORTS_CONSTEXPR 1
 
 struct ConditionPlatformHelper {
   static constexpr ConditionHandle staticInit() {

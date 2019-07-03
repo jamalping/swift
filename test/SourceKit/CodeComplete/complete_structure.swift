@@ -1,12 +1,14 @@
-// RUN: %complete-test %s -group=none -fuzz -structure -tok=S1_DOT | FileCheck %s -check-prefix=S1_DOT
-// RUN: %complete-test %s -group=none -add-inner-results -fuzz -structure -tok=S1_POSTFIX | FileCheck %s -check-prefix=S1_POSTFIX
-// RUN: %complete-test %s -group=none -add-inner-results -fuzz -structure -tok=S1_POSTFIX_INIT | FileCheck %s -check-prefix=S1_INIT
-// RUN: %complete-test %s -group=none -fuzz -structure -tok=S1_PAREN_INIT | FileCheck %s -check-prefix=S1_INIT
-// RUN: %complete-test %s -group=none -hide-none -fuzz -structure -tok=STMT_0 | FileCheck %s -check-prefix=STMT_0
-// RUN: %complete-test %s -group=none -fuzz -structure -tok=ENUM_0 | FileCheck %s -check-prefix=ENUM_0
-// RUN: %complete-test %s -group=none -fuzz -structure -tok=OVERRIDE_0 | FileCheck %s -check-prefix=OVERRIDE_0
-// RUN: %complete-test %s -group=none -fuzz -structure -tok=S1_INNER_0 | FileCheck %s -check-prefix=S1_INNER_0
-// RUN: %complete-test %s -group=none -fuzz -structure -tok=INT_INNER_0 | FileCheck %s -check-prefix=INT_INNER_0
+// XFAIL: broken_std_regex
+// RUN: %complete-test %s -group=none -fuzz -structure -tok=S1_DOT | %FileCheck %s -check-prefix=S1_DOT
+// RUN: %complete-test %s -group=none -add-inner-results -fuzz -structure -tok=S1_POSTFIX | %FileCheck %s -check-prefix=S1_POSTFIX
+// RUN: %complete-test %s -group=none -add-inner-results -fuzz -structure -tok=S1_POSTFIX_INIT | %FileCheck %s -check-prefix=S1_INIT
+// RUN: %complete-test %s -group=none -fuzz -structure -tok=S1_PAREN_INIT | %FileCheck %s -check-prefix=S1_INIT
+// RUN: %complete-test %s -group=none -hide-none -fuzz -structure -tok=STMT_0 | %FileCheck %s -check-prefix=STMT_0
+// RUN: %complete-test %s -group=none -fuzz -structure -tok=ENUM_0 | %FileCheck %s -check-prefix=ENUM_0
+// RUN: %complete-test %s -group=none -fuzz -structure -tok=OVERRIDE_0 | %FileCheck %s -check-prefix=OVERRIDE_0
+// RUN: %complete-test %s -group=none -fuzz -structure -tok=S1_INNER_0 | %FileCheck %s -check-prefix=S1_INNER_0
+// RUN: %complete-test %s -group=none -fuzz -structure -tok=INT_INNER_0 | %FileCheck %s -check-prefix=INT_INNER_0
+// RUN: %complete-test %s -group=none -fuzz -structure -tok=ASSOCIATED_TYPE_1 | %FileCheck %s -check-prefix=ASSOCIATED_TYPE_1
 
 struct S1 {
   func method1() {}
@@ -15,7 +17,7 @@ struct S1 {
   func method4(_: Int, _: Int) {}
   func method5(_: inout Int, b: inout Int) {}
   func method6(_ c: Int) throws {}
-  func method7(_ callback: () -> () throws) rethrows {}
+  func method7(_ callback: () throws -> ()) rethrows {}
   func method8<T, U>(_ d: (T, U) -> T, e: T -> U) {}
 
   let v1: Int = 1
@@ -40,9 +42,8 @@ func test1(_ x: S1) {
 // S1_DOT: {name:method5}({params:{t:&Int}, {n:b:}{t: &Int}})
 // FIXME: put throws in a range!
 // S1_DOT: {name:method6}({params:{l:c:}{t: Int}}){throws: throws}
-// FIXME: <rdar://problem/21010193> Fix throws => rethrows in call patterns
-// S1_DOT: {name:method7}({params:{l:callback:}{t: () -> ()}}){throws: throws}
-// S1_DOT: {name:method8}({params:{l:d:}{t: (T, U) -> T}, {n:e:}{t: T -> U}})
+// S1_DOT: {name:method7}({params:{l:callback:}{t: () throws -> ()}}){throws: rethrows}
+// S1_DOT: {name:method8}({params:{l:d:}{t: (T, U) -> T}, {n:e:}{t: (T) -> U}})
 // S1_DOT: {name:v1}
 // S1_DOT: {name:v2}
 
@@ -51,7 +52,7 @@ func test2(_ x: S1) {
 }
 // Subscripts!
 // S1_POSTFIX: {name:.}
-// S1_POSTFIX: [{params:{t:Int}, {t:Int}}]
+// S1_POSTFIX: [{params:{l:x:}{t: Int}, {l:y:}{t: Int}}]
 // S1_POSTFIX: [{params:{n:x:}{t: Int}, {n:y:}{t: Int}}]
 // The dot becomes part of the name
 // S1_POSTFIX: {name:.method1}()
@@ -63,7 +64,6 @@ func test4() {
 func test5() {
   S1(#^S1_PAREN_INIT^#
 }
-// S1_INIT: ()
 // S1_INIT: ({params:{t:Int}, {t:Int}})
 // S1_INIT: ({params:{n:a:}{t: Int}, {n:b:}{t: Int}})
 // S1_INIT: ({params:{n:c:}{t: Int}})
@@ -116,6 +116,12 @@ func test9(_ x: inout Int) {
 // INT_INNER_0: {name:x==}
 // INT_INNER_0: {name:x<}
 // INT_INNER_0: {name:x+}
-// INT_INNER_0: {name:x++}
-// INT_INNER_0: {name:x>>}
 // INT_INNER_0: {name:x..<}
+
+protocol P1 {
+  associatedtype T
+}
+struct S2: P1 {
+  #^ASSOCIATED_TYPE_1^#
+}
+// ASSOCIATED_TYPE_1: {name:T = }{params:{l:Type}}

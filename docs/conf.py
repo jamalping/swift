@@ -29,7 +29,7 @@ from datetime import date
 extensions = ['sphinx.ext.intersphinx', 'sphinx.ext.todo']
 
 # Add any paths that contain templates here, relative to this directory.
-templates_path = ['_templates']
+templates_path = ['_templates', 'archive']
 
 # The suffix of source filenames.
 source_suffix = '.rst'
@@ -42,7 +42,7 @@ master_doc = 'contents'
 
 # General information about the project.
 project = u'Swift'
-copyright = unicode(date.today().year) + u', Apple Inc'
+copyright = str(date.today().year) + u', Apple Inc'
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -146,7 +146,7 @@ html_last_updated_fmt = '%Y-%m-%d'
 
 # Additional templates that should be rendered to pages, maps page names to
 # template names.
-html_additional_pages = {'LangRef': 'archive/LangRef.html'}
+html_additional_pages = {'archive/LangRef': 'LangRef.html'}
 
 # If false, no module index is generated.
 # html_domain_indices = True
@@ -287,6 +287,8 @@ from pygments.lexers import get_lexer_by_name as original_get_lexer_by_name  # n
 def swift_get_lexer_by_name(_alias, *args, **kw):
     if _alias == 'swift':
         return swift_pygments_lexers.SwiftLexer()
+    elif _alias == 'sil':
+        return swift_pygments_lexers.SILLexer()
     elif _alias == 'swift-console':
         return swift_pygments_lexers.SwiftConsoleLexer()
     else:

@@ -1,5 +1,6 @@
-// RUN: %complete-test -raw -tok=INIT_NAME %s | FileCheck %s -check-prefix=INIT_NAME
-// RUN: %complete-test -raw -tok=METHOD_NAME %s | FileCheck %s -check-prefix=METHOD_NAME
+// XFAIL: broken_std_regex
+// RUN: %complete-test -raw -tok=INIT_NAME %s | %FileCheck %s -check-prefix=INIT_NAME
+// RUN: %complete-test -raw -tok=METHOD_NAME %s | %FileCheck %s -check-prefix=METHOD_NAME
 
 struct S {
   init(a: Int, b: Int, _ c: Int) {}
@@ -11,7 +12,7 @@ struct S {
 func test01() {
   S(#^INIT_NAME^#)
 }
-// INIT_NAME: key.name: "a:b::)"
+// INIT_NAME: key.name: "a:b::"
 
 func test02(_ x: S) {
   x.#^METHOD_NAME^#

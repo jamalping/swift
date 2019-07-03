@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -18,19 +18,43 @@
 #include "swift/AST/ASTContext.h"
 #include "swift/AST/ASTPrinter.h"
 #include "swift/AST/Decl.h"
+#include "swift/AST/Expr.h"
+#include "swift/AST/GenericEnvironment.h"
 #include "swift/AST/Module.h"
 #include "swift/AST/Types.h"
 #include "swift/Basic/Defer.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/ADT/StringSwitch.h"
 using namespace swift;
+
+#define DECL_ATTR(_, Id, ...) \
+  static_assert(IsTriviallyDestructible<Id##Attr>::value, \
+                "Attrs are BumpPtrAllocated; the destructor is never called");
+#include "swift/AST/Attr.def"
+static_assert(IsTriviallyDestructible<DeclAttributes>::value,
+              "DeclAttributes are BumpPtrAllocated; the d'tor is never called");
+static_assert(IsTriviallyDestructible<TypeAttributes>::value,
+              "TypeAttributes are BumpPtrAllocated; the d'tor is never called");
 
 
 // Only allow allocation of attributes using the allocator in ASTContext.
 void *AttributeBase::operator new(size_t Bytes, ASTContext &C,
                                   unsigned Alignment) {
   return C.Allocate(Bytes, Alignment);
+}
+
+StringRef swift::getAccessLevelSpelling(AccessLevel value) {
+  switch (value) {
+  case AccessLevel::Private: return "private";
+  case AccessLevel::FilePrivate: return "fileprivate";
+  case AccessLevel::Internal: return "internal";
+  case AccessLevel::Public: return "public";
+  case AccessLevel::Open: return "open";
+  }
+
+  llvm_unreachable("Unhandled AccessLevel in switch.");
 }
 
 /// Given a name like "autoclosure", return the type attribute ID that
@@ -46,7 +70,7 @@ TypeAttrKind TypeAttributes::getAttrKindFromString(StringRef Str) {
 /// Return the name (like "autoclosure") for an attribute ID.
 const char *TypeAttributes::getAttrName(TypeAttrKind kind) {
   switch (kind) {
-  default: assert(0 && "Invalid attribute ID");
+  default: llvm_unreachable("Invalid attribute ID");
 #define TYPE_ATTR(X) case TAK_##X: return #X;
 #include "swift/AST/Attr.def"
   }
@@ -76,7 +100,7 @@ bool DeclAttribute::canAttributeAppearOnDecl(DeclAttrKind DK, const Decl *D) {
 }
 
 bool DeclAttribute::canAttributeAppearOnDeclKind(DeclAttrKind DAK, DeclKind DK) {
-  unsigned Options = getOptions(DAK);
+  auto Options = getOptions(DAK);
   switch (DK) {
 #define DECL(Id, Parent) case DeclKind::Id: return (Options & On##Id) != 0;
 #include "swift/AST/DeclNodes.def"
@@ -84,19 +108,70 @@ bool DeclAttribute::canAttributeAppearOnDeclKind(DeclAttrKind DAK, DeclKind DK) 
   llvm_unreachable("bad DeclKind");
 }
 
-bool DeclAttributes::isUnavailableInCurrentSwift() const {
+bool
+DeclAttributes::isUnavailableInSwiftVersion(
+  const version::Version &effectiveVersion) const {
+  llvm::VersionTuple vers = effectiveVersion;
   for (auto attr : *this) {
     if (auto available = dyn_cast<AvailableAttr>(attr)) {
       if (available->isInvalid())
         continue;
 
-      if (available->getUnconditionalAvailability() ==
-            UnconditionalAvailabilityKind::UnavailableInCurrentSwift)
-        return true;
+      if (available->getPlatformAgnosticAvailability() ==
+          PlatformAgnosticAvailabilityKind::SwiftVersionSpecific) {
+        if (available->Introduced.hasValue() &&
+            available->Introduced.getValue() > vers)
+          return true;
+        if (available->Obsoleted.hasValue() &&
+            available->Obsoleted.getValue() <= vers)
+          return true;
+      }
     }
   }
 
   return false;
+}
+
+const AvailableAttr *
+DeclAttributes::getPotentiallyUnavailable(const ASTContext &ctx) const {
+  const AvailableAttr *potential = nullptr;
+  const AvailableAttr *conditional = nullptr;
+
+  for (auto Attr : *this)
+    if (auto AvAttr = dyn_cast<AvailableAttr>(Attr)) {
+      if (AvAttr->isInvalid())
+        continue;
+
+      if (!AvAttr->isActivePlatform(ctx) &&
+          !AvAttr->isLanguageVersionSpecific() &&
+          !AvAttr->isPackageDescriptionVersionSpecific())
+        continue;
+
+      // Definitely not available.
+      if (AvAttr->isUnconditionallyUnavailable())
+        return AvAttr;
+
+      switch (AvAttr->getVersionAvailability(ctx)) {
+      case AvailableVersionComparison::Available:
+        // Doesn't limit the introduced version.
+        break;
+
+      case AvailableVersionComparison::PotentiallyUnavailable:
+        // We'll return this if we don't see something that proves it's
+        // not available in this version.
+        potential = AvAttr;
+        break;
+
+      case AvailableVersionComparison::Unavailable:
+      case AvailableVersionComparison::Obsoleted:
+        conditional = AvAttr;
+        break;
+      }
+    }
+
+  if (conditional)
+    return conditional;
+  return potential;
 }
 
 const AvailableAttr *DeclAttributes::getUnavailable(
@@ -109,21 +184,22 @@ const AvailableAttr *DeclAttributes::getUnavailable(
         continue;
 
       // If this attribute doesn't apply to the active platform, we're done.
-      if (!AvAttr->isActivePlatform(ctx))
+      if (!AvAttr->isActivePlatform(ctx) &&
+          !AvAttr->isLanguageVersionSpecific() &&
+          !AvAttr->isPackageDescriptionVersionSpecific())
         continue;
 
       // Unconditional unavailable.
       if (AvAttr->isUnconditionallyUnavailable())
         return AvAttr;
 
-      auto MinVersion = ctx.LangOpts.getMinPlatformVersion();
-      switch (AvAttr->getMinVersionAvailability(MinVersion)) {
-      case MinVersionComparison::Available:
-      case MinVersionComparison::PotentiallyUnavailable:
+      switch (AvAttr->getVersionAvailability(ctx)) {
+      case AvailableVersionComparison::Available:
+      case AvailableVersionComparison::PotentiallyUnavailable:
         break;
 
-      case MinVersionComparison::Obsoleted:
-      case MinVersionComparison::Unavailable:
+      case AvailableVersionComparison::Obsoleted:
+      case AvailableVersionComparison::Unavailable:
         conditional = AvAttr;
         break;
       }
@@ -139,18 +215,20 @@ DeclAttributes::getDeprecated(const ASTContext &ctx) const {
       if (AvAttr->isInvalid())
         continue;
 
-      if (!AvAttr->isActivePlatform(ctx))
+      if (!AvAttr->isActivePlatform(ctx) &&
+          !AvAttr->isLanguageVersionSpecific() &&
+          !AvAttr->isPackageDescriptionVersionSpecific())
         continue;
 
       // Unconditional deprecated.
       if (AvAttr->isUnconditionallyDeprecated())
         return AvAttr;
 
-      Optional<clang::VersionTuple> DeprecatedVersion = AvAttr->Deprecated;
+      Optional<llvm::VersionTuple> DeprecatedVersion = AvAttr->Deprecated;
       if (!DeprecatedVersion.hasValue())
         continue;
 
-      auto MinVersion = ctx.LangOpts.getMinPlatformVersion();
+      llvm::VersionTuple MinVersion = AvAttr->getActiveVersion(ctx);
 
       // We treat the declaration as deprecated if it is deprecated on
       // all deployment targets.
@@ -166,16 +244,17 @@ DeclAttributes::getDeprecated(const ASTContext &ctx) const {
   return conditional;
 }
 
-void DeclAttributes::dump() const {
+void DeclAttributes::dump(const Decl *D) const {
   StreamPrinter P(llvm::errs());
   PrintOptions PO = PrintOptions::printEverything();
-  print(P, PO);
+  print(P, PO, D);
 }
 
 /// Returns true if the attribute can be presented as a short form available
 /// attribute (e.g., as @available(iOS 8.0, *). The presentation requires an
 /// introduction version and does not support deprecation, obsoletion, or
 /// messages.
+LLVM_READONLY
 static bool isShortAvailable(const DeclAttribute *DA) {
   auto *AvailAttr = dyn_cast<AvailableAttr>(DA);
   if (!AvailAttr)
@@ -196,8 +275,16 @@ static bool isShortAvailable(const DeclAttribute *DA) {
   if (!AvailAttr->Rename.empty())
     return false;
 
-  if (AvailAttr->Unconditional != UnconditionalAvailabilityKind::None)
+  switch (AvailAttr->PlatformAgnostic) {
+  case PlatformAgnosticAvailabilityKind::Deprecated:
+  case PlatformAgnosticAvailabilityKind::Unavailable:
+  case PlatformAgnosticAvailabilityKind::UnavailableInSwift:
     return false;
+  case PlatformAgnosticAvailabilityKind::None:
+  case PlatformAgnosticAvailabilityKind::SwiftVersionSpecific:
+  case PlatformAgnosticAvailabilityKind::PackageDescriptionVersionSpecific:
+    return true;
+  }
 
   return true;
 }
@@ -215,48 +302,75 @@ static void printShortFormAvailable(ArrayRef<const DeclAttribute *> Attrs,
   assert(!Attrs.empty());
 
   Printer << "@available(";
-  for (auto *DA : Attrs) {
-    auto *AvailAttr = cast<AvailableAttr>(DA);
-    assert(AvailAttr->Introduced.hasValue());
-
-    Printer << platformString(AvailAttr->Platform) << " "
-            << AvailAttr->Introduced.getValue().getAsString() << ", ";
+  auto FirstAvail = cast<AvailableAttr>(Attrs.front());
+  if (Attrs.size() == 1 &&
+      FirstAvail->getPlatformAgnosticAvailability() !=
+      PlatformAgnosticAvailabilityKind::None) {
+    assert(FirstAvail->Introduced.hasValue());
+    if (FirstAvail->isLanguageVersionSpecific()) {
+      Printer << "swift ";
+    } else {
+      assert(FirstAvail->isPackageDescriptionVersionSpecific());
+      Printer << "_PackageDescription ";
+    }
+    Printer << FirstAvail->Introduced.getValue().getAsString()
+            << ")";
+  } else {
+    for (auto *DA : Attrs) {
+      auto *AvailAttr = cast<AvailableAttr>(DA);
+      assert(AvailAttr->Introduced.hasValue());
+      Printer << platformString(AvailAttr->Platform) << " "
+              << AvailAttr->Introduced.getValue().getAsString() << ", ";
+    }
+    Printer << "*)";
   }
-
-  Printer << "*)";
   Printer.printNewline();
 }
 
-void DeclAttributes::print(ASTPrinter &Printer,
-                           const PrintOptions &Options) const {
+void DeclAttributes::print(ASTPrinter &Printer, const PrintOptions &Options,
+                           const Decl *D) const {
   if (!DeclAttrs)
     return;
 
+  SmallVector<const DeclAttribute *, 8> orderedAttributes(begin(), end());
+  print(Printer, Options, orderedAttributes, D);
+}
+
+void DeclAttributes::print(ASTPrinter &Printer, const PrintOptions &Options,
+                           ArrayRef<const DeclAttribute *> FlattenedAttrs,
+                           const Decl *D) {
   using AttributeVector = SmallVector<const DeclAttribute *, 8>;
-  AttributeVector orderedAttributes(begin(), end());
-  std::reverse(orderedAttributes.begin(), orderedAttributes.end());
 
   // Process attributes in passes.
   AttributeVector shortAvailableAttributes;
+  const DeclAttribute *swiftVersionAvailableAttribute = nullptr;
+  const DeclAttribute *packageDescriptionVersionAvailableAttribute = nullptr;
   AttributeVector longAttributes;
   AttributeVector attributes;
   AttributeVector modifiers;
 
-  for (auto DA : orderedAttributes) {
+  for (auto DA : llvm::reverse(FlattenedAttrs)) {
     if (!Options.PrintImplicitAttrs && DA->isImplicit())
       continue;
     if (!Options.PrintUserInaccessibleAttrs &&
         DeclAttribute::isUserInaccessible(DA->getKind()))
       continue;
-    if (std::find(Options.ExcludeAttrList.begin(),
-                  Options.ExcludeAttrList.end(),
-                  DA->getKind()) != Options.ExcludeAttrList.end())
+    if (Options.excludeAttrKind(DA->getKind()))
       continue;
-    if (!Options.ExclusiveAttrList.empty()) {
-      if (std::find(Options.ExclusiveAttrList.begin(),
-                    Options.ExclusiveAttrList.end(),
-                    DA->getKind()) == Options.ExclusiveAttrList.end())
+
+    // Be careful not to coalesce `@available(swift 5)` with other short
+    // `available' attributes.
+    if (auto *availableAttr = dyn_cast<AvailableAttr>(DA)) {
+      if (availableAttr->isLanguageVersionSpecific() &&
+          isShortAvailable(availableAttr)) {
+        swiftVersionAvailableAttribute = availableAttr;
         continue;
+      }
+      if (availableAttr->isPackageDescriptionVersionSpecific() &&
+          isShortAvailable(availableAttr)) {
+        packageDescriptionVersionAvailableAttribute = availableAttr;
+        continue;
+      }
     }
 
     AttributeVector &which = DA->isDeclModifier() ? modifiers :
@@ -266,16 +380,19 @@ void DeclAttributes::print(ASTPrinter &Printer,
     which.push_back(DA);
   }
 
-  if (!shortAvailableAttributes.empty()) {
+  if (swiftVersionAvailableAttribute)
+    printShortFormAvailable(swiftVersionAvailableAttribute, Printer, Options);
+  if (packageDescriptionVersionAvailableAttribute)
+    printShortFormAvailable(packageDescriptionVersionAvailableAttribute, Printer, Options);
+  if (!shortAvailableAttributes.empty())
     printShortFormAvailable(shortAvailableAttributes, Printer, Options);
-  }
 
   for (auto DA : longAttributes)
-    DA->print(Printer, Options);
+    DA->print(Printer, Options, D);
   for (auto DA : attributes)
-    DA->print(Printer, Options);
+    DA->print(Printer, Options, D);
   for (auto DA : modifiers)
-    DA->print(Printer, Options);
+    DA->print(Printer, Options, D);
 }
 
 SourceLoc DeclAttributes::getStartLoc(bool forModifiers) const {
@@ -292,7 +409,8 @@ SourceLoc DeclAttributes::getStartLoc(bool forModifiers) const {
   return lastAttr ? lastAttr->getRangeWithAt().Start : SourceLoc();
 }
 
-bool DeclAttribute::printImpl(ASTPrinter &Printer, const PrintOptions &Options) const {
+bool DeclAttribute::printImpl(ASTPrinter &Printer, const PrintOptions &Options,
+                              const Decl *D) const {
 
   // Handle any attributes that are not printed at all before we make printer
   // callbacks.
@@ -304,7 +422,8 @@ bool DeclAttribute::printImpl(ASTPrinter &Printer, const PrintOptions &Options) 
   case DAK_RawDocComment:
   case DAK_ObjCBridged:
   case DAK_SynthesizedProtocol:
-  case DAK_ShowInInterface:
+  case DAK_Rethrows:
+  case DAK_Infix:
     return false;
   default:
     break;
@@ -319,21 +438,19 @@ bool DeclAttribute::printImpl(ASTPrinter &Printer, const PrintOptions &Options) 
 #define SIMPLE_DECL_ATTR(X, CLASS, ...) case DAK_##CLASS:
 #include "swift/AST/Attr.def"
   case DAK_Inline:
-  case DAK_Accessibility:
-  case DAK_Ownership:
+  case DAK_AccessControl:
+  case DAK_ReferenceOwnership:
   case DAK_Effects:
+  case DAK_Optimize:
     if (DeclAttribute::isDeclModifier(getKind())) {
-      Printer.printKeyword(getAttrName());
+      Printer.printKeyword(getAttrName(), Options);
     } else {
-      Printer.callPrintStructurePre(PrintStructureKind::BuiltinAttribute);
-      Printer.printAttrName(getAttrName(), /*needAt=*/true);
-      Printer.printStructurePost(PrintStructureKind::BuiltinAttribute);
+      Printer.printSimpleAttr(getAttrName(), /*needAt=*/true);
     }
     return true;
 
-  case DAK_SetterAccessibility:
-    Printer.printKeyword(getAttrName());
-    Printer << "(set)";
+  case DAK_SetterAccess:
+    Printer.printKeyword(getAttrName(), Options, "(set)");
     return true;
 
   default:
@@ -341,7 +458,9 @@ bool DeclAttribute::printImpl(ASTPrinter &Printer, const PrintOptions &Options) 
   }
 
   Printer.callPrintStructurePre(PrintStructureKind::BuiltinAttribute);
-  defer { Printer.printStructurePost(PrintStructureKind::BuiltinAttribute); };
+  SWIFT_DEFER {
+    Printer.printStructurePost(PrintStructureKind::BuiltinAttribute);
+  };
 
   switch (getKind()) {
   case DAK_Semantics:
@@ -351,7 +470,7 @@ bool DeclAttribute::printImpl(ASTPrinter &Printer, const PrintOptions &Options) 
 
   case DAK_Alignment:
     Printer.printAttrName("@_alignment");
-    Printer << "(" << cast<AlignmentAttr>(this)->Value << ")";
+    Printer << "(" << cast<AlignmentAttr>(this)->getValue() << ")";
     break;
 
   case DAK_SILGenName:
@@ -363,7 +482,12 @@ bool DeclAttribute::printImpl(ASTPrinter &Printer, const PrintOptions &Options) 
     Printer.printAttrName("@available");
     Printer << "(";
     auto Attr = cast<AvailableAttr>(this);
-    Printer << Attr->platformString();
+    if (Attr->isLanguageVersionSpecific())
+      Printer << "swift";
+    else if (Attr->isPackageDescriptionVersionSpecific())
+      Printer << "_PackageDescription";
+    else
+      Printer << Attr->platformString();
 
     if (Attr->isUnconditionallyUnavailable())
       Printer << ", unavailable";
@@ -383,21 +507,18 @@ bool DeclAttribute::printImpl(ASTPrinter &Printer, const PrintOptions &Options) 
     // If there's no message, but this is specifically an imported
     // "unavailable in Swift" attribute, synthesize a message to look good in
     // the generated interface.
-    if (!Attr->Message.empty())
-      Printer << ", message: \"" << Attr->Message << "\"";
-    else if (Attr->getUnconditionalAvailability()
-               == UnconditionalAvailabilityKind::UnavailableInSwift)
+    if (!Attr->Message.empty()) {
+      Printer << ", message: ";
+      Printer.printEscapedStringLiteral(Attr->Message);
+    }
+    else if (Attr->getPlatformAgnosticAvailability()
+               == PlatformAgnosticAvailabilityKind::UnavailableInSwift)
       Printer << ", message: \"Not available in Swift\"";
 
     Printer << ")";
     break;
   }
-  case DAK_AutoClosure:
-    Printer.printAttrName("@autoclosure");
-    if (cast<AutoClosureAttr>(this)->isEscaping())
-      Printer << "(escaping)";
-    break;
-      
+
   case DAK_CDecl:
     Printer << "@_cdecl(\"" << cast<CDeclAttr>(this)->Name << "\")";
     break;
@@ -411,6 +532,12 @@ bool DeclAttribute::printImpl(ASTPrinter &Printer, const PrintOptions &Options) 
     }
     break;
   }
+
+  case DAK_PrivateImport: {
+    Printer.printAttrName("@_private(sourceFile: \"");
+    Printer << cast<PrivateImportAttr>(this)->getSourceFile() << "\")";
+    break;
+  }
     
   case DAK_SwiftNativeObjCRuntimeBase: {
     auto *attr = cast<SwiftNativeObjCRuntimeBaseAttr>(this);
@@ -419,78 +546,120 @@ bool DeclAttribute::printImpl(ASTPrinter &Printer, const PrintOptions &Options) 
     break;
   }
 
-  case DAK_Swift3Migration: {
-    auto attr = cast<Swift3MigrationAttr>(this);
-    Printer.printAttrName("@swift3_migration");
-    Printer << "(";
-
-    bool printedAny = false;
-    auto printSeparator = [&] {
-      if (printedAny) Printer << ", ";
-      else printedAny = true;
-    };
-
-    if (attr->getRenamed()) {
-      printSeparator();
-      Printer << "renamed: \"" << attr->getRenamed() << "\"";
-    }
-
-    if (!attr->getMessage().empty()) {
-      printSeparator();
-      Printer << "message: \"";
-      Printer << attr->getMessage();
-      Printer << "\"";
-    }
-
-    Printer << ")";
-    break;
-  }
-
-  case DAK_WarnUnusedResult: {
-    Printer.printAttrName("@warn_unused_result");
-    auto *attr = cast<WarnUnusedResultAttr>(this);
-    bool printedParens = false;
-    if (!attr->getMessage().empty()) {
-      Printer << "(message: \"" << attr->getMessage() << "\"";
-      printedParens = true;
-    }
-    if (!attr->getMutableVariant().empty()) {
-      if (printedParens)
-        Printer << ", ";
-      else
-        Printer << "(";
-      Printer << "mutable_variant: \"" << attr->getMutableVariant() << "\"";
-      printedParens = true;
-    }
-    if (printedParens)
-      Printer << ")";
-    break;
-  }
-
   case DAK_Specialize: {
     Printer << "@" << getAttrName() << "(";
     auto *attr = cast<SpecializeAttr>(this);
-    interleave(attr->getTypeLocs(),
-               [&](TypeLoc tyLoc){ tyLoc.getType().print(Printer, Options); },
-               [&]{ Printer << ", "; });
+    auto exported = attr->isExported() ? "true" : "false";
+    auto kind = attr->isPartialSpecialization() ? "partial" : "full";
+
+    Printer << "exported: "<<  exported << ", ";
+    Printer << "kind: " << kind << ", ";
+
+    if (!attr->getRequirements().empty()) {
+      Printer << "where ";
+    }
+    std::function<Type(Type)> GetInterfaceType;
+    auto *FnDecl = dyn_cast_or_null<AbstractFunctionDecl>(D);
+    if (!FnDecl || !FnDecl->getGenericEnvironment())
+      GetInterfaceType = [](Type Ty) -> Type { return Ty; };
+    else {
+      // Use GenericEnvironment to produce user-friendly
+      // names instead of something like t_0_0.
+      auto *GenericEnv = FnDecl->getGenericEnvironment();
+      assert(GenericEnv);
+      GetInterfaceType = [=](Type Ty) -> Type {
+        return GenericEnv->getSugaredType(Ty);
+      };
+    }
+    interleave(attr->getRequirements(),
+               [&](Requirement req) {
+                 auto FirstTy = GetInterfaceType(req.getFirstType());
+                 if (req.getKind() != RequirementKind::Layout) {
+                   auto SecondTy = GetInterfaceType(req.getSecondType());
+                   Requirement ReqWithDecls(req.getKind(), FirstTy, SecondTy);
+                   ReqWithDecls.print(Printer, Options);
+                 } else {
+                   Requirement ReqWithDecls(req.getKind(), FirstTy,
+                                            req.getLayoutConstraint());
+                   ReqWithDecls.print(Printer, Options);
+                 }
+               },
+               [&] { Printer << ", "; });
+
     Printer << ")";
     break;
   }
+
+  case DAK_Implements: {
+    Printer.printAttrName("@_implements");
+    Printer << "(";
+    auto *attr = cast<ImplementsAttr>(this);
+    attr->getProtocolType().getType().print(Printer, Options);
+    Printer << ", " << attr->getMemberName() << ")";
+    break;
+  }
+
+  case DAK_ObjCRuntimeName: {
+    Printer.printAttrName("@_objcRuntimeName");
+    Printer << "(";
+    auto *attr = cast<ObjCRuntimeNameAttr>(this);
+    Printer << attr->Name;
+    Printer << ")";
+    break;
+  }
+
+  case DAK_ClangImporterSynthesizedType: {
+    Printer.printAttrName("@_clangImporterSynthesizedType");
+    auto *attr = cast<ClangImporterSynthesizedTypeAttr>(this);
+    Printer << "(originalTypeName: \"" << attr->originalTypeName
+            << "\", manglingForKind: \"" << attr->getManglingName() << "\")";
+    break;
+  }
+
+  case DAK_DynamicReplacement: {
+    Printer.printAttrName("@_dynamicReplacement");
+    Printer << "(for: \"";
+    auto *attr = cast<DynamicReplacementAttr>(this);
+    Printer << attr->getReplacedFunctionName() << "\")";
+    break;
+  }
+
+  case DAK_Custom: {
+    Printer.printAttrName("@");
+    const TypeLoc &typeLoc = cast<CustomAttr>(this)->getTypeLoc();
+    if (auto type = typeLoc.getType())
+      type->print(Printer, Options);
+    else
+      typeLoc.getTypeRepr()->print(Printer, Options);
+    break;
+  }
+
+  case DAK_ProjectedValueProperty:
+    Printer.printAttrName("@_projectedValueProperty");
+    Printer << "(";
+    Printer << cast<ProjectedValuePropertyAttr>(this)->ProjectionPropertyName;
+    Printer << ")";
+    break;
 
   case DAK_Count:
     llvm_unreachable("exceed declaration attribute kinds");
 
+#define SIMPLE_DECL_ATTR(X, CLASS, ...) case DAK_##CLASS:
+#include "swift/AST/Attr.def"
+    llvm_unreachable("handled above");
+
   default:
-    llvm_unreachable("handled before this switch");
+    assert(DeclAttribute::isDeclModifier(getKind()) &&
+           "handled above");
   }
 
   return true;
 }
 
-void DeclAttribute::print(ASTPrinter &Printer,
-                          const PrintOptions &Options) const {
+void DeclAttribute::print(ASTPrinter &Printer, const PrintOptions &Options,
+                          const Decl *D) const {
 
-  if (!printImpl(Printer, Options))
+  if (!printImpl(Printer, Options, D))
     return; // Nothing printed.
 
   if (isLongAttribute() && Options.PrintLongAttrsOnSeparateLines)
@@ -499,12 +668,12 @@ void DeclAttribute::print(ASTPrinter &Printer,
     Printer << " ";
 }
 
-void DeclAttribute::print(llvm::raw_ostream &OS) const {
+void DeclAttribute::print(llvm::raw_ostream &OS, const Decl *D) const {
   StreamPrinter P(OS);
-  print(P, PrintOptions());
+  print(P, PrintOptions(), D);
 }
 
-unsigned DeclAttribute::getOptions(DeclAttrKind DK) {
+uint64_t DeclAttribute::getOptions(DeclAttrKind DK) {
   switch (DK) {
   case DAK_Count:
     llvm_unreachable("getOptions needs a valid attribute");
@@ -535,10 +704,15 @@ StringRef DeclAttribute::getAttrName() const {
     return "_semantics";
   case DAK_Available:
     return "availability";
-  case DAK_AutoClosure:
-    return "autoclosure";
   case DAK_ObjC:
+  case DAK_ObjCRuntimeName:
     return "objc";
+  case DAK_DynamicReplacement:
+    return "_dynamicReplacement";
+  case DAK_PrivateImport:
+    return "_private";
+  case DAK_RestatedObjCConformance:
+    return "_restatedObjCConformance";
   case DAK_Inline: {
     switch (cast<InlineAttr>(this)->getKind()) {
     case InlineKind::Never:
@@ -548,47 +722,55 @@ StringRef DeclAttribute::getAttrName() const {
     }
     llvm_unreachable("Invalid inline kind");
   }
+  case DAK_Optimize: {
+    switch (cast<OptimizeAttr>(this)->getMode()) {
+    case OptimizationMode::NoOptimization:
+      return "_optimize(none)";
+    case OptimizationMode::ForSpeed:
+      return "_optimize(speed)";
+    case OptimizationMode::ForSize:
+      return "_optimize(size)";
+    default:
+      llvm_unreachable("Invalid optimization kind");
+    }
+  }
   case DAK_Effects:
     switch (cast<EffectsAttr>(this)->getKind()) {
       case EffectsKind::ReadNone:
-        return "effects(readnone)";
+        return "_effects(readnone)";
       case EffectsKind::ReadOnly:
-        return "effects(readonly)";
+        return "_effects(readonly)";
+      case EffectsKind::ReleaseNone:
+        return "_effects(releasenone)";
       case EffectsKind::ReadWrite:
-        return "effects(readwrite)";
+        return "_effects(readwrite)";
       case EffectsKind::Unspecified:
-        return "effects(unspecified)";
+        return "_effects(unspecified)";
     }
-  case DAK_Accessibility:
-  case DAK_SetterAccessibility:
-    switch (cast<AbstractAccessibilityAttr>(this)->getAccess()) {
-    case Accessibility::Private:
-      return "private";
-    case Accessibility::Internal:
-      return "internal";
-    case Accessibility::Public:
-      return "public";
-    }
+  case DAK_AccessControl:
+  case DAK_SetterAccess: {
+    AccessLevel access = cast<AbstractAccessControlAttr>(this)->getAccess();
+    return getAccessLevelSpelling(access);
+  }
 
-  case DAK_Ownership:
-    switch (cast<OwnershipAttr>(this)->get()) {
-    case Ownership::Strong: llvm_unreachable("Never present in the attribute");
-    case Ownership::Weak:      return "weak";
-    case Ownership::Unowned:   return "unowned";
-    case Ownership::Unmanaged: return "unowned(unsafe)";
-    }
+  case DAK_ReferenceOwnership:
+    return keywordOf(cast<ReferenceOwnershipAttr>(this)->get());
   case DAK_RawDocComment:
     return "<<raw doc comment>>";
   case DAK_ObjCBridged:
     return "<<ObjC bridged>>";
   case DAK_SynthesizedProtocol:
     return "<<synthesized protocol>>";
-  case DAK_Swift3Migration:
-    return "swift3_migration";
-  case DAK_WarnUnusedResult:
-    return "warn_unused_result";
   case DAK_Specialize:
     return "_specialize";
+  case DAK_Implements:
+    return "_implements";
+  case DAK_ClangImporterSynthesizedType:
+    return "_clangImporterSynthesizedType";
+  case DAK_Custom:
+    return "<<custom>>";
+  case DAK_ProjectedValueProperty:
+    return "_projectedValueProperty";
   }
   llvm_unreachable("bad DeclAttrKind");
 }
@@ -605,16 +787,17 @@ ObjCAttr::ObjCAttr(SourceLoc atLoc, SourceRange baseRange,
     NameData = name->getOpaqueValue();
 
     // Store location information.
-    ObjCAttrBits.HasTrailingLocationInfo = true;
+    Bits.ObjCAttr.HasTrailingLocationInfo = true;
     getTrailingLocations()[0] = parenRange.Start;
     getTrailingLocations()[1] = parenRange.End;
     std::memcpy(getTrailingLocations().slice(2).data(), nameLocs.data(),
                 nameLocs.size() * sizeof(SourceLoc));
   } else {
-    ObjCAttrBits.HasTrailingLocationInfo = false;
+    Bits.ObjCAttr.HasTrailingLocationInfo = false;
   }
 
-  ObjCAttrBits.ImplicitName = false;
+  Bits.ObjCAttr.ImplicitName = false;
+  Bits.ObjCAttr.Swift3Inferred = false;
 }
 
 ObjCAttr *ObjCAttr::create(ASTContext &Ctx, Optional<ObjCSelector> name,
@@ -637,7 +820,7 @@ ObjCAttr *ObjCAttr::createNullary(ASTContext &Ctx, SourceLoc AtLoc,
                                   SourceLoc NameLoc, Identifier Name,
                                   SourceLoc RParenLoc) {
   void *mem = Ctx.Allocate(totalSizeToAlloc<SourceLoc>(3), alignof(ObjCAttr));
-  return new (mem) ObjCAttr(AtLoc, SourceRange(ObjCLoc),
+  return new (mem) ObjCAttr(AtLoc, SourceRange(ObjCLoc, RParenLoc),
                             ObjCSelector(Ctx, 0, Name),
                             SourceRange(LParenLoc, RParenLoc),
                             NameLoc);
@@ -656,7 +839,7 @@ ObjCAttr *ObjCAttr::createSelector(ASTContext &Ctx, SourceLoc AtLoc,
   assert(NameLocs.size() == Names.size());
   void *mem = Ctx.Allocate(totalSizeToAlloc<SourceLoc>(NameLocs.size() + 2),
                            alignof(ObjCAttr));
-  return new (mem) ObjCAttr(AtLoc, SourceRange(ObjCLoc),
+  return new (mem) ObjCAttr(AtLoc, SourceRange(ObjCLoc, RParenLoc),
                             ObjCSelector(Ctx, Names.size(), Names),
                             SourceRange(LParenLoc, RParenLoc),
                             NameLocs);
@@ -691,69 +874,190 @@ SourceLoc ObjCAttr::getRParenLoc() const {
 }
 
 ObjCAttr *ObjCAttr::clone(ASTContext &context) const {
-  return new (context) ObjCAttr(getName(), isNameImplicit());
+  auto attr = new (context) ObjCAttr(getName(), isNameImplicit());
+  attr->setSwift3Inferred(isSwift3Inferred());
+  return attr;
+}
+
+PrivateImportAttr::PrivateImportAttr(SourceLoc atLoc, SourceRange baseRange,
+                                     StringRef sourceFile,
+                                     SourceRange parenRange)
+    : DeclAttribute(DAK_PrivateImport, atLoc, baseRange, /*Implicit=*/false),
+      SourceFile(sourceFile) {}
+
+PrivateImportAttr *PrivateImportAttr::create(ASTContext &Ctxt, SourceLoc AtLoc,
+                                             SourceLoc PrivateLoc,
+                                             SourceLoc LParenLoc,
+                                             StringRef sourceFile,
+                                             SourceLoc RParenLoc) {
+  return new (Ctxt)
+      PrivateImportAttr(AtLoc, SourceRange(PrivateLoc, RParenLoc), sourceFile,
+                        SourceRange(LParenLoc, RParenLoc));
+}
+
+DynamicReplacementAttr::DynamicReplacementAttr(SourceLoc atLoc,
+                                               SourceRange baseRange,
+                                               DeclName name,
+                                               SourceRange parenRange)
+    : DeclAttribute(DAK_DynamicReplacement, atLoc, baseRange,
+                    /*Implicit=*/false),
+      ReplacedFunctionName(name), ReplacedFunction(nullptr) {
+  Bits.DynamicReplacementAttr.HasTrailingLocationInfo = true;
+  getTrailingLocations()[0] = parenRange.Start;
+  getTrailingLocations()[1] = parenRange.End;
+}
+
+DynamicReplacementAttr *
+DynamicReplacementAttr::create(ASTContext &Ctx, SourceLoc AtLoc,
+                               SourceLoc DynReplLoc, SourceLoc LParenLoc,
+                               DeclName ReplacedFunction, SourceLoc RParenLoc) {
+  void *mem = Ctx.Allocate(totalSizeToAlloc<SourceLoc>(2),
+                           alignof(DynamicReplacementAttr));
+  return new (mem) DynamicReplacementAttr(
+      AtLoc, SourceRange(DynReplLoc, RParenLoc), ReplacedFunction,
+      SourceRange(LParenLoc, RParenLoc));
+}
+
+DynamicReplacementAttr *DynamicReplacementAttr::create(ASTContext &Ctx,
+                                                       DeclName name) {
+  return new (Ctx) DynamicReplacementAttr(name);
+}
+
+DynamicReplacementAttr *
+DynamicReplacementAttr::create(ASTContext &Ctx, DeclName name,
+                               AbstractFunctionDecl *f) {
+  auto res = new (Ctx) DynamicReplacementAttr(name);
+  res->setReplacedFunction(f);
+  return res;
+}
+
+SourceLoc DynamicReplacementAttr::getLParenLoc() const {
+  return getTrailingLocations()[0];
+}
+
+SourceLoc DynamicReplacementAttr::getRParenLoc() const {
+  return getTrailingLocations()[1];
 }
 
 AvailableAttr *
-AvailableAttr::createUnconditional(ASTContext &C,
+AvailableAttr::createPlatformAgnostic(ASTContext &C,
                                    StringRef Message,
                                    StringRef Rename,
-                                   UnconditionalAvailabilityKind Reason) {
-  assert(Reason != UnconditionalAvailabilityKind::None);
-  clang::VersionTuple NoVersion;
+                                   PlatformAgnosticAvailabilityKind Kind,
+                                   llvm::VersionTuple Obsoleted) {
+  assert(Kind != PlatformAgnosticAvailabilityKind::None);
+  llvm::VersionTuple NoVersion;
+  if (Kind == PlatformAgnosticAvailabilityKind::SwiftVersionSpecific) {
+    assert(!Obsoleted.empty());
+  }
   return new (C) AvailableAttr(
     SourceLoc(), SourceRange(), PlatformKind::none, Message, Rename,
-    NoVersion, NoVersion, NoVersion, Reason, /* isImplicit */ false);
+    NoVersion, SourceRange(),
+    NoVersion, SourceRange(),
+    Obsoleted, SourceRange(),
+    Kind, /* isImplicit */ false);
 }
 
 bool AvailableAttr::isActivePlatform(const ASTContext &ctx) const {
   return isPlatformActive(Platform, ctx.LangOpts);
 }
 
+bool AvailableAttr::isLanguageVersionSpecific() const {
+  if (PlatformAgnostic ==
+      PlatformAgnosticAvailabilityKind::SwiftVersionSpecific)
+    {
+      assert(Platform == PlatformKind::none &&
+             (Introduced.hasValue() ||
+              Deprecated.hasValue() ||
+              Obsoleted.hasValue()));
+      return true;
+    }
+  return false;
+}
+
+bool AvailableAttr::isPackageDescriptionVersionSpecific() const {
+  if (PlatformAgnostic ==
+      PlatformAgnosticAvailabilityKind::PackageDescriptionVersionSpecific)
+    {
+      assert(Platform == PlatformKind::none &&
+             (Introduced.hasValue() ||
+              Deprecated.hasValue() ||
+              Obsoleted.hasValue()));
+      return true;
+    }
+  return false;
+}
+
 bool AvailableAttr::isUnconditionallyUnavailable() const {
-  switch (Unconditional) {
-  case UnconditionalAvailabilityKind::None:
-  case UnconditionalAvailabilityKind::Deprecated:
+  switch (PlatformAgnostic) {
+  case PlatformAgnosticAvailabilityKind::None:
+  case PlatformAgnosticAvailabilityKind::Deprecated:
+  case PlatformAgnosticAvailabilityKind::SwiftVersionSpecific:
+  case PlatformAgnosticAvailabilityKind::PackageDescriptionVersionSpecific:
     return false;
 
-  case UnconditionalAvailabilityKind::Unavailable:
-  case UnconditionalAvailabilityKind::UnavailableInSwift:
-  case UnconditionalAvailabilityKind::UnavailableInCurrentSwift:
+  case PlatformAgnosticAvailabilityKind::Unavailable:
+  case PlatformAgnosticAvailabilityKind::UnavailableInSwift:
     return true;
   }
+
+  llvm_unreachable("Unhandled PlatformAgnosticAvailabilityKind in switch.");
 }
 
 bool AvailableAttr::isUnconditionallyDeprecated() const {
-  switch (Unconditional) {
-  case UnconditionalAvailabilityKind::None:
-  case UnconditionalAvailabilityKind::Unavailable:
-  case UnconditionalAvailabilityKind::UnavailableInSwift:
-  case UnconditionalAvailabilityKind::UnavailableInCurrentSwift:
+  switch (PlatformAgnostic) {
+  case PlatformAgnosticAvailabilityKind::None:
+  case PlatformAgnosticAvailabilityKind::Unavailable:
+  case PlatformAgnosticAvailabilityKind::UnavailableInSwift:
+  case PlatformAgnosticAvailabilityKind::SwiftVersionSpecific:
+  case PlatformAgnosticAvailabilityKind::PackageDescriptionVersionSpecific:
     return false;
 
-  case UnconditionalAvailabilityKind::Deprecated:
+  case PlatformAgnosticAvailabilityKind::Deprecated:
     return true;
+  }
+
+  llvm_unreachable("Unhandled PlatformAgnosticAvailabilityKind in switch.");
+}
+
+llvm::VersionTuple AvailableAttr::getActiveVersion(const ASTContext &ctx) const {
+  if (isLanguageVersionSpecific()) {
+    return ctx.LangOpts.EffectiveLanguageVersion;
+  } else if (isPackageDescriptionVersionSpecific()) {
+    return ctx.LangOpts.PackageDescriptionVersion;
+  } else {
+    return ctx.LangOpts.getMinPlatformVersion();
   }
 }
 
-MinVersionComparison AvailableAttr::getMinVersionAvailability(
-                       clang::VersionTuple minVersion) const {
+AvailableVersionComparison AvailableAttr::getVersionAvailability(
+  const ASTContext &ctx) const {
+
   // Unconditional unavailability.
   if (isUnconditionallyUnavailable())
-    return MinVersionComparison::Unavailable;
+    return AvailableVersionComparison::Unavailable;
 
-  // If this entity was obsoleted before or at the minimum platform version,
+  llvm::VersionTuple queryVersion = getActiveVersion(ctx);
+
+  // If this entity was obsoleted before or at the query platform version,
   // consider it obsolete.
-  if (Obsoleted && *Obsoleted <= minVersion)
-    return MinVersionComparison::Obsoleted;
+  if (Obsoleted && *Obsoleted <= queryVersion)
+    return AvailableVersionComparison::Obsoleted;
 
-  // If this entity was introduced after the minimum platform version, it's
-  // availability can only be determined dynamically.
-  if (Introduced && *Introduced > minVersion)
-    return MinVersionComparison::PotentiallyUnavailable;
+  // If this entity was introduced after the query version and we're doing a
+  // platform comparison, true availability can only be determined dynamically;
+  // if we're doing a _language_ version check, the query version is a
+  // static requirement, so we treat "introduced later" as just plain
+  // unavailable.
+  if (Introduced && *Introduced > queryVersion) {
+    if (isLanguageVersionSpecific() || isPackageDescriptionVersionSpecific())
+      return AvailableVersionComparison::Unavailable;
+    else
+      return AvailableVersionComparison::PotentiallyUnavailable;
+  }
 
   // The entity is available.
-  return MinVersionComparison::Available;
+  return AvailableVersionComparison::Available;
 }
 
 const AvailableAttr *AvailableAttr::isUnavailable(const Decl *D) {
@@ -762,25 +1066,146 @@ const AvailableAttr *AvailableAttr::isUnavailable(const Decl *D) {
 }
 
 SpecializeAttr::SpecializeAttr(SourceLoc atLoc, SourceRange range,
-                               ArrayRef<TypeLoc> typeLocs)
+                               TrailingWhereClause *clause,
+                               bool exported,
+                               SpecializationKind kind)
     : DeclAttribute(DAK_Specialize, atLoc, range, /*Implicit=*/false),
-      numTypes(typeLocs.size())
-{
-  std::copy(typeLocs.begin(), typeLocs.end(), getTypeLocData());
+      trailingWhereClause(clause) {
+  Bits.SpecializeAttr.exported = exported;
+  Bits.SpecializeAttr.kind = unsigned(kind);
+  Bits.SpecializeAttr.numRequirements = 0;
 }
 
-ArrayRef<TypeLoc> SpecializeAttr::getTypeLocs() const {
-  return const_cast<SpecializeAttr*>(this)->getTypeLocs();
+SpecializeAttr::SpecializeAttr(SourceLoc atLoc, SourceRange range,
+                               ArrayRef<Requirement> requirements,
+                               bool exported,
+                               SpecializationKind kind)
+    : DeclAttribute(DAK_Specialize, atLoc, range, /*Implicit=*/false) {
+  Bits.SpecializeAttr.exported = exported;
+  Bits.SpecializeAttr.kind = unsigned(kind);
+  Bits.SpecializeAttr.numRequirements = requirements.size();
+  std::copy(requirements.begin(), requirements.end(), getRequirementsData());
 }
 
-MutableArrayRef<TypeLoc> SpecializeAttr::getTypeLocs() {
-  return { this->getTypeLocData(), numTypes };
+void SpecializeAttr::setRequirements(ASTContext &Ctx,
+                                     ArrayRef<Requirement> requirements) {
+  unsigned numClauseRequirements =
+      (trailingWhereClause) ? trailingWhereClause->getRequirements().size() : 0;
+  assert(requirements.size() <= numClauseRequirements);
+  if (!numClauseRequirements)
+    return;
+  Bits.SpecializeAttr.numRequirements = requirements.size();
+  std::copy(requirements.begin(), requirements.end(), getRequirementsData());
+}
+
+ArrayRef<Requirement> SpecializeAttr::getRequirements() const {
+  return const_cast<SpecializeAttr*>(this)->getRequirements();
+}
+
+TrailingWhereClause *SpecializeAttr::getTrailingWhereClause() const {
+  return trailingWhereClause;
 }
 
 SpecializeAttr *SpecializeAttr::create(ASTContext &Ctx, SourceLoc atLoc,
                                        SourceRange range,
-                                       ArrayRef<TypeLoc> typeLocs) {
-  unsigned size = sizeof(SpecializeAttr) + (typeLocs.size() * sizeof(TypeLoc));
+                                       TrailingWhereClause *clause,
+                                       bool exported,
+                                       SpecializationKind kind) {
+  unsigned numRequirements = (clause) ? clause->getRequirements().size() : 0;
+  unsigned size =
+      sizeof(SpecializeAttr) + (numRequirements * sizeof(Requirement));
   void *mem = Ctx.Allocate(size, alignof(SpecializeAttr));
-  return new (mem) SpecializeAttr(atLoc, range, typeLocs);
+  return new (mem)
+      SpecializeAttr(atLoc, range, clause, exported, kind);
+}
+
+SpecializeAttr *SpecializeAttr::create(ASTContext &Ctx, SourceLoc atLoc,
+                                       SourceRange range,
+                                       ArrayRef<Requirement> requirements,
+                                       bool exported,
+                                       SpecializationKind kind) {
+  unsigned numRequirements = requirements.size();
+  unsigned size =
+      sizeof(SpecializeAttr) + (numRequirements * sizeof(Requirement));
+  void *mem = Ctx.Allocate(size, alignof(SpecializeAttr));
+  return new (mem)
+      SpecializeAttr(atLoc, range, requirements, exported, kind);
+}
+
+
+ImplementsAttr::ImplementsAttr(SourceLoc atLoc, SourceRange range,
+                               TypeLoc ProtocolType,
+                               DeclName MemberName,
+                               DeclNameLoc MemberNameLoc)
+    : DeclAttribute(DAK_Implements, atLoc, range, /*Implicit=*/false),
+      ProtocolType(ProtocolType),
+      MemberName(MemberName),
+      MemberNameLoc(MemberNameLoc) {
+}
+
+
+ImplementsAttr *ImplementsAttr::create(ASTContext &Ctx, SourceLoc atLoc,
+                                       SourceRange range,
+                                       TypeLoc ProtocolType,
+                                       DeclName MemberName,
+                                       DeclNameLoc MemberNameLoc) {
+  void *mem = Ctx.Allocate(sizeof(ImplementsAttr), alignof(ImplementsAttr));
+  return new (mem) ImplementsAttr(atLoc, range, ProtocolType,
+                                  MemberName, MemberNameLoc);
+}
+
+TypeLoc ImplementsAttr::getProtocolType() const {
+  return ProtocolType;
+}
+
+TypeLoc &ImplementsAttr::getProtocolType() {
+  return ProtocolType;
+}
+
+CustomAttr::CustomAttr(SourceLoc atLoc, SourceRange range, TypeLoc type,
+                       PatternBindingInitializer *initContext, Expr *arg,
+                       ArrayRef<Identifier> argLabels,
+                       ArrayRef<SourceLoc> argLabelLocs, bool implicit)
+    : DeclAttribute(DAK_Custom, atLoc, range, implicit),
+      type(type),
+      arg(arg),
+      initContext(initContext) {
+  hasArgLabelLocs = !argLabelLocs.empty();
+  numArgLabels = argLabels.size();
+  initializeCallArguments(argLabels, argLabelLocs,
+                          /*hasTrailingClosure=*/false);
+}
+
+CustomAttr *CustomAttr::create(ASTContext &ctx, SourceLoc atLoc, TypeLoc type,
+                               bool hasInitializer,
+                               PatternBindingInitializer *initContext,
+                               SourceLoc lParenLoc,
+                               ArrayRef<Expr *> args,
+                               ArrayRef<Identifier> argLabels,
+                               ArrayRef<SourceLoc> argLabelLocs,
+                               SourceLoc rParenLoc,
+                               bool implicit) {
+  SmallVector<Identifier, 2> argLabelsScratch;
+  SmallVector<SourceLoc, 2> argLabelLocsScratch;
+  Expr *arg = nullptr;
+  if (hasInitializer) {
+    arg = packSingleArgument(ctx, lParenLoc, args, argLabels, argLabelLocs,
+                             rParenLoc, nullptr, implicit, argLabelsScratch,
+                             argLabelLocsScratch);
+  }
+
+  SourceRange range(atLoc, type.getSourceRange().End);
+  if (arg)
+    range.End = arg->getEndLoc();
+
+  size_t size = totalSizeToAlloc(argLabels, argLabelLocs,
+                                 /*hasTrailingClosure=*/false);
+  void *mem = ctx.Allocate(size, alignof(CustomAttr));
+  return new (mem) CustomAttr(atLoc, range, type, initContext, arg, argLabels,
+                              argLabelLocs, implicit);
+}
+
+void swift::simple_display(llvm::raw_ostream &out, const DeclAttribute *attr) {
+  if (attr)
+    attr->print(out);
 }

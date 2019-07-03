@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -19,8 +19,7 @@
 
 #include "swift/Remote/MemoryReader.h"
 
-#include <memory>
-#include <dlfcn.h>
+#include <cstring>
 
 namespace swift {
 namespace remote {
@@ -28,27 +27,33 @@ namespace remote {
 /// An implementation of MemoryReader which simply reads from the current
 /// address space.
 class InProcessMemoryReader final : public MemoryReader {
-  uint8_t getPointerSize() override {
-    return sizeof(uintptr_t);
+  bool queryDataLayout(DataLayoutQueryType type, void *inBuffer,
+                       void *outBuffer) override {
+    switch (type) {
+      case DLQ_GetPointerSize: {
+        auto result = static_cast<uint8_t *>(outBuffer);
+        *result = sizeof(void *);
+        return true;
+      }
+      case DLQ_GetSizeSize: {
+        auto result = static_cast<uint8_t *>(outBuffer);
+        *result = sizeof(size_t);
+        return true;
+      }
+    }
+
+    return false;
   }
 
-  uint8_t getSizeSize() override {
-    return sizeof(size_t);
-  }
-
-  RemoteAddress getSymbolAddress(const std::string &name) override {
-    auto pointer = dlsym(RTLD_DEFAULT, name.c_str());
-    return RemoteAddress(pointer);
-  }
+  RemoteAddress getSymbolAddress(const std::string &name) override;
 
   bool readString(RemoteAddress address, std::string &dest) override {
     dest = address.getLocalPointer<char>();
     return true;
   }
 
-  bool readBytes(RemoteAddress address, uint8_t *dest, uint64_t size) override {
-    std::memcpy(dest, address.getLocalPointer<void>(), (size_t) size);
-    return true;
+  ReadBytesResult readBytes(RemoteAddress address, uint64_t size) override {
+    return ReadBytesResult(address.getLocalPointer<void>(), [](const void *) {});
   }
 };
  

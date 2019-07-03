@@ -1,6 +1,6 @@
-// RUN: rm -rf %t
-// RUN: mkdir -p %t
+// RUN: %empty-directory(%t)
 // RUN: %target-build-swift %s -o %t/a.out -O
+// RUN: %target-codesign %t/a.out
 // RUN: %target-run %t/a.out
 // REQUIRES: executable_test
 // REQUIRES: objc_interop
@@ -12,14 +12,14 @@ import StdlibUnittest
 import Foundation
 
 protocol TestableUnicodeCodec : UnicodeCodec {
-  associatedtype CodeUnit : Integer
-  static func encodingId() -> NSStringEncoding
+  associatedtype CodeUnit : FixedWidthInteger
+  static func encodingId() -> String.Encoding
   static func name() -> NSString
 }
 
 extension UTF8 : TestableUnicodeCodec {
-  static func encodingId() -> NSStringEncoding {
-    return NSUTF8StringEncoding
+  static func encodingId() -> String.Encoding {
+    return .utf8
   }
   static func name() -> NSString {
     return "UTF8"
@@ -27,8 +27,8 @@ extension UTF8 : TestableUnicodeCodec {
 }
 
 extension UTF16 : TestableUnicodeCodec {
-  static func encodingId() -> NSStringEncoding {
-    return NSUTF16LittleEndianStringEncoding
+  static func encodingId() -> String.Encoding {
+    return .utf16LittleEndian
   }
   static func name() -> NSString {
     return "UTF16"
@@ -36,8 +36,8 @@ extension UTF16 : TestableUnicodeCodec {
 }
 
 extension UTF32 : TestableUnicodeCodec {
-  static func encodingId() -> NSStringEncoding {
-    return NSUTF32LittleEndianStringEncoding
+  static func encodingId() -> String.Encoding {
+    return .utf32LittleEndian
   }
   static func name() -> NSString {
     return "UTF32"
@@ -60,32 +60,32 @@ func nthUnicodeScalar(_ n: UInt32) -> UnicodeScalar {
   for r in unicodeScalarRanges {
     count += r.upperBound - r.lowerBound
     if count > n {
-      return UnicodeScalar(r.upperBound - (count - n))
+      return UnicodeScalar(r.upperBound - (count - n))!
     }
   }
-  _preconditionFailure("Index out of range")
+  preconditionFailure("Index out of range")
 }
 
 // `buffer` should have a length >= 4
 func nsEncode<CodeUnit>(
   _ c: UInt32,
-  _ encoding: NSStringEncoding,
+  _ encoding: String.Encoding,
   _ buffer: inout [CodeUnit],
   _ used: inout Int
 ) {
   var c = c
-  _precondition(buffer.count >= 4, "buffer is not large enough")
+  precondition(buffer.count >= 4, "buffer is not large enough")
 
   let s = NSString(
     bytes: &c,
     length: 4,
-    encoding: NSUTF32LittleEndianStringEncoding)!
+    encoding: String.Encoding.utf32LittleEndian.rawValue)!
 
   s.getBytes(
     &buffer,
     maxLength: buffer.count,
     usedLength: &used,
-    encoding: encoding,
+    encoding: encoding.rawValue,
     options: [],
     range: NSRange(location: 0, length: s.length),
     remaining: nil)
@@ -106,7 +106,7 @@ final class CodecTest<Codec : TestableUnicodeCodec> {
 
     // Use Cocoa to encode the scalar
     nsEncode(scalar.value, Codec.encodingId(), &nsEncodeBuffer, &used)
-    let nsEncoded = nsEncodeBuffer[0..<(used/sizeof(CodeUnit.self))]
+    let nsEncoded = nsEncodeBuffer[0..<(used/MemoryLayout<CodeUnit>.size)]
     var encodeIndex = encodeBuffer.startIndex
     let encodeOutput: (CodeUnit) -> Void = {
       self.encodeBuffer[encodeIndex] = $0
@@ -122,15 +122,15 @@ final class CodecTest<Codec : TestableUnicodeCodec> {
     default:
       fatalError("decoding failed")
     }
-    expectEqual(
+    expectEqualTest(
       scalar, decoded,
       "Decoding failed: \(asHex(scalar.value)) => " +
       "\(asHex(nsEncoded)) => \(asHex(decoded.value))"
     ) { $0 == $1 }
 
     encodeIndex = encodeBuffer.startIndex
-    Codec.encode(scalar, sendingOutputTo: encodeOutput)
-    expectEqual(
+    Codec.encode(scalar, into: encodeOutput)
+    expectEqualTest(
       nsEncoded, encodeBuffer[0..<encodeIndex],
       "Decoding failed: \(asHex(nsEncoded)) => " +
         "\(asHex(scalar.value)) => \(asHex(self.encodeBuffer[0]))"

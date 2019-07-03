@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -16,6 +16,7 @@
 
 #include "swift/IDE/REPLCodeCompletion.h"
 #include "swift/AST/ASTContext.h"
+#include "swift/AST/DiagnosticSuppression.h"
 #include "swift/AST/Module.h"
 #include "swift/Basic/LLVM.h"
 #include "swift/Basic/SourceManager.h"
@@ -66,7 +67,7 @@ static std::string toInsertableString(CodeCompletionResult *Result) {
     case CodeCompletionString::Chunk::ChunkKind::CallParameterInternalName:
     case CodeCompletionString::Chunk::ChunkKind::CallParameterColon:
     case CodeCompletionString::Chunk::ChunkKind::DeclAttrParamKeyword:
-    case CodeCompletionString::Chunk::ChunkKind::DeclAttrParamEqual:
+    case CodeCompletionString::Chunk::ChunkKind::DeclAttrParamColon:
     case CodeCompletionString::Chunk::ChunkKind::CallParameterType:
     case CodeCompletionString::Chunk::ChunkKind::CallParameterClosureType:
     case CodeCompletionString::Chunk::ChunkKind::OptionalBegin:
@@ -101,6 +102,7 @@ static void toDisplayString(CodeCompletionResult *Result,
       if (Result->getKind() == CodeCompletionResult::Declaration) {
         switch (Result->getAssociatedDeclKind()) {
         case CodeCompletionDeclKind::Module:
+        case CodeCompletionDeclKind::PrecedenceGroup:
         case CodeCompletionDeclKind::Class:
         case CodeCompletionDeclKind::Struct:
         case CodeCompletionDeclKind::Enum:
@@ -184,7 +186,7 @@ REPLCompletions::REPLCompletions()
   // Consumer.
   CompletionCallbacksFactory.reset(
       ide::makeCodeCompletionCallbacksFactory(CompletionContext,
-                                              *Consumer.get()));
+                                              *Consumer));
 }
 
 static void
@@ -192,7 +194,7 @@ doCodeCompletion(SourceFile &SF, StringRef EnteredCode, unsigned *BufferID,
                  CodeCompletionCallbacksFactory *CompletionCallbacksFactory) {
   // Temporarily disable printing the diagnostics.
   ASTContext &Ctx = SF.getASTContext();
-  auto DiagnosticConsumers = Ctx.Diags.takeConsumers();
+  DiagnosticSuppression SuppressedDiags(Ctx.Diags);
 
   std::string AugmentedCode = EnteredCode.str();
   AugmentedCode += '\0';
@@ -205,18 +207,16 @@ doCodeCompletion(SourceFile &SF, StringRef EnteredCode, unsigned *BufferID,
   // Parse, typecheck and temporarily insert the incomplete code into the AST.
   const unsigned OriginalDeclCount = SF.Decls.size();
 
-  unsigned CurElem = OriginalDeclCount;
-  PersistentParserState PersistentState;
+  PersistentParserState PersistentState(Ctx);
   std::unique_ptr<DelayedParsingCallbacks> DelayedCB(
       new CodeCompleteDelayedCallbacks(Ctx.SourceMgr.getCodeCompletionLoc()));
   bool Done;
   do {
     parseIntoSourceFile(SF, *BufferID, &Done, nullptr, &PersistentState,
                         DelayedCB.get());
-    performTypeChecking(SF, PersistentState.getTopLevelContext(), None, 
-                        CurElem);
-    CurElem = SF.Decls.size();
   } while (!Done);
+  performTypeChecking(SF, PersistentState.getTopLevelContext(), None,
+                      OriginalDeclCount);
 
   performDelayedParsing(&SF, PersistentState, CompletionCallbacksFactory);
 
@@ -224,10 +224,8 @@ doCodeCompletion(SourceFile &SF, StringRef EnteredCode, unsigned *BufferID,
   // temporarily inserted.
   SF.Decls.resize(OriginalDeclCount);
 
-  // Add the diagnostic consumers back.
-  for (auto DC : DiagnosticConsumers)
-    Ctx.Diags.addConsumer(*DC);
-
+  // Reset the error state because it's only relevant to the code that we just
+  // processed, which now gets thrown away.
   Ctx.Diags.resetHadAnyError();
 }
 

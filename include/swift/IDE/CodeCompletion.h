@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -18,7 +18,6 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Allocator.h"
-#include "llvm/Support/TimeValue.h"
 #include "llvm/Support/TrailingObjects.h"
 #include <functional>
 #include <memory>
@@ -38,7 +37,7 @@ class CodeCompletionContext;
 class CodeCompletionResultBuilder;
 struct RequestedCachedModule;
 
-/// \brief A routine to remove code completion tokens from code completion
+/// A routine to remove code completion tokens from code completion
 /// tests.
 ///
 /// \code
@@ -63,7 +62,7 @@ class CodeCompletionStringChunk {
 
 public:
   enum class ChunkKind {
-    /// "internal", "private" or "public".
+    /// "open", "public", "internal", "fileprivate", or "private".
     AccessControlKeyword,
 
     /// such as @"availability".
@@ -128,13 +127,13 @@ public:
     /// editor buffer if the preceding CallParameterName was inserted.
     CallParameterColon,
 
-    /// A equal sign between parameter name and value. Used in decl attribute.
-    DeclAttrParamEqual,
+    /// A colon between parameter name and value. Used in decl attribute.
+    DeclAttrParamColon,
 
     /// Required parameter type.
     CallParameterType,
     /// Desugared closure parameter type. This can be used to get the
-    /// closure type if CallParameterType is a NameAliasType.
+    /// closure type if CallParameterType is a TypeAliasType.
     CallParameterClosureType,
 
     /// A placeholder for \c ! or \c ? in a call to a method found by dynamic
@@ -197,7 +196,7 @@ public:
            Kind == ChunkKind::CallParameterName ||
            Kind == ChunkKind::CallParameterInternalName ||
            Kind == ChunkKind::CallParameterColon ||
-           Kind == ChunkKind::DeclAttrParamEqual ||
+           Kind == ChunkKind::DeclAttrParamColon ||
            Kind == ChunkKind::DeclAttrParamKeyword ||
            Kind == ChunkKind::CallParameterType ||
            Kind == ChunkKind::CallParameterClosureType ||
@@ -212,7 +211,7 @@ private:
   unsigned Kind : 8;
   unsigned NestingLevel : 8;
 
-  /// \brief If true, then this chunk is an annotation that is included only
+  /// If true, then this chunk is an annotation that is included only
   /// for exposition and may not be inserted in the editor buffer.
   unsigned IsAnnotation : 1;
 
@@ -279,7 +278,7 @@ public:
 
 } // end namespace detail
 
-/// \brief A structured representation of a code completion string.
+/// A structured representation of a code completion string.
 class alignas(detail::CodeCompletionStringChunk) CodeCompletionString final :
     private llvm::TrailingObjects<CodeCompletionString,
                                   detail::CodeCompletionStringChunk> {
@@ -318,7 +317,7 @@ public:
   void dump() const;
 };
 
-/// \brief Describes the origin of the code completion result.
+/// Describes the origin of the code completion result.
 ///
 /// This enum is ordered from the contexts that are "nearest" to the code
 /// completion point to "outside" contexts.
@@ -326,7 +325,7 @@ enum class SemanticContextKind {
   /// Used in cases when the concept of semantic context is not applicable.
   None,
 
-  /// \brief This is a highly-likely expression-context-specific completion
+  /// This is a highly-likely expression-context-specific completion
   /// result.  This description is intentionally vague: this is a catch-all
   /// category for all heuristics for highly-likely results.
   ///
@@ -409,6 +408,7 @@ enum class CodeCompletionDeclKind {
   InstanceVar,
   LocalVar,
   GlobalVar,
+  PrecedenceGroup,
 };
 
 enum class CodeCompletionLiteralKind {
@@ -473,7 +473,7 @@ enum class CodeCompletionKeywordKind {
   None,
 #define KEYWORD(X) kw_##X,
 #define POUND_KEYWORD(X) pound_##X,
-#include "swift/Parse/Tokens.def"
+#include "swift/Syntax/TokenKinds.def"
 };
 
 enum class CompletionKind {
@@ -485,27 +485,33 @@ enum class CompletionKind {
   PostfixExprBeginning,
   PostfixExpr,
   PostfixExprParen,
-  SuperExpr,
-  SuperExprDot,
-  KeyPathExpr,
-  KeyPathExprDot,
+  KeyPathExprObjC,
+  KeyPathExprSwift,
+  TypeDeclResultBeginning,
   TypeSimpleBeginning,
   TypeIdentifierWithDot,
   TypeIdentifierWithoutDot,
+  CaseStmtKeyword,
   CaseStmtBeginning,
-  CaseStmtDotPrefix,
   NominalMemberBeginning,
+  AccessorBeginning,
   AttributeBegin,
   AttributeDeclParen,
   PoundAvailablePlatform,
   AssignmentRHS,
   CallArg,
   ReturnStmtExpr,
-  AfterPound,
+  YieldStmtExpr,
+  ForEachSequence,
+  AfterPoundExpr,
+  AfterPoundDirective,
+  PlatformConditon,
+  AfterIfStmtElse,
   GenericParams,
+  PrecedenceGroup,
 };
 
-/// \brief A single code completion result.
+/// A single code completion result.
 class CodeCompletionResult {
   friend class CodeCompletionResultBuilder;
 
@@ -790,25 +796,43 @@ struct CodeCompletionResultSink {
 class CodeCompletionContext {
   friend class CodeCompletionResultBuilder;
 
-  /// \brief A set of current completion results, not yet delivered to the
+  /// A set of current completion results, not yet delivered to the
   /// consumer.
   CodeCompletionResultSink CurrentResults;
 
 public:
   CodeCompletionCache &Cache;
   CompletionKind CodeCompletionKind = CompletionKind::None;
-  bool HasExpectedTypeRelation = false;
+
+  enum class TypeContextKind {
+    /// There is no known contextual type. All types are equally good.
+    None,
+
+    /// There is a contextual type from a single-expression closure/function
+    /// body. The context is a hint, and enables unresolved member completion,
+    /// but should not hide any results.
+    SingleExpressionBody,
+
+    /// There are known contextual types.
+    Required,
+  };
+
+  TypeContextKind typeContextKind = TypeContextKind::None;
+
+  /// Whether there may be members that can use implicit member syntax,
+  /// e.g. `x = .foo`.
+  bool MayUseImplicitMemberExpr = false;
 
   CodeCompletionContext(CodeCompletionCache &Cache)
       : Cache(Cache) {}
 
-  /// \brief Allocate a string owned by the code completion context.
+  /// Allocate a string owned by the code completion context.
   StringRef copyString(StringRef Str);
 
-  /// \brief Return current code completion results.
+  /// Return current code completion results.
   MutableArrayRef<CodeCompletionResult *> takeResults();
 
-  /// \brief Sort code completion results in an implementation-defined order
+  /// Sort code completion results in an implementation-defined order
   /// in place.
   static void sortCompletionResults(
       MutableArrayRef<CodeCompletionResult *> Results);
@@ -818,7 +842,7 @@ public:
   }
 };
 
-/// \brief An abstract base class for consumers of code completion results.
+/// An abstract base class for consumers of code completion results.
 /// \see \c SimpleCachingCodeCompletionConsumer.
 class CodeCompletionConsumer {
 public:
@@ -844,23 +868,26 @@ struct SimpleCachingCodeCompletionConsumer : public CodeCompletionConsumer {
       MutableArrayRef<CodeCompletionResult *> Results) = 0;
 };
 
-/// \brief A code completion result consumer that prints the results to a
+/// A code completion result consumer that prints the results to a
 /// \c raw_ostream.
 class PrintingCodeCompletionConsumer
     : public SimpleCachingCodeCompletionConsumer {
   llvm::raw_ostream &OS;
   bool IncludeKeywords;
+  bool IncludeComments;
 
 public:
-  PrintingCodeCompletionConsumer(llvm::raw_ostream &OS, bool IncludeKeywords = true)
-      : OS(OS), IncludeKeywords(IncludeKeywords) {
-  }
+ PrintingCodeCompletionConsumer(llvm::raw_ostream &OS,
+                                bool IncludeKeywords = true,
+                                bool IncludeComments = true)
+     : OS(OS),
+       IncludeKeywords(IncludeKeywords),
+       IncludeComments(IncludeComments) {}
 
-  void handleResults(
-      MutableArrayRef<CodeCompletionResult *> Results) override;
+ void handleResults(MutableArrayRef<CodeCompletionResult *> Results) override;
 };
 
-/// \brief Create a factory for code completion callbacks.
+/// Create a factory for code completion callbacks.
 CodeCompletionCallbacksFactory *
 makeCodeCompletionCallbacksFactory(CodeCompletionContext &CompletionContext,
                                    CodeCompletionConsumer &Consumer);
@@ -879,31 +906,34 @@ void lookupCodeCompletionResultsFromModule(CodeCompletionResultSink &targetSink,
 /// restricting by \p onlyTypes.
 void copyCodeCompletionResults(CodeCompletionResultSink &targetSink,
                                CodeCompletionResultSink &sourceSink,
-                               bool onlyTypes);
+                               bool onlyTypes,
+                               bool onlyPrecedenceGroups);
 
 } // end namespace ide
 } // end namespace swift
 
-template <> struct llvm::DenseMapInfo<swift::ide::CodeCompletionKeywordKind> {
+namespace llvm {
+template <> struct DenseMapInfo<swift::ide::CodeCompletionKeywordKind> {
   using Kind = swift::ide::CodeCompletionKeywordKind;
   static Kind getEmptyKey() { return Kind(~0u); }
   static Kind getTombstoneKey() { return Kind(~1u); }
   static unsigned getHashValue(const Kind &Val) { return unsigned(Val); }
   static bool isEqual(const Kind &LHS, const Kind &RHS) { return LHS == RHS; }
 };
-template <> struct llvm::DenseMapInfo<swift::ide::CodeCompletionLiteralKind> {
+template <> struct DenseMapInfo<swift::ide::CodeCompletionLiteralKind> {
   using Kind = swift::ide::CodeCompletionLiteralKind;
   static Kind getEmptyKey() { return Kind(~0u); }
   static Kind getTombstoneKey() { return Kind(~1u); }
   static unsigned getHashValue(const Kind &Val) { return unsigned(Val); }
   static bool isEqual(const Kind &LHS, const Kind &RHS) { return LHS == RHS; }
 };
-template <> struct llvm::DenseMapInfo<swift::ide::CodeCompletionDeclKind> {
+template <> struct DenseMapInfo<swift::ide::CodeCompletionDeclKind> {
   using Kind = swift::ide::CodeCompletionDeclKind;
   static Kind getEmptyKey() { return Kind(~0u); }
   static Kind getTombstoneKey() { return Kind(~1u); }
   static unsigned getHashValue(const Kind &Val) { return unsigned(Val); }
   static bool isEqual(const Kind &LHS, const Kind &RHS) { return LHS == RHS; }
 };
+}
 
 #endif // SWIFT_IDE_CODECOMPLETION_H

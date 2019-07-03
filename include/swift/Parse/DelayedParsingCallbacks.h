@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -21,7 +21,7 @@ namespace swift {
   class DeclAttributes;
   class AbstractFunctionDecl;
 
-/// \brief Callbacks for Parser's delayed parsing.
+/// Callbacks for Parser's delayed parsing.
 class DelayedParsingCallbacks {
   virtual void anchor();
 
@@ -35,16 +35,7 @@ public:
                                               SourceRange BodyRange) = 0;
 };
 
-class AlwaysDelayedCallbacks : public DelayedParsingCallbacks {
-  bool shouldDelayFunctionBodyParsing(Parser &TheParser,
-                                      AbstractFunctionDecl *AFD,
-                                      const DeclAttributes &Attrs,
-                                      SourceRange BodyRange) override {
-    return true;
-  }
-};
-
-/// \brief Implementation of callbacks that guide the parser in delayed
+/// Implementation of callbacks that guide the parser in delayed
 /// parsing for code completion.
 class CodeCompleteDelayedCallbacks : public DelayedParsingCallbacks {
   SourceLoc CodeCompleteLoc;

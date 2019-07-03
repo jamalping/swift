@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -29,13 +29,17 @@ enum class ArrayCallKind {
   kGetCount,
   kGetCapacity,
   kGetElement,
-  kGetArrayOwner,
   kGetElementAddress,
   kMakeMutable,
   kMutateUnknown,
+  kReserveCapacityForAppend,
   kWithUnsafeMutableBufferPointer,
+  kAppendContentsOf,
+  kAppendElement,
   // The following two semantic function kinds return the result @owned
-  // instead of operating on self passed as parameter.
+  // instead of operating on self passed as parameter. If you are adding
+  // a function, and it has a self parameter, make sure that it is defined
+  // before this comment.
   kArrayInit,
   kArrayUninitialized
 };
@@ -44,17 +48,31 @@ enum class ArrayCallKind {
 class ArraySemanticsCall {
   ApplyInst *SemanticsCall;
 
+  void initialize(ApplyInst *apply, StringRef semanticString,
+                  bool matchPartialName);
+
 public:
+  /// Match calls with any array semantic.
+  template <class NodeTy>
+  ArraySemanticsCall(NodeTy node)
+    : ArraySemanticsCall(node, "array.", /*allow partial*/ true) {}
+
+  /// Match calls with a specific array semantic.
+  template <class NodeTy>
+  ArraySemanticsCall(NodeTy node, StringRef semanticName)
+    : ArraySemanticsCall(node, semanticName, /*allow partial*/ false) {}
+
   /// Match array semantic calls.
-  ArraySemanticsCall(ValueBase *V, StringRef SemanticStr,
+  ArraySemanticsCall(ApplyInst *apply, StringRef SemanticStr,
                      bool MatchPartialName);
 
-  /// Match any array semantics call.
-  ArraySemanticsCall(ValueBase *V) : ArraySemanticsCall(V, "array.", true) {}
+  /// Match array semantic calls.
+  ArraySemanticsCall(SILInstruction *I, StringRef semanticName,
+                     bool matchPartialName);
 
-  /// Match a specific array semantic call.
-  ArraySemanticsCall(ValueBase *V, StringRef SemanticStr)
-      : ArraySemanticsCall(V, SemanticStr, false) {}
+  /// Match array semantic calls.
+  ArraySemanticsCall(SILValue V, StringRef semanticName,
+                     bool matchPartialName);
 
   /// Can we hoist this call.
   bool canHoist(SILInstruction *To, DominanceInfo *DT) const;
@@ -131,6 +149,13 @@ public:
   /// Returns true on success, false otherwise.
   bool replaceByValue(SILValue V);
 
+  /// Replace a call to append(contentsOf: ) with a series of
+  /// append(element: ) calls.
+  bool replaceByAppendingValues(SILFunction *AppendFn,
+                                SILFunction *ReserveFn,
+                                const llvm::SmallVectorImpl<SILValue> &Vals,
+                                SubstitutionMap Subs);
+
   /// Hoist the call to the insert point.
   void hoist(SILInstruction *InsertBefore, DominanceInfo *DT) {
     hoistOrCopy(InsertBefore, DT, false);
@@ -144,6 +169,8 @@ public:
   /// Get the semantics call as an ApplyInst.
   operator ApplyInst *() const { return SemanticsCall; }
 
+  SILValue getCallResult() const { return SemanticsCall; }
+
   /// Is this a semantics call.
   operator bool() const { return SemanticsCall != nullptr; }
 
@@ -152,6 +179,9 @@ public:
 
   /// Could this array be backed by an NSArray.
   bool mayHaveBridgedObjectElementType() const;
+  
+  /// Can this function be inlined by the early inliner.
+  bool canInlineEarly() const;
 
 protected:
   /// Validate the signature of this call.
@@ -163,5 +193,5 @@ protected:
                          bool LeaveOriginal);
 };
 
-} // End namespace swift.
+} // end namespace swift
 #endif

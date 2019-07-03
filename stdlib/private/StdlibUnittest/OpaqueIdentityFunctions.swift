@@ -2,29 +2,29 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
-@_silgen_name("swift_stdlib_getPointer")
-func _stdlib_getPointer(_ x: OpaquePointer) -> OpaquePointer
+@_silgen_name("getPointer")
+func _getPointer(_ x: OpaquePointer) -> OpaquePointer
 
 public func _opaqueIdentity<T>(_ x: T) -> T {
-  let ptr = UnsafeMutablePointer<T>(allocatingCapacity: 1)
-  ptr.initialize(with: x)
+  let ptr = UnsafeMutablePointer<T>.allocate(capacity: 1)
+  ptr.initialize(to: x)
   let result =
-    UnsafeMutablePointer<T>(_stdlib_getPointer(OpaquePointer(ptr))).pointee
-  ptr.deinitialize()
-  ptr.deallocateCapacity(1)
+    UnsafeMutablePointer<T>(_getPointer(OpaquePointer(ptr))).pointee
+  ptr.deinitialize(count: 1)
+  ptr.deallocate()
   return result
 }
 
 func _blackHolePtr<T>(_ x: UnsafePointer<T>) {
-  _ = _stdlib_getPointer(OpaquePointer(x))
+  _ = _getPointer(OpaquePointer(x))
 }
 
 public func _blackHole<T>(_ x: T) {
@@ -71,7 +71,7 @@ public func getFloat32(_ x: Float32) -> Float32 { return _opaqueIdentity(x) }
 @inline(never)
 public func getFloat64(_ x: Float64) -> Float64 { return _opaqueIdentity(x) }
 
-#if arch(i386) || arch(x86_64)
+#if !(os(Windows) || os(Android)) && (arch(i386) || arch(x86_64))
 @inline(never)
 public func getFloat80(_ x: Float80) -> Float80 { return _opaqueIdentity(x) }
 #endif
@@ -79,4 +79,3 @@ public func getFloat80(_ x: Float80) -> Float80 { return _opaqueIdentity(x) }
 public func getPointer(_ x: OpaquePointer) -> OpaquePointer {
   return _opaqueIdentity(x)
 }
-

@@ -1,12 +1,10 @@
-// RUN: %target-parse-verify-swift
-
-// XFAIL: linux
+// RUN: %target-typecheck-verify-swift
 
 // FIXME: Should go into the standard library.
 public extension _ObjectiveCBridgeable {
   static func _unconditionallyBridgeFromObjectiveC(_ source: _ObjectiveCType?)
       -> Self {
-    var result: Self? = nil
+    var result: Self?
     _forceBridgeFromObjectiveC(source!, result: &result)
     return result!
   }
@@ -41,10 +39,6 @@ class A {
 }
 
 struct B : _ObjectiveCBridgeable {
-  static func _isBridgedToObjectiveC() -> Bool {
-    return true
-  }
-  
   func _bridgeToObjectiveC() -> A {
     return A()
   }

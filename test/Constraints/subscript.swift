@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 // Simple subscript of arrays:
 func simpleSubscript(_ array: [Float], x: Int) -> Float {
@@ -11,7 +11,7 @@ protocol IntToStringSubscript {
   subscript (i : Int) -> String { get }
 }
 
-class LameDictionary {
+class FauxDictionary {
   subscript (i : Int) -> String {
     get {
       return String(i)
@@ -19,7 +19,7 @@ class LameDictionary {
   }
 }
 
-func archetypeSubscript<T : IntToStringSubscript, U : LameDictionary>(_ t: T, u: U)
+func archetypeSubscript<T : IntToStringSubscript, U : FauxDictionary>(_ t: T, u: U)
        -> String {
   // Subscript an archetype.
   if false { return t[17] }
@@ -32,6 +32,39 @@ func archetypeSubscript<T : IntToStringSubscript, U : LameDictionary>(_ t: T, u:
 func existentialSubscript(_ a: IntToStringSubscript) -> String {
   return a[17]
 }
+
+// Static of above:
+
+// Subscript of archetype.
+protocol IntToStringStaticSubscript {
+  static subscript (i : Int) -> String { get }
+}
+
+class FauxStaticDictionary {
+  static subscript (i : Int) -> String {
+    get {
+      return String(i)
+    }
+  }
+}
+
+func archetypeStaticSubscript<
+  T : IntToStringStaticSubscript, U : FauxStaticDictionary
+>(_ t: T.Type, u: U.Type) -> String {
+  // Subscript an archetype.
+  if false { return t[17] }
+  
+  // Subscript an archetype for which the subscript operator is in a base class.
+  return u[17]
+}
+
+// Subscript of existential type.
+func existentialStaticSubscript(
+  _ a: IntToStringStaticSubscript.Type
+) -> String {
+  return a[17]
+}
+
 
 class MyDictionary<Key, Value> {
   subscript (key : Key) -> Value {
@@ -68,11 +101,9 @@ extension Int {
   subscript(key: String) -> Double {  get {} }   // expected-note {{found this candidate}}
 }
 
-let _ = 1["1"]  // expected-error {{ambiguous use of 'subscript'}}
+let _ = 1["1"]  // expected-error {{ambiguous use of 'subscript(_:)'}}
 
-
-// rdar://17687826 - QoI: error message when reducing to an untyped dictionary isn't helpful
-let squares = [ 1, 2, 3 ].reduce([:]) { (dict, n) in // expected-error {{expression type '[_ : _]' is ambiguous without more context}}
+let squares = [ 1, 2, 3 ].reduce([:]) { (dict, n) in
   var dict = dict
   dict[n] = n * n
   return dict
@@ -95,3 +126,54 @@ struct SR718 {
 
 SR718()[a: Int()] // expected-error {{cannot convert value of type 'Int' to expected argument type 'UInt'}}
 
+// rdar://problem/25601561 - Qol: Bad diagnostic for failed assignment from Any to more specific type
+
+struct S_r25601561 {
+  func value() -> Any? { return "hi" }
+}
+
+class C_r25601561 {
+  var a: [S_r25601561?] = []
+  func test(i: Int) -> String {
+    let s: String = a[i]!.value()! // expected-error {{cannot convert value of type 'Any' to specified type 'String'}}
+    return s
+  }
+}
+
+// rdar://problem/31977679 - Misleading diagnostics when using subscript with incorrect argument
+
+func r31977679_1(_ properties: [String: String]) -> Any? {
+  return properties[0] // expected-error {{cannot subscript a value of type '[String : String]' with an argument of type 'Int'}}
+}
+
+func r31977679_2(_ properties: [String: String]) -> Any? {
+  return properties["foo"] // Ok
+}
+
+// rdar://problem/45819956 - inout-to-pointer in a subscript arg could use a better diagnostic
+func rdar_45819956() {
+  struct S {
+    subscript(takesPtr ptr: UnsafeMutablePointer<Int>) -> Int {
+      get { return 0 }
+    }
+  }
+
+  let s = S()
+  var i = 0
+
+  // TODO: It should be possible to suggest `withUnsafe[Mutable]Pointer` as a fix-it
+  _ = s[takesPtr: &i]
+  // expected-error@-1 {{cannot pass an inout argument to a subscript; use 'withUnsafeMutablePointer' to explicitly convert argument to a pointer}}
+}
+
+// rdar://problem/45825806 - [SR-7190] Array-to-pointer in subscript arg crashes compiler
+func rdar_45825806() {
+  struct S {
+    subscript(takesPtr ptr: UnsafePointer<Int>) -> Int {
+      get { return 0 }
+    }
+  }
+
+  let s = S()
+  _ = s[takesPtr: [1, 2, 3]] // Ok
+}

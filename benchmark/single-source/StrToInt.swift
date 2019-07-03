@@ -2,17 +2,23 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
 // This test checks performance of String to Int conversion.
 // It is reported to be very slow: <rdar://problem/17255477>
 import TestsUtils
+
+public let StrToInt = BenchmarkInfo(
+  name: "StrToInt",
+  runFunction: run_StrToInt,
+  tags: [.validation, .api, .String],
+  legacyFactor: 10)
 
 @inline(never)
 public func run_StrToInt(_ N: Int) {
@@ -40,8 +46,8 @@ public func run_StrToInt(_ N: Int) {
     return r
   }
   var res = Int.max
-  for _ in 1...1000*N {
+  for _ in 1...100*N {
     res = res & DoOneIter(input)
   }
-  CheckResults(res == ref_result, "IncorrectResults in StrToInt: \(res) != \(ref_result)")
+  CheckResults(res == ref_result)
 }

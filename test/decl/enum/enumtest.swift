@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 //===----------------------------------------------------------------------===//
 // Tests for various simple enum constructs
@@ -36,12 +36,12 @@ func test1a() -> unionSearchFlags {
 
 func test1b(_ b : Bool) {
   _ = 123
-  _ = .description == 1 // expected-error{{type of expression is ambiguous without more context}} 
+  _ = .description == 1 // expected-error {{ambiguous reference to member '=='}} 
 }
 
 enum MaybeInt {
   case none
-  case some(Int)
+  case some(Int) // expected-note {{'some' declared here}}
 
   init(_ i: Int) { self = MaybeInt.some(i) }
 }
@@ -87,6 +87,7 @@ func test3(_ a: ZeroOneTwoThree) {
   
   var _ : (Int,Int) -> ZeroOneTwoThree = .Two // expected-error{{type '(Int, Int) -> ZeroOneTwoThree' has no member 'Two'}}
   var _ : Int = .Two // expected-error{{type 'Int' has no member 'Two'}}
+  var _ : MaybeInt = 0 > 3 ? .none : .soma(3) // expected-error {{type 'MaybeInt' has no member 'soma'; did you mean 'some'?}}
 }
 
 func test3a(_ a: ZeroOneTwoThree) {
@@ -97,7 +98,9 @@ func test3a(_ a: ZeroOneTwoThree) {
 
   // Overload resolution can resolve this to the right constructor.
   var h = ZeroOneTwoThree(1)
-
+  
+  var i = 0 > 3 ? .none : .some(3) // expected-error {{reference to member 'none' cannot be resolved without a contextual type}}
+  
   test3a;  // expected-error {{unused function}}
   .Zero   // expected-error {{reference to member 'Zero' cannot be resolved without a contextual type}}
   test3a   // expected-error {{unused function}}
@@ -161,9 +164,9 @@ func test5(_ myorigin: CGPoint) {
   // Dot syntax.
   _ = x2.origin.x
   _ = x1.size.area()
-  _ = (r : x1.size).r.area()
+  _ = (r : x1.size).r.area() // expected-error {{cannot create a single-element tuple with an element label}}
   _ = x1.size.area()
-  _ = (r : x1.size).r.area()
+  _ = (r : x1.size).r.area() // expected-error {{cannot create a single-element tuple with an element label}}
   
   _ = x1.area
 
@@ -219,8 +222,9 @@ func f() {
 }
 
 func union_error(_ a: ZeroOneTwoThree) {
-  var _ : ZeroOneTwoThree = .Zero(1) // expected-error {{contextual member 'Zero' has no associated value}}
-  var _ : ZeroOneTwoThree = .One // expected-error {{contextual member 'One' expects argument of type 'Int'}}
+  var _ : ZeroOneTwoThree = .Zero(1) // expected-error {{enum case 'Zero' has no associated values}}
+  var _ : ZeroOneTwoThree = .Zero() // expected-error {{enum case 'Zero' has no associated values}} {{34-36=}}
+  var _ : ZeroOneTwoThree = .One // expected-error {{member 'One' expects argument of type 'Int'}}
   var _ : ZeroOneTwoThree = .foo // expected-error {{type 'ZeroOneTwoThree' has no member 'foo'}}
   var _ : ZeroOneTwoThree = .foo() // expected-error {{type 'ZeroOneTwoThree' has no member 'foo'}}
 }
@@ -305,3 +309,136 @@ enum E21269142 {  // expected-note {{did you mean to specify a raw type on the e
 
 print(E21269142.Foo.rawValue)  // expected-error {{value of type 'E21269142' has no member 'rawValue'}}
 
+// Check that typo correction does something sensible with synthesized members.
+enum SyntheticMember { // expected-note {{property 'hashValue' is implicitly declared}}
+  case Foo
+}
+
+func useSynthesizedMember() {
+  print(SyntheticMember.Foo.hasValue) // expected-error {{value of type 'SyntheticMember' has no member 'hasValue'; did you mean 'hashValue'?}}
+}
+
+// Non-materializable argument type
+enum Lens<T> {
+  case foo(inout T) // expected-error {{'inout' may only be used on parameters}}
+  case bar(inout T, Int) // expected-error {{'inout' may only be used on parameters}}
+
+  case baz((inout T) -> ()) // ok
+  case quux((inout T, inout T) -> ()) // ok
+}
+
+// In the long term, these should be legal, but we don't support them right
+// now and we shouldn't pretend to.
+// rdar://46684504
+enum HasVariadic {
+  case variadic(x: Int...) // expected-error {{variadic enum cases are not supported}}
+}
+
+// SR-2176
+enum Foo {
+  case bar
+  case none
+}
+
+let _: Foo? = .none // expected-warning {{assuming you mean 'Optional<Foo>.none'; did you mean 'Foo.none' instead?}}
+// expected-note@-1 {{explicitly specify 'Optional' to silence this warning}} {{15-15=Optional}}
+// expected-note@-2 {{use 'Foo.none' instead}} {{15-15=Foo}}
+let _: Foo?? = .none // expected-warning {{assuming you mean 'Optional<Optional<Foo>>.none'; did you mean 'Foo.none' instead?}}
+// expected-note@-1 {{explicitly specify 'Optional' to silence this warning}} {{16-16=Optional}}
+// expected-note@-2 {{use 'Foo.none' instead}} {{16-16=Foo}}
+
+let _: Foo = .none // ok
+let _: Foo = .bar // ok
+let _: Foo? = .bar // ok
+let _: Foo?? = .bar // ok
+let _: Foo = Foo.bar // ok
+let _: Foo = Foo.none // ok
+let _: Foo? = Foo.none // ok
+let _: Foo?? = Foo.none // ok
+
+func baz(_: Foo?) {}
+baz(.none) // expected-warning {{assuming you mean 'Optional<Foo>.none'; did you mean 'Foo.none' instead?}}
+// expected-note@-1 {{explicitly specify 'Optional' to silence this warning}} {{5-5=Optional}}
+// expected-note@-2 {{use 'Foo.none' instead}} {{5-5=Foo}}
+
+let test: Foo? = .none // expected-warning {{assuming you mean 'Optional<Foo>.none'; did you mean 'Foo.none' instead?}}
+// expected-note@-1 {{explicitly specify 'Optional' to silence this warning}} {{18-18=Optional}}
+// expected-note@-2 {{use 'Foo.none' instead}} {{18-18=Foo}}
+let answer = test == .none // expected-warning {{assuming you mean 'Optional<Foo>.none'; did you mean 'Foo.none' instead?}}
+// expected-note@-1 {{explicitly specify 'Optional' to silence this warning}} {{22-22=Optional}}
+// expected-note@-2 {{use 'Foo.none' instead}} {{22-22=Foo}}
+
+enum Bar {
+  case baz
+}
+
+let _: Bar? = .none // ok
+let _: Bar?? = .none // ok
+let _: Bar? = .baz // ok
+let _: Bar?? = .baz // ok
+let _: Bar = .baz // ok
+
+enum AnotherFoo {
+  case none(Any)
+}
+
+let _: AnotherFoo? = .none // ok
+let _: AnotherFoo? = .none(0) // ok
+
+struct FooStruct {
+  static let none = FooStruct()
+  static let one = FooStruct()
+}
+
+let _: FooStruct? = .none // expected-warning {{assuming you mean 'Optional<FooStruct>.none'; did you mean 'FooStruct.none' instead?}}
+// expected-note@-1 {{explicitly specify 'Optional' to silence this warning}} {{21-21=Optional}}
+// expected-note@-2 {{use 'FooStruct.none' instead}} {{21-21=FooStruct}}
+let _: FooStruct?? = .none // expected-warning {{assuming you mean 'Optional<Optional<FooStruct>>.none'; did you mean 'FooStruct.none' instead?}}
+// expected-note@-1 {{explicitly specify 'Optional' to silence this warning}} {{22-22=Optional}}
+// expected-note@-2 {{use 'FooStruct.none' instead}} {{22-22=FooStruct}}
+let _: FooStruct = .none // ok
+let _: FooStruct = .one // ok
+let _: FooStruct? = .one // ok
+let _: FooStruct?? = .one // ok
+
+struct NestedBazEnum {
+  enum Baz {
+    case one
+    case none
+  }
+}
+
+let _: NestedBazEnum.Baz? = .none // expected-warning {{assuming you mean 'Optional<NestedBazEnum.Baz>.none'; did you mean 'NestedBazEnum.Baz.none' instead?}}
+// expected-note@-1 {{explicitly specify 'Optional' to silence this warning}} {{29-29=Optional}}
+// expected-note@-2 {{use 'NestedBazEnum.Baz.none' instead}} {{29-29=NestedBazEnum.Baz}}
+let _: NestedBazEnum.Baz?? = .none // expected-warning {{assuming you mean 'Optional<Optional<NestedBazEnum.Baz>>.none'; did you mean 'NestedBazEnum.Baz.none' instead?}}
+// expected-note@-1 {{explicitly specify 'Optional' to silence this warning}} {{30-30=Optional}}
+// expected-note@-2 {{use 'NestedBazEnum.Baz.none' instead}} {{30-30=NestedBazEnum.Baz}}
+let _: NestedBazEnum.Baz = .none // ok
+let _: NestedBazEnum.Baz = .one // ok
+let _: NestedBazEnum.Baz? = .one // ok
+let _: NestedBazEnum.Baz?? = .one // ok
+
+struct NestedBazEnumGeneric {
+  enum Baz<T> {
+    case one
+    case none
+  }
+}
+
+let _: NestedBazEnumGeneric.Baz<Int>? = .none // expected-warning {{assuming you mean 'Optional<NestedBazEnumGeneric.Baz<Int>>.none'; did you mean 'NestedBazEnumGeneric.Baz<Int>.none' instead?}}
+// expected-note@-1 {{explicitly specify 'Optional' to silence this warning}} {{41-41=Optional}}
+// expected-note@-2 {{use 'NestedBazEnumGeneric.Baz<Int>.none' instead}} {{41-41=NestedBazEnumGeneric.Baz<Int>}}
+let _: NestedBazEnumGeneric.Baz<Int>?? = .none // expected-warning {{assuming you mean 'Optional<Optional<NestedBazEnumGeneric.Baz<Int>>>.none'; did you mean 'NestedBazEnumGeneric.Baz<Int>.none' instead?}}
+// expected-note@-1 {{explicitly specify 'Optional' to silence this warning}} {{42-42=Optional}}
+// expected-note@-2 {{use 'NestedBazEnumGeneric.Baz<Int>.none' instead}} {{42-42=NestedBazEnumGeneric.Baz<Int>}}
+let _: NestedBazEnumGeneric.Baz<Int> = .none // ok
+let _: NestedBazEnumGeneric.Baz<Int> = .one // ok
+let _: NestedBazEnumGeneric.Baz<Int>? = .one // ok
+let _: NestedBazEnumGeneric.Baz<Int>?? = .one // ok
+
+class C {}
+protocol P {}
+
+enum E : C & P {}
+// expected-error@-1 {{inheritance from class-constrained protocol composition type 'C & P'}}

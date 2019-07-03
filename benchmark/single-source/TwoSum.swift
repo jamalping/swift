@@ -2,17 +2,23 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
 // This test is solves 2SUM problem:
 // Given an array and a number C, find elements A and B such that A+B = C
 import TestsUtils
+
+public let TwoSum = BenchmarkInfo(
+  name: "TwoSum",
+  runFunction: run_TwoSum,
+  tags: [.validation, .api, .Dictionary, .Array, .algorithm],
+  legacyFactor: 2)
 
 let array = [
   959,  81, 670, 727, 416, 171, 401, 398, 707, 596, 200,   9, 414,  98,  43,
@@ -56,7 +62,7 @@ public func run_TwoSum(_ N: Int) {
   var i1: Int?
   var i2: Int?
   var Dict: Dictionary<Int, Int> = [:]
-  for _ in 1...2*N {
+  for _ in 1...N {
     for Sum in 500..<600 {
       Dict = [:]
       i1 = nil
@@ -69,11 +75,8 @@ public func run_TwoSum(_ N: Int) {
         }
         Dict[array[n]] = n
       }
-      CheckResults(i1 != nil && i2 != nil,
-                   "Incorrect results in TwoSum: i1 or i2 wasn't found.")
-      CheckResults(Sum == array[i1!] + array[i2!],
-                   "Incorrect results in TwoSum: Sum: \(Sum), " +
-                   "array[i1]: \(array[i1!]), array[i2]: \(array[i2!]).")
+      CheckResults(i1 != nil && i2 != nil)
+      CheckResults(Sum == array[i1!] + array[i2!])
     }
   }
 }

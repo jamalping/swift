@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -100,11 +100,16 @@ private:
 
   /// The entry point to the transformation.
   void run() override {
-    DEBUG(llvm::dbgs() << "** StackPromotion **\n");
+    LLVM_DEBUG(llvm::dbgs() << "** StackPromotion **\n");
 
     bool Changed = false;
 
     SILFunction *F = getFunction();
+
+    // FIXME: Add ownership support.
+    if (F->hasOwnership())
+      return;
+
     for (SILBasicBlock &BB : *F) {
       if (auto *SEI = dyn_cast<SwitchEnumInst>(BB.getTerminator())) {
         Changed |= tryOptimize(SEI);
@@ -115,7 +120,6 @@ private:
     }
   }
 
-  StringRef getName() override { return "ConditionForwarding"; }
 };
 
 /// Returns true if all instructions of block \p BB are safe to be moved
@@ -150,7 +154,7 @@ static bool hasNoRelevantSideEffects(SILBasicBlock *BB) {
 bool ConditionForwarding::tryOptimize(SwitchEnumInst *SEI) {
   // The switch_enum argument (an Enum) must be a block argument at the merging
   // point of the condition's destinations.
-  SILArgument *Arg = dyn_cast<SILArgument>(SEI->getOperand());
+  auto *Arg = dyn_cast<SILArgument>(SEI->getOperand());
   if (!Arg)
     return false;
 
@@ -161,10 +165,10 @@ bool ConditionForwarding::tryOptimize(SwitchEnumInst *SEI) {
     if (ArgUser == SEI)
       continue;
 
-    if (isDebugInst(ArgUser))
+    if (ArgUser->isDebugInstruction())
       continue;
 
-    if (ArgUser->getParent()->getSinglePredecessor() == SEI->getParent()) {
+    if (ArgUser->getParent()->getSinglePredecessorBlock() == SEI->getParent()) {
       continue;
     }
     return false;
@@ -173,7 +177,7 @@ bool ConditionForwarding::tryOptimize(SwitchEnumInst *SEI) {
   // No other values, beside the Enum, should be passed from the condition's
   // destinations to the merging block.
   SILBasicBlock *BB = Arg->getParent();
-  if (BB->getNumBBArg() != 1)
+  if (BB->getNumArguments() != 1)
     return false;
 
   llvm::SmallVector<SILBasicBlock *, 4> PredBlocks;
@@ -181,8 +185,8 @@ bool ConditionForwarding::tryOptimize(SwitchEnumInst *SEI) {
   // Check if all predecessors of the merging block pass an Enum to its argument
   // and have a single predecessor - the block of the condition.
   SILBasicBlock *CommonBranchBlock = nullptr;
-  for (SILBasicBlock *Pred : BB->getPreds()) {
-    SILBasicBlock *PredPred = Pred->getSinglePredecessor();
+  for (SILBasicBlock *Pred : BB->getPredecessorBlocks()) {
+    SILBasicBlock *PredPred = Pred->getSinglePredecessorBlock();
     if (!PredPred)
       return false;
 
@@ -228,13 +232,13 @@ bool ConditionForwarding::tryOptimize(SwitchEnumInst *SEI) {
   while (!Arg->use_empty()) {
     Operand *ArgUse = *Arg->use_begin();
     SILInstruction *ArgUser = ArgUse->getUser();
-    if (isDebugInst(ArgUser)) {
+    if (ArgUser->isDebugInstruction()) {
       // Don't care about debug instructions. Just remove them.
       ArgUser->eraseFromParent();
       continue;
     }
     SILBasicBlock *UseBlock = ArgUser->getParent();
-    if (UseBlock->getSinglePredecessor() == SEI->getParent()) {
+    if (UseBlock->getSinglePredecessorBlock() == SEI->getParent()) {
       // The Arg is used in a successor block of the switch_enum. To keep things
       // simple, we just create a new block argument and later (see below) we
       // pass the corresponding enum to the block. This argument will be deleted
@@ -242,11 +246,12 @@ bool ConditionForwarding::tryOptimize(SwitchEnumInst *SEI) {
       SILArgument *NewArg = nullptr;
       if (NeedEnumArg.insert(UseBlock).second) {
         // The first Enum use in this UseBlock.
-        NewArg = UseBlock->createBBArg(Arg->getType());
+        NewArg = UseBlock->createPhiArgument(Arg->getType(),
+                                             ValueOwnershipKind::Owned);
       } else {
         // We already inserted the Enum argument for this UseBlock.
-        assert(UseBlock->getNumBBArg() >= 1);
-        NewArg = UseBlock->getBBArg(UseBlock->getNumBBArg() - 1);
+        assert(UseBlock->getNumArguments() >= 1);
+        NewArg = UseBlock->getArgument(UseBlock->getNumArguments() - 1);
       }
       ArgUse->set(NewArg);
       continue;
@@ -254,7 +259,7 @@ bool ConditionForwarding::tryOptimize(SwitchEnumInst *SEI) {
     assert(ArgUser == SEI);
     // We delete the SEI later anyway. Just get rid of the Arg use.
     ArgUse->set(SILUndef::get(SEI->getOperand()->getType(),
-                              getFunction()->getModule()));
+                              *getFunction()));
   }
 
   // Redirect the predecessors of the condition's merging block to the
@@ -267,7 +272,7 @@ bool ConditionForwarding::tryOptimize(SwitchEnumInst *SEI) {
     SILBuilder B(BI);
     llvm::SmallVector<SILValue, 2> BranchArgs;
     unsigned HasEnumArg = NeedEnumArg.count(SEDest);
-    if (SEDest->getNumBBArg() == 1 + HasEnumArg) {
+    if (SEDest->getNumArguments() == 1 + HasEnumArg) {
       // The successor block has an original argument, which is the Enum's
       // payload.
       BranchArgs.push_back(EI->getOperand());
@@ -286,7 +291,7 @@ bool ConditionForwarding::tryOptimize(SwitchEnumInst *SEI) {
   B.createBranch(Condition->getLoc(), BB);
   Condition->moveBefore(SEI);
   SEI->eraseFromParent();
-  BB->eraseBBArg(0);
+  BB->eraseArgument(0);
   return true;
 }
 

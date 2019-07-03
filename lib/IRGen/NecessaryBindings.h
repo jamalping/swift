@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -27,6 +27,7 @@
 
 namespace swift {
   class CanType;
+  enum class MetadataState : size_t;
   class ProtocolDecl;
   class ProtocolConformanceRef;
 
@@ -48,8 +49,7 @@ public:
   /// signature.
   static NecessaryBindings forFunctionInvocations(IRGenModule &IGM,
                                                   CanSILFunctionType origType,
-                                                  CanSILFunctionType substType,
-                                                  ArrayRef<Substitution> subs);
+                                                  SubstitutionMap subs);
   
   /// Add whatever information is necessary to reconstruct type metadata
   /// for the given type.
@@ -79,7 +79,7 @@ public:
   void save(IRGenFunction &IGF, Address buffer) const;
 
   /// Restore the necessary bindings from the given buffer.
-  void restore(IRGenFunction &IGF, Address buffer) const;
+  void restore(IRGenFunction &IGF, Address buffer, MetadataState state) const;
 
   const llvm::SetVector<GenericRequirement> &getRequirements() const {
     return Requirements;

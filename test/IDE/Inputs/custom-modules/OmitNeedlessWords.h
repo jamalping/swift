@@ -7,15 +7,25 @@
 @interface SEGreebieArray : NSObject
 @end
 
+typedef NS_OPTIONS(NSUInteger, OMWWobbleOptions) {
+  OMWWobbleSideToSide = 0x01,
+  OMWWobbleBackAndForth = 0x02,
+  OMWWobbleToXMLHex = 0x04
+};
+
 @interface OmitNeedlessWords : NSObject
 -(void)jumpToUrl:(nonnull NSURL *)url;
+-(void)jumpToGuid:(nonnull NSGUID *)guid;
+-(void)jumpAgainToGUID:(nonnull NSGUID *)guid;
 -(BOOL)objectIsCompatibleWithObject:(nonnull id)other;
 -(void)insetByX:(NSInteger)x y:(NSInteger)y;
 -(void)setIndirectlyToValue:(nonnull id)object;
 -(void)jumpToTop:(nonnull id)sender;
 -(void)removeWithNoRemorse:(nonnull id)object;
 -(void)bookmarkWithURLs:(nonnull NSArray<NSURL *> *)urls;
+-(void)bookmarkWithGUIDs:(nonnull NSArray<NSGUID *> *)guids;
 -(void)saveToURL:(nonnull NSURL *)url forSaveOperation:(NSInteger)operation;
+-(void)saveToGUID:(nonnull NSGUID *)guid forSaveOperation:(NSInteger)operation;
 -(void)indexWithItemNamed:(nonnull NSString *)name;
 -(void)methodAndReturnError:(NSError **)error;
 -(nullable Class)typeOfString:(nonnull NSString *)string;
@@ -34,6 +44,8 @@
 -(void)doSomethingSeparatedBy:(NSInteger)value;
 +(nonnull OmitNeedlessWords *)currentOmitNeedlessWords;
 +(void)setCurrentOmitNeedlessWords:(nonnull OmitNeedlessWords *)value;
+-(void)compilerPlugInValue:(NSInteger)value;
+-(void)wobbleWithOptions:(OMWWobbleOptions)options;
 @end
 
 @interface ABCDoodle : NSObject

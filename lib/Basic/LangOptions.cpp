@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -16,22 +16,29 @@
 //===----------------------------------------------------------------------===//
 
 #include "swift/Basic/LangOptions.h"
+#include "swift/Basic/Platform.h"
 #include "swift/Basic/Range.h"
 #include "swift/Config.h"
+#include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/raw_ostream.h"
+#include <limits.h>
 
 using namespace swift;
 
 static const StringRef SupportedConditionalCompilationOSs[] = {
   "OSX",
+  "macOS",
   "tvOS",
   "watchOS",
   "iOS",
   "Linux",
   "FreeBSD",
   "Windows",
-  "Android"
+  "Android",
+  "PS4",
+  "Cygwin",
+  "Haiku",
 };
 
 static const StringRef SupportedConditionalCompilationArches[] = {
@@ -49,37 +56,88 @@ static const StringRef SupportedConditionalCompilationEndianness[] = {
   "big"
 };
 
-bool LangOptions::isPlatformConditionOSSupported(StringRef OSName) {
-  auto foundIt = std::find(std::begin(SupportedConditionalCompilationOSs),
-                           std::end(SupportedConditionalCompilationOSs),
-                           OSName);
-  return foundIt != std::end(SupportedConditionalCompilationOSs);
+static const StringRef SupportedConditionalCompilationRuntimes[] = {
+  "_ObjC",
+  "_Native",
+};
+
+static const StringRef SupportedConditionalCompilationTargetEnvironments[] = {
+  "simulator",
+};
+
+template <size_t N>
+bool contains(const StringRef (&Array)[N], const StringRef &V,
+              std::vector<StringRef> &suggestions) {
+  // Compare against known values, ignoring case to avoid penalizing
+  // characters with incorrect case.
+  unsigned minDistance = std::numeric_limits<unsigned>::max();
+  std::string lower = V.lower();
+  for (const StringRef& candidate : Array) {
+    if (candidate == V) {
+      suggestions.clear();
+      return true;
+    }
+    unsigned distance = StringRef(lower).edit_distance(candidate.lower());
+    if (distance < minDistance) {
+      suggestions.clear();
+      minDistance = distance;
+    }
+    if (distance == minDistance)
+      suggestions.emplace_back(candidate);
+  }
+  return false;
 }
 
-bool
-LangOptions::isPlatformConditionArchSupported(StringRef ArchName) {
-  auto foundIt = std::find(std::begin(SupportedConditionalCompilationArches),
-                           std::end(SupportedConditionalCompilationArches),
-                           ArchName);
-  return foundIt != std::end(SupportedConditionalCompilationArches);
-}
-
-bool
-LangOptions::isPlatformConditionEndiannessSupported(StringRef Endianness) {
-  auto foundIt = std::find(std::begin(SupportedConditionalCompilationEndianness),
-                           std::end(SupportedConditionalCompilationEndianness),
-                           Endianness);
-  return foundIt != std::end(SupportedConditionalCompilationEndianness);
+bool LangOptions::
+checkPlatformConditionSupported(PlatformConditionKind Kind, StringRef Value,
+                                std::vector<StringRef> &suggestions) {
+  switch (Kind) {
+  case PlatformConditionKind::OS:
+    return contains(SupportedConditionalCompilationOSs, Value,
+                    suggestions);
+  case PlatformConditionKind::Arch:
+    return contains(SupportedConditionalCompilationArches, Value,
+                    suggestions);
+  case PlatformConditionKind::Endianness:
+    return contains(SupportedConditionalCompilationEndianness, Value,
+                    suggestions);
+  case PlatformConditionKind::Runtime:
+    return contains(SupportedConditionalCompilationRuntimes, Value,
+                    suggestions);
+  case PlatformConditionKind::TargetEnvironment:
+    return contains(SupportedConditionalCompilationTargetEnvironments, Value,
+                    suggestions);
+  case PlatformConditionKind::CanImport:
+    // All importable names are valid.
+    // FIXME: Perform some kind of validation of the string?
+    return true;
+  }
+  llvm_unreachable("Unhandled enum value");
 }
 
 StringRef
-LangOptions::getPlatformConditionValue(StringRef Name) const {
+LangOptions::getPlatformConditionValue(PlatformConditionKind Kind) const {
   // Last one wins.
   for (auto &Opt : reversed(PlatformConditionValues)) {
-    if (Opt.first == Name)
+    if (Opt.first == Kind)
       return Opt.second;
   }
   return StringRef();
+}
+
+bool LangOptions::
+checkPlatformCondition(PlatformConditionKind Kind, StringRef Value) const {
+  // Check a special case that "macOS" is an alias of "OSX".
+  if (Kind == PlatformConditionKind::OS && Value == "macOS")
+    return checkPlatformCondition(Kind, "OSX");
+
+  for (auto &Opt : reversed(PlatformConditionValues)) {
+    if (Opt.first == Kind)
+      if (Opt.second == Value)
+        return true;
+  }
+
+  return false;
 }
 
 bool LangOptions::isCustomConditionalCompilationFlagSet(StringRef Name) const {
@@ -113,24 +171,29 @@ std::pair<bool, bool> LangOptions::setTarget(llvm::Triple triple) {
 
   // Set the "os" platform condition.
   if (Target.isMacOSX())
-    addPlatformConditionValue("os", "OSX");
-  else if (triple.isTvOS())
-    addPlatformConditionValue("os", "tvOS");
-  else if (triple.isWatchOS())
-    addPlatformConditionValue("os", "watchOS");
-  else if (triple.isiOS())
-    addPlatformConditionValue("os", "iOS");
-  else if (triple.isAndroid())
-    addPlatformConditionValue("os", "Android");
-  else if (triple.isOSLinux())
-    addPlatformConditionValue("os", "Linux");
-  else if (triple.isOSFreeBSD())
-    addPlatformConditionValue("os", "FreeBSD");
-  else if (triple.isOSWindows())
-    addPlatformConditionValue("os", "Windows");
-  else {
+    addPlatformConditionValue(PlatformConditionKind::OS, "OSX");
+  else if (Target.isTvOS())
+    addPlatformConditionValue(PlatformConditionKind::OS, "tvOS");
+  else if (Target.isWatchOS())
+    addPlatformConditionValue(PlatformConditionKind::OS, "watchOS");
+  else if (Target.isiOS())
+    addPlatformConditionValue(PlatformConditionKind::OS, "iOS");
+  else if (Target.isAndroid())
+    addPlatformConditionValue(PlatformConditionKind::OS, "Android");
+  else if (Target.isOSLinux())
+    addPlatformConditionValue(PlatformConditionKind::OS, "Linux");
+  else if (Target.isOSFreeBSD())
+    addPlatformConditionValue(PlatformConditionKind::OS, "FreeBSD");
+  else if (Target.isWindowsCygwinEnvironment())
+    addPlatformConditionValue(PlatformConditionKind::OS, "Cygwin");
+  else if (Target.isOSWindows())
+    addPlatformConditionValue(PlatformConditionKind::OS, "Windows");
+  else if (Target.isPS4())
+    addPlatformConditionValue(PlatformConditionKind::OS, "PS4");
+  else if (Target.isOSHaiku())
+    addPlatformConditionValue(PlatformConditionKind::OS, "Haiku");
+  else
     UnsupportedOS = true;
-  }
 
   bool UnsupportedArch = false;
 
@@ -138,25 +201,25 @@ std::pair<bool, bool> LangOptions::setTarget(llvm::Triple triple) {
   switch (Target.getArch()) {
   case llvm::Triple::ArchType::arm:
   case llvm::Triple::ArchType::thumb:
-    addPlatformConditionValue("arch", "arm");
+    addPlatformConditionValue(PlatformConditionKind::Arch, "arm");
     break;
   case llvm::Triple::ArchType::aarch64:
-    addPlatformConditionValue("arch", "arm64");
+    addPlatformConditionValue(PlatformConditionKind::Arch, "arm64");
     break;
   case llvm::Triple::ArchType::ppc64:
-    addPlatformConditionValue("arch", "powerpc64");
+    addPlatformConditionValue(PlatformConditionKind::Arch, "powerpc64");
     break;
   case llvm::Triple::ArchType::ppc64le:
-    addPlatformConditionValue("arch", "powerpc64le");
+    addPlatformConditionValue(PlatformConditionKind::Arch, "powerpc64le");
     break;
   case llvm::Triple::ArchType::x86:
-    addPlatformConditionValue("arch", "i386");
+    addPlatformConditionValue(PlatformConditionKind::Arch, "i386");
     break;
   case llvm::Triple::ArchType::x86_64:
-    addPlatformConditionValue("arch", "x86_64");
+    addPlatformConditionValue(PlatformConditionKind::Arch, "x86_64");
     break;
   case llvm::Triple::ArchType::systemz:
-    addPlatformConditionValue("arch", "s390x");
+    addPlatformConditionValue(PlatformConditionKind::Arch, "s390x");
     break;
   default:
     UnsupportedArch = true;
@@ -169,25 +232,25 @@ std::pair<bool, bool> LangOptions::setTarget(llvm::Triple triple) {
   switch (Target.getArch()) {
   case llvm::Triple::ArchType::arm:
   case llvm::Triple::ArchType::thumb:
-    addPlatformConditionValue("_endian", "little");
+    addPlatformConditionValue(PlatformConditionKind::Endianness, "little");
     break;
   case llvm::Triple::ArchType::aarch64:
-    addPlatformConditionValue("_endian", "little");
+    addPlatformConditionValue(PlatformConditionKind::Endianness, "little");
     break;
   case llvm::Triple::ArchType::ppc64:
-    addPlatformConditionValue("_endian", "big");
+    addPlatformConditionValue(PlatformConditionKind::Endianness, "big");
     break;
   case llvm::Triple::ArchType::ppc64le:
-    addPlatformConditionValue("_endian", "little");
+    addPlatformConditionValue(PlatformConditionKind::Endianness, "little");
     break;
   case llvm::Triple::ArchType::x86:
-    addPlatformConditionValue("_endian", "little");
+    addPlatformConditionValue(PlatformConditionKind::Endianness, "little");
     break;
   case llvm::Triple::ArchType::x86_64:
-    addPlatformConditionValue("_endian", "little");
+    addPlatformConditionValue(PlatformConditionKind::Endianness, "little");
     break;
   case llvm::Triple::ArchType::systemz:
-    addPlatformConditionValue("_endian", "big");
+    addPlatformConditionValue(PlatformConditionKind::Endianness, "big");
     break;
   default:
     llvm_unreachable("undefined architecture endianness");
@@ -195,13 +258,50 @@ std::pair<bool, bool> LangOptions::setTarget(llvm::Triple triple) {
 
   // Set the "runtime" platform condition.
   if (EnableObjCInterop)
-    addPlatformConditionValue("_runtime", "_ObjC");
+    addPlatformConditionValue(PlatformConditionKind::Runtime, "_ObjC");
   else
-    addPlatformConditionValue("_runtime", "_Native");
+    addPlatformConditionValue(PlatformConditionKind::Runtime, "_Native");
+
+  // Set the "targetEnvironment" platform condition if targeting a simulator
+  // environment. Otherwise _no_ value is present for targetEnvironment; it's
+  // an optional disambiguating refinement of the triple.
+  if (swift::tripleIsAnySimulator(Target))
+    addPlatformConditionValue(PlatformConditionKind::TargetEnvironment,
+                              "simulator");
 
   // If you add anything to this list, change the default size of
   // PlatformConditionValues to not require an extra allocation
   // in the common case.
 
   return { false, false };
+}
+
+bool LangOptions::doesTargetSupportObjCMetadataUpdateCallback() const {
+  if (Target.isMacOSX())
+    return !Target.isMacOSXVersionLT(10, 14, 4);
+  if (Target.isiOS()) // also returns true on tvOS
+    return !Target.isOSVersionLT(12, 2);
+  if (Target.isWatchOS())
+    return !Target.isOSVersionLT(5, 2);
+
+  // Don't assert if we're running on a non-Apple platform; we still
+  // want to allow running tests that -enable-objc-interop.
+  return false;
+}
+
+bool LangOptions::doesTargetSupportObjCGetClassHook() const {
+  return doesTargetSupportObjCMetadataUpdateCallback();
+}
+
+bool LangOptions::doesTargetSupportObjCClassStubs() const {
+  if (Target.isMacOSX())
+    return !Target.isMacOSXVersionLT(10, 15);
+  if (Target.isiOS()) // also returns true on tvOS
+    return !Target.isOSVersionLT(13);
+  if (Target.isWatchOS())
+    return !Target.isOSVersionLT(6);
+
+  // Don't assert if we're running on a non-Apple platform; we still
+  // want to allow running tests that -enable-objc-interop.
+  return false;
 }

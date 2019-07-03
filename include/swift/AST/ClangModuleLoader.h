@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -17,11 +17,14 @@
 
 namespace clang {
 class ASTContext;
+class CompilerInstance;
 class Preprocessor;
 class Sema;
 } // namespace clang
 
 namespace swift {
+
+class DeclContext;
 
 class ClangModuleLoader : public ModuleLoader {
 private:
@@ -32,6 +35,7 @@ public:
   virtual clang::ASTContext &getClangASTContext() const = 0;
   virtual clang::Preprocessor &getClangPreprocessor() const = 0;
   virtual clang::Sema &getClangSema() const = 0;
+  virtual const clang::CompilerInstance &getClangInstance() const = 0;
   virtual void printStatistics() const = 0;
 
   /// Returns the module that contains imports and declarations from all loaded
@@ -42,7 +46,18 @@ public:
   /// -I or -F.
   ///
   /// \returns true if there was an error adding the search path.
-  virtual bool addSearchPath(StringRef newSearchPath, bool isFramework) = 0;
+  virtual bool addSearchPath(StringRef newSearchPath, bool isFramework,
+                             bool isSystem) = 0;
+
+  /// Determine whether \c overlayDC is within an overlay module for the
+  /// imported context enclosing \c importedDC.
+  ///
+  /// This routine is used for various hacks that are only permitted within
+  /// overlays of imported modules, e.g., Objective-C bridging conformances.
+  virtual bool isInOverlayModuleForImportedModule(
+                                            const DeclContext *overlayDC,
+                                            const DeclContext *importedDC) = 0;
+
 };
 
 } // namespace swift

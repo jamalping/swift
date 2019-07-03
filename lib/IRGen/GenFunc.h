@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -41,24 +41,19 @@ namespace irgen {
   void emitBlockHeader(IRGenFunction &IGF,
                        Address storage,
                        CanSILBlockStorageType blockTy,
-                       llvm::Function *invokeFunction,
+                       llvm::Constant *invokeFunction,
                        CanSILFunctionType invokeTy,
                        ForeignFunctionInfo foreignInfo);
 
   /// Emit a partial application thunk for a function pointer applied to a
   /// partial set of argument values.
-  void emitFunctionPartialApplication(IRGenFunction &IGF,
-                                      SILFunction &SILFn,
-                                      llvm::Value *fnPtr,
-                                      llvm::Value *fnContext,
-                                      Explosion &args,
-                                      ArrayRef<SILParameterInfo> argTypes,
-                                      ArrayRef<Substitution> subs,
-                                      CanSILFunctionType origType,
-                                      CanSILFunctionType substType,
-                                      CanSILFunctionType outType,
-                                      Explosion &out);
-  
+  Optional<StackAddress> emitFunctionPartialApplication(
+      IRGenFunction &IGF, SILFunction &SILFn, const FunctionPointer &fnPtr,
+      llvm::Value *fnContext, Explosion &args,
+      ArrayRef<SILParameterInfo> argTypes, SubstitutionMap subs,
+      CanSILFunctionType origType, CanSILFunctionType substType,
+      CanSILFunctionType outType, Explosion &out, bool isOutlined);
+
 } // end namespace irgen
 } // end namespace swift
 

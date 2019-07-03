@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -22,8 +22,9 @@
 #include "llvm/Support/PrettyStackTrace.h"
 
 namespace swift {
-  class ASTContext;
-  class SILFunction;
+class ASTContext;
+class SILFunction;
+class SILNode;
 
 void printSILLocationDescription(llvm::raw_ostream &out, SILLocation loc,
                                  ASTContext &ctx);
@@ -44,11 +45,25 @@ public:
 
 /// Observe that we are doing some processing of a SIL function.
 class PrettyStackTraceSILFunction : public llvm::PrettyStackTraceEntry {
-  SILFunction *TheFn;
+  const SILFunction *TheFn;
   const char *Action;
 public:
-  PrettyStackTraceSILFunction(const char *action, SILFunction *F)
+  PrettyStackTraceSILFunction(const char *action, const SILFunction *F)
     : TheFn(F), Action(action) {}
+  virtual void print(llvm::raw_ostream &OS) const;
+protected:
+  void printFunctionInfo(llvm::raw_ostream &out) const;
+};
+
+/// Observe that we are visiting SIL nodes.
+class PrettyStackTraceSILNode : public llvm::PrettyStackTraceEntry {
+  const SILNode *Node;
+  const char *Action;
+
+public:
+  PrettyStackTraceSILNode(const char *action, const SILNode *node)
+    : Node(node), Action(action) {}
+
   virtual void print(llvm::raw_ostream &OS) const;
 };
 

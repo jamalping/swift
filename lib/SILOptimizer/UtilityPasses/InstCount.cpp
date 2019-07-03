@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -44,6 +44,7 @@ STATISTIC(TotalExternalFuncDecls, "Number of external funcs declarations");
 
 // Linkage statistics
 STATISTIC(TotalPublicFuncs, "Number of public funcs");
+STATISTIC(TotalPublicNonABIFuncs, "Number of public non-ABI funcs");
 STATISTIC(TotalHiddenFuncs, "Number of hidden funcs");
 STATISTIC(TotalPrivateFuncs, "Number of private funcs");
 STATISTIC(TotalSharedFuncs, "Number of shared funcs");
@@ -52,18 +53,14 @@ STATISTIC(TotalHiddenExternalFuncs, "Number of hidden external funcs");
 STATISTIC(TotalPrivateExternalFuncs, "Number of private external funcs");
 STATISTIC(TotalSharedExternalFuncs, "Number of shared external funcs");
 
-// Specialization Statistics
-STATISTIC(TotalSpecializedInsts, "Number of instructions (of all types) in "
-          "specialized functions");
-
 // Individual instruction statistics
-#define INST(Id, Parent, MemBehavior, ReleasingBehavior) \
-  STATISTIC(Num ## Id, "Number of " #Id);
+#define INST(Id, Parent) \
+  STATISTIC(Num##Id, "Number of " #Id);
 #include "swift/SIL/SILNodes.def"
 
 namespace {
 
-struct InstCountVisitor : SILVisitor<InstCountVisitor> {
+struct InstCountVisitor : SILInstructionVisitor<InstCountVisitor> {
   // We store these locally so that we do not continually check if the function
   // is external or not. Instead, we just check once at the end and accumulate.
   unsigned InstCount = 0;
@@ -71,16 +68,16 @@ struct InstCountVisitor : SILVisitor<InstCountVisitor> {
 
   void visitSILBasicBlock(SILBasicBlock *BB) {
     BlockCount++;
-    SILVisitor<InstCountVisitor>::visitSILBasicBlock(BB);
+    SILInstructionVisitor<InstCountVisitor>::visitSILBasicBlock(BB);
   }
 
   void visitSILFunction(SILFunction *F) {
-    SILVisitor<InstCountVisitor>::visitSILFunction(F);
+    SILInstructionVisitor<InstCountVisitor>::visitSILFunction(F);
   }
 
   void visitValueBase(ValueBase *V) { }
 
-#define INST(Id, Parent, MemBehavior, ReleasingBehavior)                       \
+#define INST(Id, Parent)                                                       \
   void visit##Id(Id *I) {                                                      \
     ++Num##Id;                                                                 \
     ++InstCount;                                                               \
@@ -97,8 +94,6 @@ struct InstCountVisitor : SILVisitor<InstCountVisitor> {
 
 namespace {
 class InstCount : public SILFunctionTransform {
-
-  StringRef getName() override { return "SIL Inst Count"; }
 
   /// The entry point to the transformation.
   void run() override {
@@ -119,13 +114,12 @@ class InstCount : public SILFunctionTransform {
       TotalFuncs++;
     }
 
-    if (F->getName().count("_TTSg")) {
-      TotalSpecializedInsts += V.InstCount;
-    }
-
     switch (F->getLinkage()) {
     case SILLinkage::Public:
       ++TotalPublicFuncs;
+      break;
+    case SILLinkage::PublicNonABI:
+      ++TotalPublicNonABIFuncs;
       break;
     case SILLinkage::Hidden:
       ++TotalHiddenFuncs;
@@ -151,15 +145,17 @@ class InstCount : public SILFunctionTransform {
     }
   }
 };
-} // end anonymous namespace
 
+} // end anonymous namespace
 
 SILTransform *swift::createInstCount() {
   return new InstCount();
 }
 
-void swift::performSILInstCount(SILModule *M) {
+void swift::performSILInstCountIfNeeded(SILModule *M) {
+  if (!M->getOptions().PrintInstCounts)
+    return;
   SILPassManager PrinterPM(M);
-  PrinterPM.addInstCount();
-  PrinterPM.runOneIteration();
+  PrinterPM.executePassPipelinePlan(
+      SILPassPipelinePlan::getInstCountPassPipeline(M->getOptions()));
 }

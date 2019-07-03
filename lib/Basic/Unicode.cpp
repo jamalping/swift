@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -16,20 +16,50 @@
 
 using namespace swift;
 
+// HACK: Allow support for many newer emoji by overriding behavior of ZWJ and
+// emoji modifiers. This does not make the breaks correct for any version of
+// Unicode, but shifts the ways in which it is incorrect to be less harmful.
+//
+// TODO: Remove this hack and reevaluate whether we should have any static
+// notion of what a grapheme is.
+//
+// Returns true if lhs and rhs shouldn't be considered as having a grapheme
+// break between them. That is, whether we're overriding the behavior of the
+// hard coded Unicode 8 rules surrounding ZWJ and emoji modifiers.
+static inline bool graphemeBreakOverride(llvm::UTF32 lhs, llvm::UTF32 rhs) {
+  // Assume ZWJ sequences produce new emoji
+  if (lhs == 0x200D) {
+    return true;
+  }
+
+  // Permit continuing regional indicators
+  if (rhs >= 0x1F3FB && rhs <= 0x1F3FF) {
+    return true;
+  }
+
+  // Permit emoji tag sequences
+  if (rhs >= 0xE0020 && rhs <= 0xE007F) {
+    return true;
+  }
+
+  return false;
+}
+
 StringRef swift::unicode::extractFirstExtendedGraphemeCluster(StringRef S) {
   // Extended grapheme cluster segmentation algorithm as described in Unicode
   // Standard Annex #29.
   if (S.empty())
     return StringRef();
 
-  const UTF8 *SourceStart = reinterpret_cast<const UTF8 *>(S.data());
+  const llvm::UTF8 *SourceStart =
+    reinterpret_cast<const llvm::UTF8 *>(S.data());
 
-  const UTF8 *SourceNext = SourceStart;
-  UTF32 C[2];
-  UTF32 *TargetStart = C;
+  const llvm::UTF8 *SourceNext = SourceStart;
+  llvm::UTF32 C[2];
+  llvm::UTF32 *TargetStart = C;
 
   ConvertUTF8toUTF32(&SourceNext, SourceStart + S.size(), &TargetStart, C + 1,
-                     lenientConversion);
+                     llvm::lenientConversion);
   if (TargetStart == C) {
     // The source string contains an ill-formed subsequence at the end.
     return S;
@@ -37,12 +67,9 @@ StringRef swift::unicode::extractFirstExtendedGraphemeCluster(StringRef S) {
 
   GraphemeClusterBreakProperty GCBForC0 = getGraphemeClusterBreakProperty(C[0]);
   while (true) {
-    if (isExtendedGraphemeClusterBoundaryAfter(GCBForC0))
-      return S.slice(0, SourceNext - SourceStart);
-
     size_t C1Offset = SourceNext - SourceStart;
     ConvertUTF8toUTF32(&SourceNext, SourceStart + S.size(), &TargetStart, C + 2,
-                       lenientConversion);
+                       llvm::lenientConversion);
 
     if (TargetStart == C + 1) {
       // End of source string or the source string contains an ill-formed
@@ -52,7 +79,8 @@ StringRef swift::unicode::extractFirstExtendedGraphemeCluster(StringRef S) {
 
     GraphemeClusterBreakProperty GCBForC1 =
         getGraphemeClusterBreakProperty(C[1]);
-    if (isExtendedGraphemeClusterBoundary(GCBForC0, GCBForC1))
+    if (isExtendedGraphemeClusterBoundary(GCBForC0, GCBForC1) &&
+        !graphemeBreakOverride(C[0], C[1]))
       return S.slice(0, C1Offset);
 
     C[0] = C[1];
@@ -65,14 +93,15 @@ static bool extractFirstUnicodeScalarImpl(StringRef S, unsigned &Scalar) {
   if (S.empty())
     return false;
 
-  const UTF8 *SourceStart = reinterpret_cast<const UTF8 *>(S.data());
+  const llvm::UTF8 *SourceStart =
+    reinterpret_cast<const llvm::UTF8 *>(S.data());
 
-  const UTF8 *SourceNext = SourceStart;
-  UTF32 C;
-  UTF32 *TargetStart = &C;
+  const llvm::UTF8 *SourceNext = SourceStart;
+  llvm::UTF32 C;
+  llvm::UTF32 *TargetStart = &C;
 
   ConvertUTF8toUTF32(&SourceNext, SourceStart + S.size(), &TargetStart,
-                     TargetStart + 1, lenientConversion);
+                     TargetStart + 1, llvm::lenientConversion);
   if (TargetStart == &C) {
     // The source string contains an ill-formed subsequence at the end.
     return false;
@@ -98,13 +127,14 @@ unsigned swift::unicode::extractFirstUnicodeScalar(StringRef S) {
 uint64_t swift::unicode::getUTF16Length(StringRef Str) {
   uint64_t Length;
   // Transcode the string to UTF-16 to get its length.
-  SmallVector<UTF16, 128> buffer(Str.size() + 1); // +1 for ending nulls.
-  const UTF8 *fromPtr = (const UTF8 *) Str.data();
-  UTF16 *toPtr = &buffer[0];
-  ConversionResult Result = ConvertUTF8toUTF16(&fromPtr, fromPtr + Str.size(),
-                                               &toPtr, toPtr + Str.size(),
-                                               strictConversion);
-  assert(Result == conversionOK &&
+  SmallVector<llvm::UTF16, 128> buffer(Str.size() + 1); // +1 for ending nulls.
+  const llvm::UTF8 *fromPtr = (const llvm::UTF8 *) Str.data();
+  llvm::UTF16 *toPtr = &buffer[0];
+  llvm::ConversionResult Result =
+    ConvertUTF8toUTF16(&fromPtr, fromPtr + Str.size(),
+                       &toPtr, toPtr + Str.size(),
+                       llvm::strictConversion);
+  assert(Result == llvm::conversionOK &&
          "UTF-8 encoded string cannot be converted into UTF-16 encoding");
   (void)Result;
 

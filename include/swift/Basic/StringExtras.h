@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -100,15 +100,16 @@ namespace swift {
       };
 
     public:
-      typedef StringRef value_type;
-      typedef StringRef reference;
-      typedef ArrowProxy pointer;
-      typedef int difference_type;
-      typedef std::bidirectional_iterator_tag iterator_category;
+      using value_type = StringRef;
+      using reference = StringRef;
+      using pointer = ArrowProxy;
+      using difference_type = int;
+      using iterator_category = std::bidirectional_iterator_tag;
 
       WordIterator(StringRef string, unsigned position)
         : String(string), Position(position) 
       {
+        assert(!string.empty());
         NextPositionValid = false;
         PrevPositionValid = false;
       }
@@ -208,11 +209,11 @@ namespace swift {
       StringRef String;
 
     public:
-      typedef WordIterator iterator;
-      typedef WordIterator const_iterator;
-      typedef std::reverse_iterator<WordIterator> reverse_iterator;
-      typedef std::reverse_iterator<WordIterator> const_reverse_iterator;
-      
+      using iterator = WordIterator;
+      using const_iterator = WordIterator;
+      using reverse_iterator = std::reverse_iterator<WordIterator>;
+      using const_reverse_iterator = std::reverse_iterator<WordIterator>;
+
       explicit Words(StringRef string) : String(string) { }
 
       bool empty() const { return String.empty(); }
@@ -349,7 +350,7 @@ enum class OmissionTypeFlags {
 };
 
 /// Options that described omitted types.
-typedef OptionSet<OmissionTypeFlags> OmissionTypeOptions;
+using OmissionTypeOptions = OptionSet<OmissionTypeFlags>;
 
 /// Describes the name of a type as is used for omitting needless
 /// words.

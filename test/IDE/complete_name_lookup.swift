@@ -1,5 +1,5 @@
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=FOO_OBJECT_DOT_1 | FileCheck %s -check-prefix=FOO_OBJECT_DOT
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=BAR_OBJECT_DOT_1 | FileCheck %s -check-prefix=BAR_OBJECT_DOT
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=FOO_OBJECT_DOT_1 | %FileCheck %s -check-prefix=FOO_OBJECT_DOT
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=BAR_OBJECT_DOT_1 | %FileCheck %s -check-prefix=BAR_OBJECT_DOT
 
 protocol FooBaseProtocol {
   var instanceProperty: Int { get }
@@ -15,6 +15,7 @@ struct FooStruct : FooMoreRefinedProtocol {
   var instanceProperty: Int { return 0 }
 }
 // FOO_OBJECT_DOT: Begin completions
+// FOO_OBJECT_DOT-NEXT: Keyword[self]/CurrNominal: self[#FooStruct#]; name=self
 // FOO_OBJECT_DOT-NEXT: Decl[InstanceVar]/CurrNominal:      instanceProperty[#Int#]
 // FOO_OBJECT_DOT-NEXT: End completions
 
@@ -22,6 +23,7 @@ struct BarStruct : FooEvenMoreRefinedProtocol {
   var instanceProperty: Int { return 0 }
 }
 // BAR_OBJECT_DOT: Begin completions
+// BAR_OBJECT_DOT-NEXT: Keyword[self]/CurrNominal: self[#BarStruct#]; name=self
 // BAR_OBJECT_DOT-NEXT: Decl[InstanceVar]/CurrNominal:      instanceProperty[#Int#]
 // BAR_OBJECT_DOT-NEXT: End completions
 

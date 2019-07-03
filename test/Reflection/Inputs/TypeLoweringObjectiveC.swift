@@ -11,3 +11,16 @@ public class HasObjCClasses {
 
 public class NSObjectSubclass : NSObject {}
 
+@objc public enum ObjCEnum : Int {
+  case first
+  case second
+}
+
+public struct HasObjCEnum {
+  let optionalEnum: ObjCEnum?
+  let reference: AnyObject
+}
+
+public struct UnownedReferenceStruct {
+  unowned var unownedRef: NSObjectSubclass
+}

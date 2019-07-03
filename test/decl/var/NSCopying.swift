@@ -1,4 +1,4 @@
-// RUN: %target-swift-frontend(mock-sdk: %clang-importer-sdk) %s -parse -verify
+// RUN: %target-swift-frontend(mock-sdk: %clang-importer-sdk) %s -typecheck -verify
 
 // REQUIRES: objc_interop
 
@@ -6,7 +6,7 @@ import Foundation
 
 class NotCopyable {}
 class CopyableClass : NSCopying {
-  @objc(copyWithZone:) func copy(with zone: NSZone?) -> AnyObject {
+  @objc(copyWithZone:) func copy(with zone: NSZone?) -> Any {
     return self
   }
 }

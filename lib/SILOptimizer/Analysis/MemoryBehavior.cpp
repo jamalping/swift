@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -99,8 +99,11 @@ public:
   MemBehavior visitTryApplyInst(TryApplyInst *AI);
   MemBehavior visitBuiltinInst(BuiltinInst *BI);
   MemBehavior visitStrongReleaseInst(StrongReleaseInst *BI);
-  MemBehavior visitUnownedReleaseInst(UnownedReleaseInst *BI);
   MemBehavior visitReleaseValueInst(ReleaseValueInst *BI);
+  MemBehavior visitSetDeallocatingInst(SetDeallocatingInst *BI);
+#define ALWAYS_OR_SOMETIMES_LOADABLE_CHECKED_REF_STORAGE(Name, ...) \
+  MemBehavior visit##Name##ReleaseInst(Name##ReleaseInst *BI);
+#include "swift/AST/ReferenceStorage.def"
 
   // Instructions which are none if our SILValue does not alias one of its
   // arguments. If we cannot prove such a thing, return the relevant memory
@@ -109,14 +112,14 @@ public:
   MemBehavior visit##Name(Name *I) {                                    \
     for (Operand &Op : I->getAllOperands()) {                           \
       if (!AA->isNoAlias(Op.get(), V)) {                                \
-        DEBUG(llvm::dbgs() << "  " #Name                                \
-              " does alias inst. Returning Normal behavior.\n");        \
+        LLVM_DEBUG(llvm::dbgs() << "  " #Name                           \
+                   " does alias inst. Returning Normal behavior.\n");   \
         return I->getMemoryBehavior();                                  \
       }                                                                 \
     }                                                                   \
                                                                         \
-    DEBUG(llvm::dbgs() << "  " #Name " does not alias inst. Returning " \
-          "None.\n");                                                   \
+    LLVM_DEBUG(llvm::dbgs() << "  " #Name " does not alias inst. "      \
+               "Returning None.\n");                                    \
     return MemBehavior::None;                                           \
   }
 
@@ -126,6 +129,8 @@ public:
   OPERANDALIAS_MEMBEHAVIOR_INST(DeinitExistentialAddrInst)
   OPERANDALIAS_MEMBEHAVIOR_INST(DeallocStackInst)
   OPERANDALIAS_MEMBEHAVIOR_INST(FixLifetimeInst)
+  OPERANDALIAS_MEMBEHAVIOR_INST(ClassifyBridgeObjectInst)
+  OPERANDALIAS_MEMBEHAVIOR_INST(ValueToBridgeObjectInst)
 #undef OPERANDALIAS_MEMBEHAVIOR_INST
 
   // Override simple behaviors where MayHaveSideEffects is too general and
@@ -148,9 +153,12 @@ public:
     return I->getMemoryBehavior();                                             \
   }
   REFCOUNTINC_MEMBEHAVIOR_INST(StrongRetainInst)
-  REFCOUNTINC_MEMBEHAVIOR_INST(StrongRetainUnownedInst)
-  REFCOUNTINC_MEMBEHAVIOR_INST(UnownedRetainInst)
   REFCOUNTINC_MEMBEHAVIOR_INST(RetainValueInst)
+#define ALWAYS_OR_SOMETIMES_LOADABLE_CHECKED_REF_STORAGE(Name, ...) \
+  REFCOUNTINC_MEMBEHAVIOR_INST(Name##RetainInst) \
+  REFCOUNTINC_MEMBEHAVIOR_INST(StrongRetain##Name##Inst) \
+  REFCOUNTINC_MEMBEHAVIOR_INST(Copy##Name##ValueInst)
+#include "swift/AST/ReferenceStorage.def"
 #undef REFCOUNTINC_MEMBEHAVIOR_INST
 };
 
@@ -159,13 +167,13 @@ public:
 MemBehavior MemoryBehaviorVisitor::visitLoadInst(LoadInst *LI) {
   if (AA->isNoAlias(LI->getOperand(), V, computeTBAAType(LI->getOperand()),
                    getValueTBAAType())) {
-    DEBUG(llvm::dbgs() << "  Load Operand does not alias inst. Returning "
-                          "None.\n");
+    LLVM_DEBUG(llvm::dbgs() << "  Load Operand does not alias inst. Returning "
+                               "None.\n");
     return MemBehavior::None;
   }
 
-  DEBUG(llvm::dbgs() << "  Could not prove that load inst does not alias "
-                        "pointer. Returning may read.");
+  LLVM_DEBUG(llvm::dbgs() << "  Could not prove that load inst does not alias "
+                             "pointer. Returning may read.");
   return MemBehavior::MayRead;
 }
 
@@ -179,14 +187,14 @@ MemBehavior MemoryBehaviorVisitor::visitStoreInst(StoreInst *SI) {
   // specified value cannot be modified by the store.
   if (AA->isNoAlias(SI->getDest(), V, computeTBAAType(SI->getDest()),
                    getValueTBAAType())) {
-    DEBUG(llvm::dbgs() << "  Store Dst does not alias inst. Returning "
-                          "None.\n");
+    LLVM_DEBUG(llvm::dbgs() << "  Store Dst does not alias inst. Returning "
+                               "None.\n");
     return MemBehavior::None;
   }
 
   // Otherwise, a store just writes.
-  DEBUG(llvm::dbgs() << "  Could not prove store does not alias inst. "
-                        "Returning MayWrite.\n");
+  LLVM_DEBUG(llvm::dbgs() << "  Could not prove store does not alias inst. "
+                             "Returning MayWrite.\n");
   return MemBehavior::MayWrite;
 }
 
@@ -199,15 +207,15 @@ MemBehavior MemoryBehaviorVisitor::visitBuiltinInst(BuiltinInst *BI) {
 
   // If the builtin is read none, it does not read or write memory.
   if (!BI->mayReadOrWriteMemory()) {
-    DEBUG(llvm::dbgs() << "  Found apply of read none builtin. Returning"
-                          " None.\n");
+    LLVM_DEBUG(llvm::dbgs() << "  Found apply of read none builtin. Returning"
+                               " None.\n");
     return MemBehavior::None;
   }
 
   // If the builtin is side effect free, then it can only read memory.
   if (!BI->mayHaveSideEffects()) {
-    DEBUG(llvm::dbgs() << "  Found apply of side effect free builtin. "
-                          "Returning MayRead.\n");
+    LLVM_DEBUG(llvm::dbgs() << "  Found apply of side effect free builtin. "
+                               "Returning MayRead.\n");
     return MemBehavior::MayRead;
   }
 
@@ -216,34 +224,47 @@ MemBehavior MemoryBehaviorVisitor::visitBuiltinInst(BuiltinInst *BI) {
   // any of the arguments of the apply inst, we should be ok.
 
   // Otherwise be conservative and return that we may have side effects.
-  DEBUG(llvm::dbgs() << "  Found apply of side effect builtin. "
-                        "Returning MayHaveSideEffects.\n");
+  LLVM_DEBUG(llvm::dbgs() << "  Found apply of side effect builtin. "
+                             "Returning MayHaveSideEffects.\n");
   return MemBehavior::MayHaveSideEffects;
 }
 
 MemBehavior MemoryBehaviorVisitor::visitTryApplyInst(TryApplyInst *AI) {
   MemBehavior Behavior = MemBehavior::MayHaveSideEffects;
   // Ask escape analysis.
-  if (!EA->canObjectOrContentEscapeTo(V, AI))
+  if (!EA->canEscapeTo(V, AI))
     Behavior = MemBehavior::None;
 
   // Otherwise be conservative and return that we may have side effects.
-  DEBUG(llvm::dbgs() << "  Found tryapply, returning " << Behavior << '\n');
+  LLVM_DEBUG(llvm::dbgs() << "  Found tryapply, returning " << Behavior <<'\n');
   return Behavior;
 }
 
 MemBehavior MemoryBehaviorVisitor::visitApplyInst(ApplyInst *AI) {
 
-  SideEffectAnalysis::FunctionEffects ApplyEffects;
-  SEA->getEffects(ApplyEffects, AI);
+  FunctionSideEffects ApplyEffects;
+  SEA->getCalleeEffects(ApplyEffects, AI);
 
   MemBehavior Behavior = MemBehavior::None;
 
   // We can ignore mayTrap().
-  if (ApplyEffects.mayReadRC() ||
-      (InspectionMode == RetainObserveKind::ObserveRetains &&
-       ApplyEffects.mayAllocObjects())) {
-    Behavior = MemBehavior::MayHaveSideEffects;
+  bool any_in_guaranteed_params = false;
+  for (auto op : enumerate(AI->getArgumentOperands())) {
+    if (op.value().get() == V &&
+        AI->getSubstCalleeConv().getSILArgumentConvention(op.index()) == swift::SILArgumentConvention::Indirect_In_Guaranteed) {
+      any_in_guaranteed_params = true;
+      break;
+    }
+  }
+
+  if (any_in_guaranteed_params) {
+    // one the parameters in the function call is @in_guaranteed of V, ie. the
+    // callee isn't allowed to modify it.
+    Behavior = MemBehavior::MayRead;
+  } else if (ApplyEffects.mayReadRC() ||
+        (InspectionMode == RetainObserveKind::ObserveRetains &&
+         ApplyEffects.mayAllocObjects())) {
+      Behavior = MemBehavior::MayHaveSideEffects;
   } else {
     auto &GlobalEffects = ApplyEffects.getGlobalEffects();
     Behavior = GlobalEffects.getMemBehavior(InspectionMode);
@@ -253,6 +274,10 @@ MemBehavior MemoryBehaviorVisitor::visitApplyInst(ApplyInst *AI) {
          Idx < End && Behavior < MemBehavior::MayHaveSideEffects; ++Idx) {
       auto &ArgEffect = ApplyEffects.getParameterEffects()[Idx];
       auto ArgBehavior = ArgEffect.getMemBehavior(InspectionMode);
+      if (ArgEffect.mayRelease()) {
+        Behavior = MemBehavior::MayHaveSideEffects;
+        break;
+      }
       auto NewBehavior = combineMemoryBehavior(Behavior, ArgBehavior);
       if (NewBehavior != Behavior) {
         SILValue Arg = AI->getArgument(Idx);
@@ -264,15 +289,16 @@ MemBehavior MemoryBehaviorVisitor::visitApplyInst(ApplyInst *AI) {
       }
     }
   }
+
   if (Behavior > MemBehavior::None) {
     if (Behavior > MemBehavior::MayRead && isLetPointer(V))
       Behavior = MemBehavior::MayRead;
 
     // Ask escape analysis.
-    if (!EA->canObjectOrContentEscapeTo(V, AI))
+    if (!EA->canEscapeTo(V, AI))
       Behavior = MemBehavior::None;
   }
-  DEBUG(llvm::dbgs() << "  Found apply, returning " << Behavior << '\n');
+  LLVM_DEBUG(llvm::dbgs() << "  Found apply, returning " << Behavior << '\n');
   return Behavior;
 }
 
@@ -283,17 +309,23 @@ MemoryBehaviorVisitor::visitStrongReleaseInst(StrongReleaseInst *SI) {
   return MemBehavior::MayHaveSideEffects;
 }
 
-MemBehavior
-MemoryBehaviorVisitor::visitUnownedReleaseInst(UnownedReleaseInst *SI) {
-  if (!EA->canEscapeTo(V, SI))
-    return MemBehavior::None;
-  return MemBehavior::MayHaveSideEffects;
+#define ALWAYS_OR_SOMETIMES_LOADABLE_CHECKED_REF_STORAGE(Name, ...) \
+MemBehavior \
+MemoryBehaviorVisitor::visit##Name##ReleaseInst(Name##ReleaseInst *SI) { \
+  if (!EA->canEscapeTo(V, SI)) \
+    return MemBehavior::None; \
+  return MemBehavior::MayHaveSideEffects; \
 }
+#include "swift/AST/ReferenceStorage.def"
 
 MemBehavior MemoryBehaviorVisitor::visitReleaseValueInst(ReleaseValueInst *SI) {
   if (!EA->canEscapeTo(V, SI))
     return MemBehavior::None;
   return MemBehavior::MayHaveSideEffects;
+}
+
+MemBehavior MemoryBehaviorVisitor::visitSetDeallocatingInst(SetDeallocatingInst *SDI) {
+  return MemBehavior::None;
 }
 
 //===----------------------------------------------------------------------===//
@@ -303,8 +335,7 @@ MemBehavior MemoryBehaviorVisitor::visitReleaseValueInst(ReleaseValueInst *SI) {
 MemBehavior
 AliasAnalysis::computeMemoryBehavior(SILInstruction *Inst, SILValue V,
                                      RetainObserveKind InspectionMode) {
-  MemBehaviorKeyTy Key = toMemoryBehaviorKey(SILValue(Inst), V,
-                                             InspectionMode);
+  MemBehaviorKeyTy Key = toMemoryBehaviorKey(Inst, V, InspectionMode);
   // Check if we've already computed this result.
   auto It = MemoryBehaviorCache.find(Key);
   if (It != MemoryBehaviorCache.end()) {
@@ -314,10 +345,10 @@ AliasAnalysis::computeMemoryBehavior(SILInstruction *Inst, SILValue V,
   // Flush the cache if the size of the cache is too large.
   if (MemoryBehaviorCache.size() > MemoryBehaviorAnalysisMaxCacheSize) {
     MemoryBehaviorCache.clear();
-    MemoryBehaviorValueBaseToIndex.clear();
+    MemoryBehaviorNodeToIndex.clear();
 
-    // Key is no longer valid as we cleared the MemoryBehaviorValueBaseToIndex.
-    Key = toMemoryBehaviorKey(SILValue(Inst), V, InspectionMode);
+    // Key is no longer valid as we cleared the MemoryBehaviorNodeToIndex.
+    Key = toMemoryBehaviorKey(Inst, V, InspectionMode);
   }
 
   // Calculate the aliasing result and store it in the cache.
@@ -329,18 +360,21 @@ AliasAnalysis::computeMemoryBehavior(SILInstruction *Inst, SILValue V,
 MemBehavior
 AliasAnalysis::computeMemoryBehaviorInner(SILInstruction *Inst, SILValue V,
                                           RetainObserveKind InspectionMode) {
-  DEBUG(llvm::dbgs() << "GET MEMORY BEHAVIOR FOR:\n    " << *Inst << "    "
-                     << *V);
+  LLVM_DEBUG(llvm::dbgs() << "GET MEMORY BEHAVIOR FOR:\n    " << *Inst << "    "
+                          << *V);
   assert(SEA && "SideEffectsAnalysis must be initialized!");
   return MemoryBehaviorVisitor(this, SEA, EA, V, InspectionMode).visit(Inst);
 }
 
-MemBehaviorKeyTy AliasAnalysis::toMemoryBehaviorKey(SILValue V1, SILValue V2,
+MemBehaviorKeyTy AliasAnalysis::toMemoryBehaviorKey(SILInstruction *V1,
+                                                    SILValue V2,
                                                     RetainObserveKind M) {
-  size_t idx1 = MemoryBehaviorValueBaseToIndex.getIndex(V1);
+  size_t idx1 =
+    MemoryBehaviorNodeToIndex.getIndex(V1->getRepresentativeSILNodeInObject());
   assert(idx1 != std::numeric_limits<size_t>::max() &&
          "~0 index reserved for empty/tombstone keys");
-  size_t idx2 = MemoryBehaviorValueBaseToIndex.getIndex(V2);
+  size_t idx2 = MemoryBehaviorNodeToIndex.getIndex(
+      V2->getRepresentativeSILNodeInObject());
   assert(idx2 != std::numeric_limits<size_t>::max() &&
          "~0 index reserved for empty/tombstone keys");
   return {idx1, idx2, M};

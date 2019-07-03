@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -24,7 +24,7 @@ void SourceManager::verifyAllBuffers() const {
   };
 
   // FIXME: This depends on the buffer IDs chosen by llvm::SourceMgr.
-  __attribute__((used)) static char arbitraryTotal = 0;
+  LLVM_ATTRIBUTE_USED static char arbitraryTotal = 0;
   for (unsigned i = 1, e = LLVMSourceMgr.getNumBuffers(); i <= e; ++i) {
     auto *buffer = LLVMSourceMgr.getMemoryBuffer(i);
     if (buffer->getBufferSize() == 0)
@@ -37,6 +37,27 @@ void SourceManager::verifyAllBuffers() const {
 SourceLoc SourceManager::getCodeCompletionLoc() const {
   return getLocForBufferStart(CodeCompletionBufferID)
       .getAdvancedLoc(CodeCompletionOffset);
+}
+
+StringRef SourceManager::getDisplayNameForLoc(SourceLoc Loc) const {
+  // Respect #line first
+  if (auto VFile = getVirtualFile(Loc))
+    return VFile->Name;
+
+  // Next, try the stat cache
+  auto Ident = getIdentifierForBuffer(findBufferContainingLoc(Loc));
+  auto found = StatusCache.find(Ident);
+  if (found != StatusCache.end()) {
+    return found->second.getName();
+  }
+
+  // Populate the cache with a (virtual) stat.
+  if (auto Status = FileSystem->status(Ident)) {
+    return (StatusCache[Ident] = Status.get()).getName();
+  }
+
+  // Finally, fall back to the buffer identifier.
+  return Ident;
 }
 
 unsigned
@@ -82,7 +103,7 @@ bool SourceManager::openVirtualFile(SourceLoc loc, StringRef name,
 
   CharSourceRange range = CharSourceRange(*this, loc, end);
   VirtualFiles[end.Value.getPointer()] = { range, name, lineOffset };
-  CachedVFile = {};
+  CachedVFile = {nullptr, nullptr};
   return true;
 }
 
@@ -99,7 +120,7 @@ void SourceManager::closeVirtualFile(SourceLoc end) {
 #endif
     return;
   }
-  CachedVFile = {};
+  CachedVFile = {nullptr, nullptr};
 
   CharSourceRange oldRange = virtualFile->Range;
   virtualFile->Range = CharSourceRange(*this, virtualFile->Range.getStart(),
@@ -137,7 +158,7 @@ Optional<unsigned> SourceManager::getIDForBufferIdentifier(
   return It->second;
 }
 
-const char *SourceManager::getIdentifierForBuffer(unsigned bufferID) const {
+StringRef SourceManager::getIdentifierForBuffer(unsigned bufferID) const {
   auto *buffer = LLVMSourceMgr.getMemoryBuffer(bufferID);
   assert(buffer && "invalid buffer ID");
   return buffer->getBufferIdentifier();
@@ -174,6 +195,10 @@ unsigned SourceManager::getByteDistance(SourceLoc Start, SourceLoc End) const {
   return End.Value.getPointer() - Start.Value.getPointer();
 }
 
+StringRef SourceManager::getEntireTextForBuffer(unsigned BufferID) const {
+  return LLVMSourceMgr.getMemoryBuffer(BufferID)->getBuffer();
+}
+
 StringRef SourceManager::extractText(CharSourceRange Range,
                                      Optional<unsigned> BufferID) const {
   assert(Range.isValid() && "range should be valid");
@@ -201,14 +226,21 @@ unsigned SourceManager::findBufferContainingLoc(SourceLoc Loc) const {
   llvm_unreachable("no buffer containing location found");
 }
 
-void SourceLoc::printLineAndColumn(raw_ostream &OS,
-                                   const SourceManager &SM) const {
+void SourceRange::widen(SourceRange Other) {
+  if (Other.Start.Value.getPointer() < Start.Value.getPointer())
+    Start = Other.Start;
+  if (Other.End.Value.getPointer() > End.Value.getPointer())
+    End = Other.End;
+}
+
+void SourceLoc::printLineAndColumn(raw_ostream &OS, const SourceManager &SM,
+                                   unsigned BufferID) const {
   if (isInvalid()) {
     OS << "<invalid loc>";
     return;
   }
 
-  auto LineAndCol = SM.getLineAndColumn(*this);
+  auto LineAndCol = SM.getLineAndColumn(*this, BufferID);
   OS << "line:" << LineAndCol.first << ':' << LineAndCol.second;
 }
 
@@ -270,10 +302,7 @@ void CharSourceRange::print(raw_ostream &OS, const SourceManager &SM,
     return;
 
   if (PrintText) {
-    OS << " RangeText=\""
-       << StringRef(Start.Value.getPointer(),
-                    getEnd().Value.getPointer() - Start.Value.getPointer() + 1)
-       << '"';
+    OS << " RangeText=\"" << SM.extractText(*this) << '"';
   }
 }
 
@@ -291,11 +320,10 @@ llvm::Optional<unsigned> SourceManager::resolveFromLineCol(unsigned BufferId,
   const char *Ptr = InputBuf->getBufferStart();
   const char *End = InputBuf->getBufferEnd();
   const char *LineStart = Ptr;
-  for (; Ptr < End; ++Ptr) {
+  --Line;
+  for (; Line && (Ptr < End); ++Ptr) {
     if (*Ptr == '\n') {
       --Line;
-      if (Line == 0)
-        break;
       LineStart = Ptr+1;
     }
   }
@@ -303,7 +331,9 @@ llvm::Optional<unsigned> SourceManager::resolveFromLineCol(unsigned BufferId,
     return None;
   }
   Ptr = LineStart;
-  for (; Ptr < End; ++Ptr) {
+
+  // The <= here is to allow for non-inclusive range end positions at EOF
+  for (; Ptr <= End; ++Ptr) {
     --Col;
     if (Col == 0)
       return Ptr - InputBuf->getBufferStart();

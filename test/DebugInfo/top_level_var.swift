@@ -1,4 +1,4 @@
-// RUN: %target-swift-frontend %s -emit-ir -g -o - | FileCheck %s
+// RUN: %target-swift-frontend %s -emit-ir -g -o - | %FileCheck %s
 
 func markUsed<T>(_ t: T) {}
 var a = 1
@@ -10,4 +10,4 @@ markUsed(a)
 // CHECK: ![[MOD]] = !DIModule(scope: null, name: "top_level_var"
 // CHECK: ![[MAIN:.*]] = distinct !DISubprogram(name: "main",
 // CHECK-SAME:                                  line: 1
-// CHECK-SAME:                                  isDefinition: true
+// CHECK-SAME:                                  DISPFlagDefinition

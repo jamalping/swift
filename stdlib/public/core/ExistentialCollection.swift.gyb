@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -24,8 +24,12 @@ from gyb_stdlib_support import (
 
 import SwiftShims
 
-@noreturn @inline(never)
-internal func _abstract(_ file: StaticString = #file, line: UInt = #line) {
+@inline(never)
+@usableFromInline
+internal func _abstract(
+  file: StaticString = #file,
+  line: UInt = #line
+) -> Never {
   fatalError("Method must be overridden", file: file, line: line)
 }
 
@@ -37,86 +41,123 @@ internal func _abstract(_ file: StaticString = #file, line: UInt = #line) {
 /// This iterator forwards its `next()` method to an arbitrary underlying
 /// iterator having the same `Element` type, hiding the specifics of the
 /// underlying `IteratorProtocol`.
-///
-/// - SeeAlso: `AnySequence`
-public struct AnyIterator<Element> : IteratorProtocol {
-  /// Creates an iterator that wraps `base` but whose type depends only on the
-  /// type of `I.Element`.
+@frozen
+public struct AnyIterator<Element> {
+  @usableFromInline
+  internal let _box: _AnyIteratorBoxBase<Element>
+
+  /// Creates an iterator that wraps a base iterator but whose type depends
+  /// only on the base iterator's element type.
   ///
-  /// Example:
+  /// You can use `AnyIterator` to hide the type signature of a more complex
+  /// iterator. For example, the `digits()` function in the following example
+  /// creates an iterator over a collection that lazily maps the elements of a
+  /// `Range<Int>` instance to strings. Instead of returning an
+  /// iterator with a type that encapsulates the implementation of the
+  /// collection, the `digits()` function first wraps the iterator in an
+  /// `AnyIterator` instance.
   ///
   ///     func digits() -> AnyIterator<String> {
-  ///       let lazyStrings = (0..<10).lazy.map { String($0) }
+  ///         let lazyStrings = (0..<10).lazy.map { String($0) }
+  ///         let iterator:
+  ///             LazyMapIterator<IndexingIterator<Range<Int>>, String>
+  ///             = lazyStrings.makeIterator()
   ///
-  ///       // This is a really complicated type of no interest to our
-  ///       // clients.
-  ///       let iterator: MapSequenceIterator<RangeIterator<Int>, String>
-  ///         = lazyStrings.makeIterator()
-  ///       return AnyIterator(iterator)
+  ///         return AnyIterator(iterator)
   ///     }
+  ///
+  /// - Parameter base: An iterator to type-erase.
+  @inlinable
   public init<I : IteratorProtocol>(_ base: I) where I.Element == Element {
     self._box = _IteratorBox(base)
   }
 
-  /// Creates an iterator whose `next` method invokes `body` and returns the
-  /// result.
+  /// Creates an iterator that wraps the given closure in its `next()` method.
   ///
-  /// Example:
+  /// The following example creates an iterator that counts up from the initial
+  /// value of an integer `x` to 15:
   ///
   ///     var x = 7
-  ///     let iterator = AnyIterator { x < 15 ? x++ : nil }
-  ///     let a = Array(iterator) // [ 7, 8, 9, 10, 11, 12, 13, 14 ]
-  public init(_ body: () -> Element?) {
+  ///     let iterator: AnyIterator<Int> = AnyIterator {
+  ///         defer { x += 1 }
+  ///         return x < 15 ? x : nil
+  ///     }
+  ///     let a = Array(iterator)
+  ///     // a == [7, 8, 9, 10, 11, 12, 13, 14]
+  ///
+  /// - Parameter body: A closure that returns an optional element. `body` is
+  ///   executed each time the `next()` method is called on the resulting
+  ///   iterator.
+  @inlinable
+  public init(_ body: @escaping () -> Element?) {
     self._box = _IteratorBox(_ClosureBasedIterator(body))
   }
 
+  @inlinable
   internal init(_box: _AnyIteratorBoxBase<Element>) {
     self._box = _box
   }
+}
 
+extension AnyIterator: IteratorProtocol {
   /// Advances to the next element and returns it, or `nil` if no next element
   /// exists.
   ///
   /// Once `nil` has been returned, all subsequent calls return `nil`.
+  @inlinable
   public func next() -> Element? {
     return _box.next()
   }
-
-  internal let _box: _AnyIteratorBoxBase<Element>
 }
 
 /// Every `IteratorProtocol` can also be a `Sequence`.  Note that
 /// traversing the sequence consumes the iterator.
-extension AnyIterator : Sequence {}
+extension AnyIterator: Sequence { }
 
+@usableFromInline
+@frozen
 internal struct _ClosureBasedIterator<Element> : IteratorProtocol {
-  internal init(_ body: () -> Element?) {
+  @inlinable
+  internal init(_ body: @escaping () -> Element?) {
     self._body = body
   }
+  @inlinable
   internal func next() -> Element? { return _body() }
+  @usableFromInline
   internal let _body: () -> Element?
 }
 
+@_fixed_layout
+@usableFromInline
 internal class _AnyIteratorBoxBase<Element> : IteratorProtocol {
+  @inlinable // FIXME(sil-serialize-all)
+  internal init() {}
+
+  @inlinable // FIXME(sil-serialize-all)
+  deinit {}
   /// Advances to the next element and returns it, or `nil` if no next element
   /// exists.
   ///
   /// Once `nil` has been returned, all subsequent calls return `nil`.
   ///
   /// - Note: Subclasses must override this method.
+  @inlinable // FIXME(sil-serialize-all)
   internal func next() -> Element? { _abstract() }
 }
 
+@_fixed_layout
+@usableFromInline
 internal final class _IteratorBox<
   Base : IteratorProtocol
 > : _AnyIteratorBoxBase<Base.Element> {
+  @inlinable
   internal init(_ base: Base) { self._base = base }
+  @inlinable // FIXME(sil-serialize-all)
+  deinit {}
+  @inlinable
   internal override func next() -> Base.Element? { return _base.next() }
+  @usableFromInline
   internal var _base: Base
-}
-
-internal func _typeID(_ instance: AnyObject) -> ObjectIdentifier {
-  return ObjectIdentifier(instance.dynamicType)
 }
 
 //===--- Sequence ---------------------------------------------------------===//
@@ -124,6 +165,8 @@ internal func _typeID(_ instance: AnyObject) -> ObjectIdentifier {
 
 % for Kind in ['Sequence', 'Collection', 'BidirectionalCollection', 'RandomAccessCollection']:
 
+@_fixed_layout
+@usableFromInline
 %   if Kind == 'Sequence':
 internal class _AnySequenceBox<Element>
 %   elif Kind == 'Collection':
@@ -140,107 +183,171 @@ internal class _AnyRandomAccessCollectionBox<Element>
 {
 
 %   if Kind == 'Sequence':
+  @inlinable // FIXME(sil-serialize-all)
+  internal init() { }
+
+  @inlinable
   internal func _makeIterator() -> AnyIterator<Element> { _abstract() }
 
+  @inlinable
   internal var _underestimatedCount: Int { _abstract() }
 
+  @inlinable
   internal func _map<T>(
-    _ transform: @noescape (Element) throws -> T
+    _ transform: (Element) throws -> T
   ) rethrows -> [T] {
     _abstract()
   }
 
+  @inlinable
   internal func _filter(
-    _ includeElement: @noescape (Element) throws -> Bool
+    _ isIncluded: (Element) throws -> Bool
   ) rethrows -> [Element] {
     _abstract()
   }
 
+  @inlinable
   internal func _forEach(
-    _ body: @noescape (Element) throws -> Void
+    _ body: (Element) throws -> Void
   ) rethrows {
     _abstract()
   }
 
+  @inlinable
   internal func __customContainsEquatableElement(
     _ element: Element
   ) -> Bool? {
     _abstract()
   }
 
-  internal func __preprocessingPass<R>(
-    _ preprocess: @noescape () throws -> R
-  ) rethrows -> R? {
+  @inlinable
+  internal func __copyToContiguousArray() -> ContiguousArray<Element> {
     _abstract()
   }
 
-  internal func __copyToNativeArrayBuffer() -> _ContiguousArrayStorageBase {
-    _abstract()
-  }
-
-  internal func __copyContents(initializing ptr: UnsafeMutablePointer<Element>)
-    -> UnsafeMutablePointer<Element> {
+  @inlinable
+  internal func __copyContents(initializing buf: UnsafeMutableBufferPointer<Element>)
+    -> (AnyIterator<Element>,UnsafeMutableBufferPointer<Element>.Index) {
     _abstract()
   }
 
 %   end
 
-%   override = 'override' if Kind != 'Sequence' else ''
-  internal ${override} func _dropFirst(_ n: Int) -> _Any${Kind}Box<Element> {
+% # This deinit has to be present on all the types
+  @inlinable // FIXME(sil-serialize-all)
+  deinit {}
+
+%   if Kind == 'Sequence':
+  @inlinable
+  internal func _drop(
+    while predicate: (Element) throws -> Bool
+  ) rethrows -> _AnySequenceBox<Element> {
     _abstract()
   }
 
+  @inlinable
+  internal func _dropFirst(_ n: Int) -> _AnySequenceBox<Element> {
+    _abstract()
+  }
+
+  @inlinable
+  internal func _dropLast(_ n: Int) -> [Element] {
+    _abstract()
+  }
+
+  @inlinable
+  internal func _prefix(_ maxLength: Int) -> _AnySequenceBox<Element> {
+    _abstract()
+  }
+
+  @inlinable
+  internal func _prefix(
+    while predicate: (Element) throws -> Bool
+  ) rethrows -> [Element] {
+    _abstract()
+  }
+
+  @inlinable
+  internal func _suffix(_ maxLength: Int) -> [Element] {
+    _abstract()
+  }
+%   else:
+%     override = 'override' if Kind != 'Collection' else ''
+  @inlinable
+  internal override func _drop(
+    while predicate: (Element) throws -> Bool
+  ) rethrows -> _Any${Kind}Box<Element> {
+    _abstract()
+  }
+
+  @inlinable
+  internal override func _dropFirst(_ n: Int) -> _Any${Kind}Box<Element> {
+    _abstract()
+  }
+
+  @inlinable
   internal ${override} func _dropLast(_ n: Int) -> _Any${Kind}Box<Element> {
     _abstract()
   }
 
-  internal ${override} func _prefix(_ maxLength: Int) -> _Any${Kind}Box<Element> {
+  @inlinable
+  internal override func _prefix(_ maxLength: Int) -> _Any${Kind}Box<Element> {
     _abstract()
   }
 
+  @inlinable
+  internal ${override} func _prefix(
+    while predicate: (Element) throws -> Bool
+  ) rethrows -> _Any${Kind}Box<Element> {
+    _abstract()
+  }
+
+  @inlinable
   internal ${override} func _suffix(_ maxLength: Int) -> _Any${Kind}Box<Element> {
     _abstract()
   }
-
-  internal func _split(
-    maxSplits: Int, omittingEmptySubsequences: Bool,
-    isSeparator: @noescape (Element) throws -> Bool
-  ) rethrows -> [Any${Kind}<Element>] {
-    _abstract()
-  }
+%   end
 
 %   if Kind == 'Collection':
+  @inlinable
   internal subscript(i: _AnyIndexBox) -> Element { _abstract() }
-  
+
+  @inlinable
   internal func _index(after i: _AnyIndexBox) -> _AnyIndexBox { _abstract() }
-  
+
+  @inlinable
   internal func _formIndex(after i: _AnyIndexBox) { _abstract() }
-  
+
+  @inlinable
   internal func _index(
-    _ i: _AnyIndexBox, offsetBy n: IntMax
+    _ i: _AnyIndexBox, offsetBy n: Int
   ) -> _AnyIndexBox {
     _abstract()
   }
-  
+
+  @inlinable
   internal func _index(
-    _ i: _AnyIndexBox, offsetBy n: IntMax, limitedBy limit: _AnyIndexBox
+    _ i: _AnyIndexBox, offsetBy n: Int, limitedBy limit: _AnyIndexBox
   ) -> _AnyIndexBox? {
     _abstract()
   }
-  
-  internal func _formIndex(_ i: inout _AnyIndexBox, offsetBy n: IntMax) {
+
+  @inlinable
+  internal func _formIndex(_ i: inout _AnyIndexBox, offsetBy n: Int) {
     _abstract()
   }
-  
+
+  @inlinable
   internal func _formIndex(
-    _ i: inout _AnyIndexBox, offsetBy n: IntMax, limitedBy limit: _AnyIndexBox
+    _ i: inout _AnyIndexBox, offsetBy n: Int, limitedBy limit: _AnyIndexBox
   ) -> Bool {
     _abstract()
   }
-  
+
+  @inlinable
   internal func _distance(
     from start: _AnyIndexBox, to end: _AnyIndexBox
-  ) -> IntMax {
+  ) -> Int {
     _abstract()
   }
 
@@ -248,24 +355,25 @@ internal class _AnyRandomAccessCollectionBox<Element>
   /*
   var _indices: Indices
 
-  func prefix(upTo end: Index) -> SubSequence
+  __consuming func prefix(upTo end: Index) -> SubSequence
 
-  func suffix(from start: Index) -> SubSequence
+  __consuming func suffix(from start: Index) -> SubSequence
 
   func prefix(through position: Index) -> SubSequence
 
   var isEmpty: Bool { get }
   */
 
-  internal var _count: IntMax { _abstract() }
+  @inlinable // FIXME(sil-serialize-all)
+  internal var _count: Int { _abstract() }
 
   // TODO: swift-3-indexing-model: forward the following methods.
   /*
-  func _customIndexOfEquatableElement(element: Iterator.Element) -> Index??
+  func _customIndexOfEquatableElement(element: Element) -> Index??
+  func _customLastIndexOfEquatableElement(element: Element) -> Index??
   */
 
-  internal var _first: Element? { _abstract() }
-
+  @inlinable
   internal init(
     _startIndex: _AnyIndexBox,
     endIndex: _AnyIndexBox
@@ -274,12 +382,16 @@ internal class _AnyRandomAccessCollectionBox<Element>
     self._endIndex = endIndex
   }
 
+  @usableFromInline
   internal let _startIndex: _AnyIndexBox
+
+  @usableFromInline
   internal let _endIndex: _AnyIndexBox
 %   end
 
 %   if Kind in ['Collection', 'BidirectionalCollection', 'RandomAccessCollection']:
 %     override = 'override' if Kind != 'Collection' else ''
+  @inlinable
   internal ${override} subscript(
     start start: _AnyIndexBox,
     end end: _AnyIndexBox
@@ -287,11 +399,13 @@ internal class _AnyRandomAccessCollectionBox<Element>
 %   end
 
 %   if Kind == 'BidirectionalCollection':
+  @inlinable
   internal func _index(before i: _AnyIndexBox) -> _AnyIndexBox { _abstract() }
+  @inlinable
   internal func _formIndex(before i: _AnyIndexBox) { _abstract() }
-  internal var _last: Element? { _abstract() }
 %   end
 }
+
 % end
 
 % for Kind in ['Sequence', 'Collection', 'BidirectionalCollection', 'RandomAccessCollection']:
@@ -307,96 +421,134 @@ internal class _AnyRandomAccessCollectionBox<Element>
 %     assert False, 'Unknown kind'
 %   end
 
-internal final class _${Kind}Box<S : ${Kind}> : _Any${Kind}Box<S.Iterator.Element>
-  where
-  S.SubSequence : ${Kind},
-  S.SubSequence.Iterator.Element == S.Iterator.Element,
-  S.SubSequence.SubSequence == S.SubSequence
-%   if Kind != 'Sequence':
-  ,
-  S.SubSequence.Index == S.Index,
-  S.SubSequence.Indices : ${Kind},
-  S.SubSequence.Indices.Iterator.Element == S.Index,
-  S.SubSequence.Indices.Index == S.Index,
-  S.SubSequence.Indices.SubSequence == S.SubSequence.Indices,
-  S.Indices : ${Kind},
-  S.Indices.Iterator.Element == S.Index,
-  S.Indices.Index == S.Index,
-  S.Indices.SubSequence == S.Indices
-%   end
-{
-  internal typealias Element = S.Iterator.Element
 
+
+@_fixed_layout
+@usableFromInline
+internal final class _${Kind}Box<S : ${Kind}> : _Any${Kind}Box<S.Element>
+{
+  @usableFromInline
+  internal typealias Element = S.Element
+
+  @inline(__always)
+  @inlinable
   internal override func _makeIterator() -> AnyIterator<Element> {
     return AnyIterator(_base.makeIterator())
   }
+  @inlinable
   internal override var _underestimatedCount: Int {
     return _base.underestimatedCount
   }
+  @inlinable
   internal override func _map<T>(
-    _ transform: @noescape (Element) throws -> T
+    _ transform: (Element) throws -> T
   ) rethrows -> [T] {
     return try _base.map(transform)
   }
+  @inlinable
   internal override func _filter(
-    _ includeElement: @noescape (Element) throws -> Bool
+    _ isIncluded: (Element) throws -> Bool
   ) rethrows -> [Element] {
-    return try _base.filter(includeElement)
+    return try _base.filter(isIncluded)
   }
+  @inlinable
   internal override func _forEach(
-    _ body: @noescape (Element) throws -> Void
+    _ body: (Element) throws -> Void
   ) rethrows {
     return try _base.forEach(body)
   }
+  @inlinable
   internal override func __customContainsEquatableElement(
     _ element: Element
   ) -> Bool? {
     return _base._customContainsEquatableElement(element)
   }
-  internal override func __preprocessingPass<R>(
-    _ preprocess: @noescape () throws -> R
-  ) rethrows -> R? {
-    return try _base._preprocessingPass(preprocess)
+  @inlinable
+  internal override func __copyToContiguousArray() -> ContiguousArray<Element> {
+    return _base._copyToContiguousArray()
   }
-  internal override func __copyToNativeArrayBuffer() -> _ContiguousArrayStorageBase {
-    return _base._copyToNativeArrayBuffer()._storage
+  @inlinable
+  internal override func __copyContents(initializing buf: UnsafeMutableBufferPointer<Element>)
+    -> (AnyIterator<Element>,UnsafeMutableBufferPointer<Element>.Index) {
+    let (it,idx) = _base._copyContents(initializing: buf)
+    return (AnyIterator(it),idx)
   }
-  internal override func __copyContents(initializing ptr: UnsafeMutablePointer<Element>)
-    -> UnsafeMutablePointer<Element> {
-    return _base._copyContents(initializing: ptr)
+%   if Kind == 'Sequence':
+  @inlinable
+  internal override func _dropFirst(_ n: Int) -> _AnySequenceBox<Element> {
+    return _SequenceBox<DropFirstSequence<S>>(_base: _base.dropFirst(n))
   }
+  @inlinable
+  internal override func _drop(
+    while predicate: (Element) throws -> Bool
+  ) rethrows -> _Any${Kind}Box<Element> {
+    return try _SequenceBox<DropWhileSequence<S>>(_base: _base.drop(while: predicate))
+  }
+  @inlinable
+  internal override func _dropLast(_ n: Int) -> [Element] {
+    return _base.dropLast(n)
+  }
+  @inlinable
+  internal override func _prefix(_ n: Int) -> _AnySequenceBox<Element> {
+    return _SequenceBox<PrefixSequence<S>>(_base: _base.prefix(n))
+  }
+  @inlinable
+  internal override func _prefix(
+    while predicate: (Element) throws -> Bool
+  ) rethrows -> [Element] {
+    return try _base.prefix(while: predicate)
+  }
+  @inlinable
+  internal override func _suffix(_ maxLength: Int) -> [Element] {
+    return _base.suffix(maxLength)
+  }
+%   else:
+  @inline(__always)
+  @inlinable
+  internal override func _drop(
+    while predicate: (Element) throws -> Bool
+  ) rethrows -> _Any${Kind}Box<Element> {
+    return try _${Kind}Box<S.SubSequence>(_base: _base.drop(while: predicate))
+  }
+  @inline(__always)
+  @inlinable
   internal override func _dropFirst(_ n: Int) -> _Any${Kind}Box<Element> {
     return _${Kind}Box<S.SubSequence>(_base: _base.dropFirst(n))
   }
+  @inline(__always)
+  @inlinable
   internal override func _dropLast(_ n: Int) -> _Any${Kind}Box<Element> {
     return _${Kind}Box<S.SubSequence>(_base: _base.dropLast(n))
   }
+  @inline(__always)
+  @inlinable
+  internal override func _prefix(
+    while predicate: (Element) throws -> Bool
+  ) rethrows -> _Any${Kind}Box<Element> {
+    return try _${Kind}Box<S.SubSequence>(_base: _base.prefix(while: predicate))
+  }
+  @inline(__always)
+  @inlinable
   internal override func _prefix(_ maxLength: Int) -> _Any${Kind}Box<Element> {
     return _${Kind}Box<S.SubSequence>(_base: _base.prefix(maxLength))
   }
+  @inline(__always)
+  @inlinable
   internal override func _suffix(_ maxLength: Int) -> _Any${Kind}Box<Element> {
     return _${Kind}Box<S.SubSequence>(_base: _base.suffix(maxLength))
   }
-%   for ResultKind in EqualAndWeakerKinds:
-  internal override func _split(
-    maxSplits: Int, omittingEmptySubsequences: Bool,
-    isSeparator: @noescape (Element) throws -> Bool
-  ) rethrows -> [Any${ResultKind}<Element>] {
-    return try _base.split(
-      maxSplits: maxSplits,
-      omittingEmptySubsequences: omittingEmptySubsequences,
-      isSeparator: isSeparator)
-      .map {
-        Any${ResultKind}(_box: _${Kind}Box<S.SubSequence>(_base: $0))
-      }
-  }
 %   end
 
+  @inlinable // FIXME(sil-serialize-all)
+  deinit {}
+
 %   if Kind == 'Sequence':
+  @inlinable
   internal init(_base: S) {
     self._base = _base
   }
 %   else:
+  @inlinable
   internal init(_base: S) {
     self._base = _base
     super.init(
@@ -404,6 +556,7 @@ internal final class _${Kind}Box<S : ${Kind}> : _Any${Kind}Box<S.Iterator.Elemen
       endIndex: _IndexBox(_base: _base.endIndex))
   }
 
+  @inlinable
   internal func _unbox(
     _ position: _AnyIndexBox, file: StaticString = #file, line: UInt = #line
   ) -> S.Index {
@@ -413,10 +566,12 @@ internal final class _${Kind}Box<S : ${Kind}> : _Any${Kind}Box<S.Iterator.Elemen
     fatalError("Index type mismatch!", file: file, line: line)
   }
 
+  @inlinable
   internal override subscript(position: _AnyIndexBox) -> Element {
     return _base[_unbox(position)]
   }
 
+  @inlinable
   internal override subscript(start start: _AnyIndexBox, end end: _AnyIndexBox)
     -> _Any${Kind}Box<Element>
   {
@@ -425,10 +580,12 @@ internal final class _${Kind}Box<S : ${Kind}> : _Any${Kind}Box<S.Iterator.Elemen
     )
   }
 
+  @inlinable
   internal override func _index(after position: _AnyIndexBox) -> _AnyIndexBox {
     return _IndexBox(_base: _base.index(after: _unbox(position)))
   }
 
+  @inlinable
   internal override func _formIndex(after position: _AnyIndexBox) {
     if let p = position as? _IndexBox<S.Index> {
       return _base.formIndex(after: &p._base)
@@ -436,15 +593,17 @@ internal final class _${Kind}Box<S : ${Kind}> : _Any${Kind}Box<S.Iterator.Elemen
     fatalError("Index type mismatch!")
   }
 
+  @inlinable
   internal override func _index(
-    _ i: _AnyIndexBox, offsetBy n: IntMax
+    _ i: _AnyIndexBox, offsetBy n: Int
   ) -> _AnyIndexBox {
     return _IndexBox(_base: _base.index(_unbox(i), offsetBy: numericCast(n)))
   }
 
+  @inlinable
   internal override func _index(
     _ i: _AnyIndexBox,
-    offsetBy n: IntMax,
+    offsetBy n: Int,
     limitedBy limit: _AnyIndexBox
   ) -> _AnyIndexBox? {
     return _base.index(
@@ -454,8 +613,9 @@ internal final class _${Kind}Box<S : ${Kind}> : _Any${Kind}Box<S.Iterator.Elemen
       .map { _IndexBox(_base: $0) }
   }
 
+  @inlinable
   internal override func _formIndex(
-    _ i: inout _AnyIndexBox, offsetBy n: IntMax
+    _ i: inout _AnyIndexBox, offsetBy n: Int
   ) {
     if let box = i as? _IndexBox<S.Index> {
       return _base.formIndex(&box._base, offsetBy: numericCast(n))
@@ -463,8 +623,9 @@ internal final class _${Kind}Box<S : ${Kind}> : _Any${Kind}Box<S.Iterator.Elemen
     fatalError("Index type mismatch!")
   }
 
+  @inlinable
   internal override func _formIndex(
-    _ i: inout _AnyIndexBox, offsetBy n: IntMax, limitedBy limit: _AnyIndexBox
+    _ i: inout _AnyIndexBox, offsetBy n: Int, limitedBy limit: _AnyIndexBox
   ) -> Bool {
     if let box = i as? _IndexBox<S.Index> {
       return _base.formIndex(
@@ -475,26 +636,26 @@ internal final class _${Kind}Box<S : ${Kind}> : _Any${Kind}Box<S.Iterator.Elemen
     fatalError("Index type mismatch!")
   }
 
+  @inlinable
   internal override func _distance(
     from start: _AnyIndexBox,
     to end: _AnyIndexBox
-  ) -> IntMax {
+  ) -> Int {
     return numericCast(_base.distance(from: _unbox(start), to: _unbox(end)))
   }
 
-  internal override var _count: IntMax {
+  @inlinable
+  internal override var _count: Int {
     return numericCast(_base.count)
   }
 
-  internal override var _first: Element? {
-    return _base.first
-  }
-
 %     if Kind in ['BidirectionalCollection', 'RandomAccessCollection']:
+  @inlinable
   internal override func _index(before position: _AnyIndexBox) -> _AnyIndexBox {
     return _IndexBox(_base: _base.index(before: _unbox(position)))
   }
 
+  @inlinable
   internal override func _formIndex(before position: _AnyIndexBox) {
     if let p = position as? _IndexBox<S.Index> {
       return _base.formIndex(before: &p._base)
@@ -502,138 +663,176 @@ internal final class _${Kind}Box<S : ${Kind}> : _Any${Kind}Box<S.Iterator.Elemen
     fatalError("Index type mismatch!")
   }
 
-  internal override var _last: Element? {
-    return _base.last
-  }
 %     end
 
 %   end
+  @usableFromInline
   internal var _base: S
 }
 % end
 
-internal struct _ClosureBasedSequence<Iterator : IteratorProtocol>
-  : Sequence {
+@usableFromInline
+@frozen
+internal struct _ClosureBasedSequence<Iterator : IteratorProtocol> {
+  @usableFromInline
+  internal var _makeUnderlyingIterator: () -> Iterator
 
-  internal init(_ makeUnderlyingIterator: () -> Iterator) {
+  @inlinable
+  internal init(_ makeUnderlyingIterator: @escaping () -> Iterator) {
     self._makeUnderlyingIterator = makeUnderlyingIterator
   }
+}
 
+extension _ClosureBasedSequence: Sequence {
+  @inlinable
   internal func makeIterator() -> Iterator {
     return _makeUnderlyingIterator()
   }
-
-  internal var _makeUnderlyingIterator: () -> Iterator
 }
 
 /// A type-erased sequence.
 ///
-/// Forwards operations to an arbitrary underlying sequence having the
-/// same `Element` type, hiding the specifics of the underlying
-/// `Sequence`.
-///
-/// - SeeAlso: `AnyIterator`
-public struct AnySequence<Element> : Sequence {
-  /// Creates a new sequence that wraps and forwards operations to `base`.
-  public init<S : Sequence>(_ base: S)
-    where
-    S.Iterator.Element == Element,
-    S.SubSequence : Sequence,
-    S.SubSequence.Iterator.Element == Element,
-    S.SubSequence.SubSequence == S.SubSequence {
-    self._box = _SequenceBox(_base: base)
-  }
-
+/// An instance of `AnySequence` forwards its operations to an underlying base
+/// sequence having the same `Element` type, hiding the specifics of the
+/// underlying sequence.
+@frozen
+public struct AnySequence<Element> {
+  @usableFromInline
+  internal let _box: _AnySequenceBox<Element>
+  
   /// Creates a sequence whose `makeIterator()` method forwards to
   /// `makeUnderlyingIterator`.
+  @inlinable
   public init<I : IteratorProtocol>(
-    _ makeUnderlyingIterator: () -> I
+    _ makeUnderlyingIterator: @escaping () -> I
   ) where I.Element == Element {
     self.init(_ClosureBasedSequence(makeUnderlyingIterator))
   }
 
+  @inlinable
   internal init(_box: _AnySequenceBox<Element>) {
     self._box = _box
   }
+}
 
-  internal let _box: _AnySequenceBox<Element>
+extension  AnySequence: Sequence {
+  public typealias Iterator = AnyIterator<Element>
+
+  /// Creates a new sequence that wraps and forwards operations to `base`.
+  @inlinable
+  public init<S : Sequence>(_ base: S)
+    where
+    S.Element == Element {
+    self._box = _SequenceBox(_base: base)
+  }
 }
 
 % for Kind in ['Sequence', 'Collection', 'BidirectionalCollection', 'RandomAccessCollection']:
 extension Any${Kind} {
 %   if Kind == 'Sequence':
   /// Returns an iterator over the elements of this sequence.
-%   else:
-  /// Returns an iterator over the elements of this collection.
-%   end
-  ///
-  /// - Complexity: O(1).
-  public func makeIterator() -> AnyIterator<Element> {
+  @inline(__always)
+  @inlinable
+  public __consuming func makeIterator() -> Iterator {
     return _box._makeIterator()
   }
+  @inlinable
+  public __consuming func dropLast(_ n: Int = 1) -> [Element] {
+    return _box._dropLast(n)
+  }
+  @inlinable
+  public __consuming func prefix(
+    while predicate: (Element) throws -> Bool
+  ) rethrows -> [Element] {
+    return try _box._prefix(while: predicate)
+  }
+  @inlinable
+  public __consuming func suffix(_ maxLength: Int) -> [Element] {
+    return _box._suffix(maxLength)
+  }
+%   else:
+  /// Returns an iterator over the elements of this collection.
+  @inline(__always)
+  @inlinable
+  public __consuming func makeIterator() -> Iterator {
+    return _box._makeIterator()
+  }
+  @inlinable
+  public __consuming func dropLast(_ n: Int = 1) -> Any${Kind}<Element> {
+    return Any${Kind}(_box: _box._dropLast(n))
+  }
+  @inlinable
+  public __consuming func prefix(
+    while predicate: (Element) throws -> Bool
+  ) rethrows -> Any${Kind}<Element> {
+    return try Any${Kind}(_box: _box._prefix(while: predicate))
+  }
+  @inlinable
+  public __consuming func suffix(_ maxLength: Int) -> Any${Kind}<Element> {
+    return Any${Kind}(_box: _box._suffix(maxLength))
+  }
+%   end
 
+  @inlinable
   public var underestimatedCount: Int {
     return _box._underestimatedCount
   }
 
+  @inlinable
   public func map<T>(
-    _ transform: @noescape (Element) throws -> T
+    _ transform: (Element) throws -> T
   ) rethrows -> [T] {
     return try _box._map(transform)
   }
 
-  public func filter(
-    _ includeElement: @noescape (Element) throws -> Bool
+  @inlinable
+  public __consuming func filter(
+    _ isIncluded: (Element) throws -> Bool
   ) rethrows -> [Element] {
-    return try _box._filter(includeElement)
+    return try _box._filter(isIncluded)
   }
 
-  public func forEach(
-    _ body: @noescape (Element) throws -> Void
+  @inlinable
+  public __consuming func forEach(
+    _ body: (Element) throws -> Void
   ) rethrows {
     return try _box._forEach(body)
   }
 
-  public func dropFirst(_ n: Int) -> Any${Kind}<Element> {
+  @inlinable
+  public __consuming func drop(
+    while predicate: (Element) throws -> Bool
+  ) rethrows -> Any${Kind}<Element> {
+    return try Any${Kind}(_box: _box._drop(while: predicate))
+  }
+
+  @inlinable
+  public __consuming func dropFirst(_ n: Int = 1) -> Any${Kind}<Element> {
     return Any${Kind}(_box: _box._dropFirst(n))
   }
 
-  public func dropLast(_ n: Int) -> Any${Kind}<Element> {
-    return Any${Kind}(_box: _box._dropLast(n))
-  }
-
-  public func prefix(_ maxLength: Int) -> Any${Kind}<Element> {
+  @inlinable
+  public __consuming func prefix(_ maxLength: Int = 1) -> Any${Kind}<Element> {
     return Any${Kind}(_box: _box._prefix(maxLength))
   }
 
-  public func suffix(_ maxLength: Int) -> Any${Kind}<Element> {
-    return Any${Kind}(_box: _box._suffix(maxLength))
+  @inlinable
+  public func _customContainsEquatableElement(
+    _ element: Element
+  ) -> Bool? {
+    return _box.__customContainsEquatableElement(element)
   }
 
-  public func split(
-    maxSplits: Int = Int.max,
-    omittingEmptySubsequences: Bool = true,
-    isSeparator: @noescape (Element) throws -> Bool
-  ) rethrows -> [Any${Kind}<Element>] {
-    return try _box._split(
-      maxSplits: maxSplits,
-      omittingEmptySubsequences: omittingEmptySubsequences,
-      isSeparator: isSeparator)
+  @inlinable
+  public __consuming func _copyToContiguousArray() -> ContiguousArray<Element> {
+    return self._box.__copyToContiguousArray()
   }
 
-  public func _preprocessingPass<R>(
-    _ preprocess: @noescape () throws -> R
-  ) rethrows -> R? {
-    return try _box.__preprocessingPass(preprocess)
-  }
-
-  public func _copyToNativeArrayBuffer() -> _ContiguousArrayBuffer<Element> {
-    return _ContiguousArrayBuffer(self._box.__copyToNativeArrayBuffer())
-  }
-
-  public func _copyContents(initializing ptr: UnsafeMutablePointer<Element>)
-    -> UnsafeMutablePointer<Element> {
-    return _box.__copyContents(initializing: ptr)
+  @inlinable
+  public __consuming func _copyContents(initializing buf: UnsafeMutableBufferPointer<Element>)
+  -> (AnyIterator<Element>,UnsafeMutableBufferPointer<Element>.Index) {
+    let (it,idx) = _box.__copyContents(initializing: buf)
+    return (AnyIterator(it),idx)
   }
 }
 % end
@@ -641,152 +840,115 @@ extension Any${Kind} {
 //===--- Index ------------------------------------------------------------===//
 //===----------------------------------------------------------------------===//
 
+@usableFromInline
 internal protocol _AnyIndexBox : class {
   var _typeID: ObjectIdentifier { get }
 
   func _unbox<T : Comparable>() -> T?
 
-  func _equal(to rhs: _AnyIndexBox) -> Bool
+  func _isEqual(to rhs: _AnyIndexBox) -> Bool
 
-  func _notEqual(to rhs: _AnyIndexBox) -> Bool
-
-  func _less(than rhs: _AnyIndexBox) -> Bool
-
-  func _lessOrEqual(to rhs: _AnyIndexBox) -> Bool
-
-  func _greater(than rhs: _AnyIndexBox) -> Bool
-
-  func _greaterOrEqual(to rhs: _AnyIndexBox) -> Bool
+  func _isLess(than rhs: _AnyIndexBox) -> Bool
 }
 
-internal final class _IndexBox<
-  BaseIndex : Comparable
-> : _AnyIndexBox {
+@_fixed_layout
+@usableFromInline
+internal final class _IndexBox<BaseIndex: Comparable>: _AnyIndexBox {
+  @usableFromInline
   internal var _base: BaseIndex
 
+  @inlinable
   internal init(_base: BaseIndex) {
     self._base = _base
   }
 
+  @inlinable
   internal func _unsafeUnbox(_ other: _AnyIndexBox) -> BaseIndex {
     return unsafeDowncast(other, to: _IndexBox.self)._base
   }
 
+  @inlinable
   internal var _typeID: ObjectIdentifier {
-    return Swift._typeID(self)
+    return ObjectIdentifier(type(of: self))
   }
 
+  @inlinable
   internal func _unbox<T : Comparable>() -> T? {
     return (self as _AnyIndexBox as? _IndexBox<T>)?._base
   }
 
-  internal func _equal(to rhs: _AnyIndexBox) -> Bool {
+  @inlinable
+  internal func _isEqual(to rhs: _AnyIndexBox) -> Bool {
     return _base == _unsafeUnbox(rhs)
   }
 
-  internal func _notEqual(to rhs: _AnyIndexBox) -> Bool {
-    return _base != _unsafeUnbox(rhs)
-  }
-
-  internal func _less(than rhs: _AnyIndexBox) -> Bool {
+  @inlinable
+  internal func _isLess(than rhs: _AnyIndexBox) -> Bool {
     return _base < _unsafeUnbox(rhs)
-  }
-
-  internal func _lessOrEqual(to rhs: _AnyIndexBox) -> Bool {
-    return _base <= _unsafeUnbox(rhs)
-  }
-
-  internal func _greater(than rhs: _AnyIndexBox) -> Bool {
-    return _base > _unsafeUnbox(rhs)
-  }
-
-  internal func _greaterOrEqual(to rhs: _AnyIndexBox) -> Bool {
-    return _base >= _unsafeUnbox(rhs)
   }
 }
 
-/// A wrapper over an underlying index that hides
-/// the specific underlying type.
-///
-/// - SeeAlso: `AnyCollection`
-public struct AnyIndex : Comparable {
+/// A wrapper over an underlying index that hides the specific underlying type.
+@frozen
+public struct AnyIndex {
+  @usableFromInline
+  internal var _box: _AnyIndexBox
+
   /// Creates a new index wrapping `base`.
+  @inlinable
   public init<BaseIndex : Comparable>(_ base: BaseIndex) {
     self._box = _IndexBox(_base: base)
   }
 
+  @inlinable
   internal init(_box: _AnyIndexBox) {
     self._box = _box
   }
 
+  @inlinable
   internal var _typeID: ObjectIdentifier {
     return _box._typeID
   }
-
-  internal var _box: _AnyIndexBox
 }
 
-/// Returns `true` iff `lhs` and `rhs` wrap equal underlying indices.
-///
-/// - Precondition: The types of indices wrapped by `lhs` and `rhs` are
-///   identical.
-public func == (lhs: AnyIndex, rhs: AnyIndex) -> Bool {
-  _precondition(lhs._typeID == rhs._typeID, "base index types differ")
-  return lhs._box._equal(to: rhs._box)
-}
+extension AnyIndex : Comparable {
+  /// Returns a Boolean value indicating whether two indices wrap equal
+  /// underlying indices.
+  ///
+  /// The types of the two underlying indices must be identical.
+  ///
+  /// - Parameters:
+  ///   - lhs: An index to compare.
+  ///   - rhs: Another index to compare.
+  @inlinable
+  public static func == (lhs: AnyIndex, rhs: AnyIndex) -> Bool {
+    _precondition(lhs._typeID == rhs._typeID, "Base index types differ")
+    return lhs._box._isEqual(to: rhs._box)
+  }
 
-public func != (lhs: AnyIndex, rhs: AnyIndex) -> Bool {
-  _precondition(lhs._typeID == rhs._typeID, "base index types differ")
-  return lhs._box._notEqual(to: rhs._box)
-}
-
-public func < (lhs: AnyIndex, rhs: AnyIndex) -> Bool {
-  _precondition(lhs._typeID == rhs._typeID, "base index types differ")
-  return lhs._box._less(than: rhs._box)
-}
-
-public func <= (lhs: AnyIndex, rhs: AnyIndex) -> Bool {
-  _precondition(lhs._typeID == rhs._typeID, "base index types differ")
-  return lhs._box._lessOrEqual(to: rhs._box)
-}
-
-public func > (lhs: AnyIndex, rhs: AnyIndex) -> Bool {
-  _precondition(lhs._typeID == rhs._typeID, "base index types differ")
-  return lhs._box._greater(than: rhs._box)
-}
-
-public func >= (lhs: AnyIndex, rhs: AnyIndex) -> Bool {
-  _precondition(lhs._typeID == rhs._typeID, "base index types differ")
-  return lhs._box._greaterOrEqual(to: rhs._box)
+  /// Returns a Boolean value indicating whether the first argument represents a
+  /// position before the second argument.
+  ///
+  /// The types of the two underlying indices must be identical.
+  ///
+  /// - Parameters:
+  ///   - lhs: An index to compare.
+  ///   - rhs: Another index to compare.
+  @inlinable
+  public static func < (lhs: AnyIndex, rhs: AnyIndex) -> Bool {
+    _precondition(lhs._typeID == rhs._typeID, "Base index types differ")
+    return lhs._box._isLess(than: rhs._box)
+  }
 }
 
 //===--- Collections ------------------------------------------------------===//
 //===----------------------------------------------------------------------===//
 
-/// A protocol for `AnyCollection<Element>`,
-/// `AnyBidirectionalCollection<Element>`, and
-/// `AnyRandomAccessCollection<Element>`.
-///
-/// This protocol can be considered an implementation detail of the
-/// `===` and `!==` implementations for these types.
-public protocol AnyCollectionProtocol : Collection {
+public // @testable
+protocol _AnyCollectionProtocol : Collection {
   /// Identifies the underlying collection stored by `self`. Instances
-  /// copied from one another have the same `_underlyingCollectionID`.
-  var _underlyingCollectionID: ObjectIdentifier { get }
-}
-
-/// Returns `true` iff `lhs` and `rhs` store the same underlying collection.
-public func === <
-  L : AnyCollectionProtocol, R : AnyCollectionProtocol
->(lhs: L, rhs: R) -> Bool {
-  return lhs._underlyingCollectionID == rhs._underlyingCollectionID
-}
-
-/// Returns `false` iff `lhs` and `rhs` store the same underlying collection.
-public func !== <
-  L : AnyCollectionProtocol, R : AnyCollectionProtocol
->(lhs: L, rhs: R) -> Bool {
-  return lhs._underlyingCollectionID != rhs._underlyingCollectionID
+  /// copied or upgraded/downgraded from one another have the same `_boxID`.
+  var _boxID: ObjectIdentifier { get }
 }
 
 % for (ti, Traversal) in enumerate(TRAVERSALS):
@@ -795,71 +957,60 @@ public func !== <
 /// A type-erased wrapper over any collection with indices that
 /// support ${Traversal.lower().replace('omacc', 'om acc')} traversal.
 ///
-/// Forwards operations to an arbitrary underlying collection having the
+/// An `${Self}` instance forwards its operations to a base collection having the
 /// same `Element` type, hiding the specifics of the underlying
-/// `Collection`.
-///
-/// - SeeAlso: ${', '.join('`Any%sCollection`' % t for t in (2 * TRAVERSALS)[ti + 1 : ti + 3]) }
-public struct ${Self}<Element>
-  : AnyCollectionProtocol, ${SelfProtocol} {
+/// collection.
+@frozen
+public struct ${Self}<Element> {
+  @usableFromInline
+  internal let _box: _${Self}Box<Element>
 
+  @inlinable
   internal init(_box: _${Self}Box<Element>) {
     self._box = _box
   }
+}
+
+extension ${Self}: ${SelfProtocol} {
+  public typealias Indices = DefaultIndices<${Self}>
+  public typealias Iterator = AnyIterator<Element>
+  public typealias Index = AnyIndex
+  public typealias SubSequence = ${Self}<Element> 
 
 %   for SubTraversal in TRAVERSALS[ti:]:
 %     SubProtocol = collectionForTraversal(SubTraversal)
-  /// Creates an `${Self}` that
-  /// stores `base` as its underlying collection.
+  /// Creates a type-erased collection that wraps the given collection.
+  ///
+  /// - Parameter base: The collection to wrap.
   ///
   /// - Complexity: O(1).
-  public init<C : ${SubProtocol}>(_ base: C)
-    where
-    C.Iterator.Element == Element,
-
-    // FIXME(compiler limitation): these constraints should be applied to
-    // associated types of Collection.
-    C.SubSequence : ${SubProtocol},
-    C.SubSequence.Iterator.Element == Element,
-    C.SubSequence.Index == C.Index,
-    C.SubSequence.Indices : ${SubProtocol},
-    C.SubSequence.Indices.Iterator.Element == C.Index,
-    C.SubSequence.Indices.Index == C.Index,
-    C.SubSequence.Indices.SubSequence == C.SubSequence.Indices,
-    C.SubSequence.SubSequence == C.SubSequence,
-    C.Indices : ${SubProtocol},
-    C.Indices.Iterator.Element == C.Index,
-    C.Indices.Index == C.Index,
-    C.Indices.SubSequence == C.Indices {
+  @inline(__always)
+  @inlinable
+  public init<C : ${SubProtocol}>(_ base: C) where C.Element == Element {
     // Traversal: ${Traversal}
     // SubTraversal: ${SubTraversal}
     self._box = _${SubProtocol}Box<C>(
       _base: base)
   }
 
-  /// Creates an `Any${Traversal}Collection` having the same underlying
-  /// collection as `other`.
+  /// Creates an `${Self}` having the same underlying collection as `other`.
   ///
-  /// - Postcondition: The result is `===` to `other`.
-  ///
-  /// - Complexity: O(1).
-  public init(
-    _ other: Any${SubProtocol}<Element>
-  ) {
+  /// - Complexity: O(1)
+  @inlinable
+  public init(_ other: Any${SubProtocol}<Element>) {
     self._box = other._box
   }
 %   end
 
 %   for SuperTraversal in TRAVERSALS[:ti]:
-  /// If the underlying collection stored by `other` satisfies
-  /// `${SelfProtocol}`, creates an `${Self}` having the same
-  /// underlying collection as `other`.  Otherwise, the result is
-  /// `nil`.
+  /// Creates an `${Self}` having the same underlying collection as `other`.
   ///
-  /// - Complexity: O(1).
-  public init?(
-    _ other: Any${collectionForTraversal(SuperTraversal)}<Element>
-  ) {
+  /// If the underlying collection stored by `other` does not satisfy
+  /// `${SelfProtocol}`, the result is `nil`.
+  ///
+  /// - Complexity: O(1)
+  @inlinable
+  public init?(_ other: Any${collectionForTraversal(SuperTraversal)}<Element>) {
     guard let box =
       other._box as? _${Self}Box<Element> else {
       return nil
@@ -868,13 +1019,11 @@ public struct ${Self}<Element>
   }
 %   end
 
-  public typealias Index = AnyIndex
-  public typealias IndexDistance = IntMax
-
   /// The position of the first element in a non-empty collection.
   ///
   /// In an empty collection, `startIndex == endIndex`.
-  public var startIndex: AnyIndex {
+  @inlinable
+  public var startIndex: Index {
     return AnyIndex(_box: _box._startIndex)
   }
 
@@ -883,7 +1032,8 @@ public struct ${Self}<Element>
   ///
   /// `endIndex` is always reachable from `startIndex` by zero or more
   /// applications of `index(after:)`.
-  public var endIndex: AnyIndex {
+  @inlinable
+  public var endIndex: Index {
     return AnyIndex(_box: _box._endIndex)
   }
 
@@ -891,32 +1041,38 @@ public struct ${Self}<Element>
   ///
   /// - Precondition: `position` indicates a valid position in `self` and
   ///   `position != endIndex`.
-  public subscript(position: AnyIndex) -> Element {
+  @inlinable
+  public subscript(position: Index) -> Element {
     return _box[position._box]
   }
 
-  public subscript(bounds: Range<AnyIndex>) -> ${Self}<Element> {
+  @inlinable
+  public subscript(bounds: Range<Index>) -> SubSequence {
     return ${Self}(_box:
       _box[start: bounds.lowerBound._box, end: bounds.upperBound._box])
   }
 
-  public func _failEarlyRangeCheck(_ index: AnyIndex, bounds: Range<AnyIndex>) {
+  @inlinable
+  public func _failEarlyRangeCheck(_ index: Index, bounds: Range<Index>) {
     // Do nothing.  Doing a range check would involve unboxing indices,
     // performing dynamic dispatch etc.  This seems to be too costly for a fast
     // range check for QoI purposes.
   }
 
+  @inlinable
   public func _failEarlyRangeCheck(_ range: Range<Index>, bounds: Range<Index>) {
     // Do nothing.  Doing a range check would involve unboxing indices,
     // performing dynamic dispatch etc.  This seems to be too costly for a fast
     // range check for QoI purposes.
   }
 
-  public func index(after i: AnyIndex) -> AnyIndex {
+  @inlinable
+  public func index(after i: Index) -> Index {
     return AnyIndex(_box: _box._index(after: i._box))
   }
 
-  public func formIndex(after i: inout AnyIndex) {
+  @inlinable
+  public func formIndex(after i: inout Index) {
     if _isUnique(&i._box) {
       _box._formIndex(after: i._box)
     }
@@ -925,20 +1081,21 @@ public struct ${Self}<Element>
     }
   }
 
-  public func index(_ i: AnyIndex, offsetBy n: IntMax) -> AnyIndex {
+  @inlinable
+  public func index(_ i: Index, offsetBy n: Int) -> Index {
     return AnyIndex(_box: _box._index(i._box, offsetBy: n))
   }
 
+  @inlinable
   public func index(
-    _ i: AnyIndex,
-    offsetBy n: IntMax,
-    limitedBy limit: AnyIndex
-  ) -> AnyIndex? {
+    _ i: Index, offsetBy n: Int, limitedBy limit: Index
+  ) -> Index? {
     return _box._index(i._box, offsetBy: n, limitedBy: limit._box)
       .map { AnyIndex(_box:$0) }
   }
 
-  public func formIndex(_ i: inout AnyIndex, offsetBy n: IntMax) {
+  @inlinable
+  public func formIndex(_ i: inout Index, offsetBy n: Int) {
     if _isUnique(&i._box) {
       return _box._formIndex(&i._box, offsetBy: n)
     } else {
@@ -946,10 +1103,11 @@ public struct ${Self}<Element>
     }
   }
 
+  @inlinable
   public func formIndex(
-    _ i: inout AnyIndex,
-    offsetBy n: IntMax,
-    limitedBy limit: AnyIndex
+    _ i: inout Index,
+    offsetBy n: Int,
+    limitedBy limit: Index
   ) -> Bool {
     if _isUnique(&i._box) {
       return _box._formIndex(&i._box, offsetBy: n, limitedBy: limit._box)
@@ -962,27 +1120,33 @@ public struct ${Self}<Element>
     return false
   }
 
-  public func distance(from start: AnyIndex, to end: AnyIndex) -> IntMax {
+  @inlinable
+  public func distance(from start: Index, to end: Index) -> Int {
     return _box._distance(from: start._box, to: end._box)
   }
 
   /// The number of elements.
   ///
-  /// - Complexity: ${'O(1)' if Traversal == 'RandomAccess' else 'O(N)'}.
-  public var count: IntMax {
+% if Traversal != 'RandomAccess':
+  /// To check whether a collection is empty, use its `isEmpty` property
+  /// instead of comparing `count` to zero. Calculating `count` can be an O(*n*)
+  /// operation.
+  ///
+% end
+  /// - Complexity: ${'O(1)' if Traversal == 'RandomAccess' else 'O(*n*)'}
+  @inlinable
+  public var count: Int {
     return _box._count
   }
 
-  public var first: Element? {
-    return _box._first
-  }
-
 %   if Traversal == 'Bidirectional' or Traversal == 'RandomAccess':
-  public func index(before i: AnyIndex) -> AnyIndex {
+  @inlinable
+  public func index(before i: Index) -> Index {
     return AnyIndex(_box: _box._index(before: i._box))
   }
 
-  public func formIndex(before i: inout AnyIndex) {
+  @inlinable
+  public func formIndex(before i: inout Index) {
     if _isUnique(&i._box) {
       _box._formIndex(before: i._box)
     }
@@ -990,53 +1154,19 @@ public struct ${Self}<Element>
       i = index(before: i)
     }
   }
-
-  public var last: Element? {
-    return _box._last
-  }
 %   end
+}
 
+extension ${Self}: _AnyCollectionProtocol {
   /// Uniquely identifies the stored underlying collection.
+  @inlinable
   public // Due to language limitations only
-  var _underlyingCollectionID: ObjectIdentifier {
+  var _boxID: ObjectIdentifier {
     return ObjectIdentifier(_box)
   }
-
-  internal let _box: _${Self}Box<Element>
 }
 % end
 
-@available(*, unavailable, renamed: "AnyIterator")
-public struct AnyGenerator<Element> {}
-
-extension AnyIterator {
-  @available(*, unavailable, renamed: "makeIterator")
-  public func generate() -> AnyIterator<Element> {
-    Builtin.unreachable()
-  }
-}
-
-% for Kind in ['Sequence', 'Collection', 'BidirectionalCollection', 'RandomAccessCollection']:
-extension Any${Kind} {
-
-  @available(*, unavailable, message: "Please use underestimatedCount property instead.")
-  public var underestimateCount: Int {
-    Builtin.unreachable()
-  }
-}
-%end
-
-@available(*, unavailable, renamed: "AnyCollectionProtocol")
-public typealias AnyCollectionType = AnyCollectionProtocol
-
-extension AnyCollectionProtocol {
-  @available(*, unavailable, renamed: "makeIterator")
-  public func generate() -> AnyIterator<Iterator.Element> {
-    Builtin.unreachable()
-  }
-}
-
-% for Traversal in TRAVERSALS:
-@available(*, unavailable, renamed: "AnyIndex")
-public typealias Any${Traversal}Index = AnyIndex
-% end
+// ${'Local Variables'}:
+// eval: (read-only-mode 1)
+// End:

@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -40,24 +40,43 @@
 #define UNCHECKED_EXPR(Id, Parent) EXPR(Id, Parent)
 #endif
 
+/// A literal expression node represents a literal value, such as a number,
+/// boolean, string, etc.
+///
+/// By default, these are treated like any other expression.
+#ifndef LITERAL_EXPR
+#define LITERAL_EXPR(Id, Parent) EXPR(Id, Parent)
+#endif
+
+/// A expression node with a DeclContext. For example: closures.
+///
+/// By default, these are treated like any other expression.
+#ifndef CONTEXT_EXPR
+#define CONTEXT_EXPR(Id, Parent) EXPR(Id, Parent)
+#endif
+
 /// A convenience for determining the range of expressions.  These will always
 /// appear immediately after the last member.
 #ifndef EXPR_RANGE
 #define EXPR_RANGE(Id, First, Last)
 #endif
 
+#ifndef LAST_EXPR
+#define LAST_EXPR(Id)
+#endif
+
 EXPR(Error, Expr)
 ABSTRACT_EXPR(Literal, Expr)
-  EXPR(NilLiteral, LiteralExpr)
+  LITERAL_EXPR(NilLiteral, LiteralExpr)
   ABSTRACT_EXPR(NumberLiteral, LiteralExpr)
-    EXPR(IntegerLiteral, NumberLiteralExpr)
-    EXPR(FloatLiteral, NumberLiteralExpr)
+    LITERAL_EXPR(IntegerLiteral, NumberLiteralExpr)
+    LITERAL_EXPR(FloatLiteral, NumberLiteralExpr)
   EXPR_RANGE(NumberLiteral, IntegerLiteral, FloatLiteral)
-  EXPR(BooleanLiteral, LiteralExpr)
-  EXPR(StringLiteral, LiteralExpr)
-  EXPR(InterpolatedStringLiteral, LiteralExpr)
-  EXPR(ObjectLiteral, LiteralExpr)
-  EXPR(MagicIdentifierLiteral, LiteralExpr)
+  LITERAL_EXPR(BooleanLiteral, LiteralExpr)
+  LITERAL_EXPR(StringLiteral, LiteralExpr)
+  LITERAL_EXPR(InterpolatedStringLiteral, LiteralExpr)
+  LITERAL_EXPR(ObjectLiteral, LiteralExpr)
+  LITERAL_EXPR(MagicIdentifierLiteral, LiteralExpr)
   EXPR_RANGE(Literal, NilLiteral, MagicIdentifierLiteral)
 EXPR(DiscardAssignment, Expr)
 EXPR(DeclRef, Expr)
@@ -67,14 +86,16 @@ EXPR(OtherConstructorDeclRef, Expr)
 EXPR(DotSyntaxBaseIgnored, Expr)
 ABSTRACT_EXPR(OverloadSetRef, Expr)
   UNCHECKED_EXPR(OverloadedDeclRef, OverloadSetRefExpr)
-  UNCHECKED_EXPR(OverloadedMemberRef, OverloadSetRefExpr)
-  EXPR_RANGE(OverloadSetRef, OverloadedDeclRef, OverloadedMemberRef)
+  EXPR_RANGE(OverloadSetRef, OverloadedDeclRef, OverloadedDeclRef)
 UNCHECKED_EXPR(UnresolvedDeclRef, Expr)
-EXPR(MemberRef, Expr)
-ABSTRACT_EXPR(DynamicLookup, Expr)
-  EXPR(DynamicMemberRef, DynamicLookupExpr)
-  EXPR(DynamicSubscript, DynamicLookupExpr)
-  EXPR_RANGE(DynamicLookup, DynamicMemberRef, DynamicSubscript)
+ABSTRACT_EXPR(Lookup, Expr)
+  EXPR(MemberRef, LookupExpr)
+  EXPR(Subscript, LookupExpr)
+  ABSTRACT_EXPR(DynamicLookup, LookupExpr)
+    EXPR(DynamicMemberRef, DynamicLookupExpr)
+    EXPR(DynamicSubscript, DynamicLookupExpr)
+    EXPR_RANGE(DynamicLookup, DynamicMemberRef, DynamicSubscript)
+  EXPR_RANGE(Lookup, MemberRef, DynamicSubscript)
 UNCHECKED_EXPR(UnresolvedSpecialize, Expr)
 UNCHECKED_EXPR(UnresolvedMember, Expr)
 UNCHECKED_EXPR(UnresolvedDot, Expr)
@@ -93,21 +114,25 @@ ABSTRACT_EXPR(Collection, Expr)
   EXPR(Array, CollectionExpr)
   EXPR(Dictionary, CollectionExpr)
   EXPR_RANGE(Collection, Array, Dictionary)
-EXPR(Subscript, Expr)
+EXPR(KeyPathApplication, Expr)
 EXPR(TupleElement, Expr)
 EXPR(CaptureList, Expr)
 ABSTRACT_EXPR(AbstractClosure, Expr)
-  EXPR(Closure, AbstractClosureExpr)
-  EXPR(AutoClosure, AbstractClosureExpr)
+  CONTEXT_EXPR(Closure, AbstractClosureExpr)
+  CONTEXT_EXPR(AutoClosure, AbstractClosureExpr)
   EXPR_RANGE(AbstractClosure, Closure, AutoClosure)
 EXPR(InOut, Expr)
+EXPR(VarargExpansion, Expr)
 EXPR(DynamicType, Expr)
 EXPR(RebindSelfInConstructor, Expr)
 EXPR(OpaqueValue, Expr)
+EXPR(DefaultArgument, Expr)
+EXPR(CallerDefaultArgument, Expr)
 EXPR(BindOptional, Expr)
 EXPR(OptionalEvaluation, Expr)
 EXPR(ForceValue, Expr)
 EXPR(OpenExistential, Expr)
+EXPR(MakeTemporarilyEscapable, Expr)
 ABSTRACT_EXPR(Apply, Expr)
   EXPR(Call, ApplyExpr)
   EXPR(PrefixUnary, ApplyExpr)
@@ -120,14 +145,19 @@ ABSTRACT_EXPR(Apply, Expr)
   EXPR_RANGE(Apply, Call, ConstructorRefCall)
 ABSTRACT_EXPR(ImplicitConversion, Expr)
   EXPR(Load, ImplicitConversionExpr)
-  EXPR(TupleShuffle, ImplicitConversionExpr)
+  EXPR(DestructureTuple, ImplicitConversionExpr)
   EXPR(UnresolvedTypeConversion, ImplicitConversionExpr)
   EXPR(FunctionConversion, ImplicitConversionExpr)
   EXPR(CovariantFunctionConversion, ImplicitConversionExpr)
   EXPR(CovariantReturnConversion, ImplicitConversionExpr)
+  EXPR(ImplicitlyUnwrappedFunctionConversion, ImplicitConversionExpr)
   EXPR(MetatypeConversion, ImplicitConversionExpr)
   EXPR(CollectionUpcastConversion, ImplicitConversionExpr)
   EXPR(Erasure, ImplicitConversionExpr)
+  EXPR(AnyHashableErasure, ImplicitConversionExpr)
+  EXPR(BridgeToObjC, ImplicitConversionExpr)
+  EXPR(BridgeFromObjC, ImplicitConversionExpr)
+  EXPR(ConditionalBridgeFromObjC, ImplicitConversionExpr)
   EXPR(DerivedToBase, ImplicitConversionExpr)
   EXPR(ArchetypeToSuper, ImplicitConversionExpr)
   EXPR(InjectIntoOptional, ImplicitConversionExpr)
@@ -138,10 +168,10 @@ ABSTRACT_EXPR(ImplicitConversion, Expr)
   EXPR(ArrayToPointer, ImplicitConversionExpr)
   EXPR(StringToPointer, ImplicitConversionExpr)
   EXPR(PointerToPointer, ImplicitConversionExpr)
-  EXPR(LValueToPointer, ImplicitConversionExpr)
   EXPR(ForeignObjectConversion, ImplicitConversionExpr)
   EXPR(UnevaluatedInstance, ImplicitConversionExpr)
-  EXPR_RANGE(ImplicitConversion, Load, UnevaluatedInstance)
+  EXPR(UnderlyingToOpaque, ImplicitConversionExpr)
+  EXPR_RANGE(ImplicitConversion, Load, UnderlyingToOpaque)
 ABSTRACT_EXPR(ExplicitCast, Expr)
   ABSTRACT_EXPR(CheckedCast, ExplicitCastExpr)
     EXPR(ForcedCheckedCast, CheckedCastExpr)
@@ -152,15 +182,22 @@ ABSTRACT_EXPR(ExplicitCast, Expr)
   EXPR_RANGE(ExplicitCast, ForcedCheckedCast, Coerce)
 UNCHECKED_EXPR(Arrow, Expr)
 EXPR(If, Expr)
+EXPR(EnumIsCase, Expr)
 EXPR(Assign, Expr)
-EXPR(DefaultValue, Expr)
 EXPR(CodeCompletion, Expr)
 UNCHECKED_EXPR(UnresolvedPattern, Expr)
+EXPR(LazyInitializer, Expr)
 EXPR(EditorPlaceholder, Expr)
 EXPR(ObjCSelector, Expr)
-EXPR(ObjCKeyPath, Expr)
+EXPR(KeyPath, Expr)
+UNCHECKED_EXPR(KeyPathDot, Expr)
+EXPR(Tap, Expr)
+LAST_EXPR(Tap)
 
 #undef EXPR_RANGE
+#undef LITERAL_EXPR
 #undef UNCHECKED_EXPR
 #undef ABSTRACT_EXPR
+#undef CONTEXT_EXPR
 #undef EXPR
+#undef LAST_EXPR

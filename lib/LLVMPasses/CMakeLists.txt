@@ -1,13 +1,12 @@
-add_swift_library(swiftLLVMPasses
+add_swift_host_library(swiftLLVMPasses STATIC
   LLVMSwiftAA.cpp
   LLVMSwiftRCIdentity.cpp
   LLVMARCOpts.cpp
   LLVMARCContract.cpp
   LLVMInlineTree.cpp
-  LLVMStackPromotion.cpp
   LLVMMergeFunctions.cpp
 
-  COMPONENT_DEPENDS
+  LLVM_LINK_COMPONENTS
   analysis
   )
 

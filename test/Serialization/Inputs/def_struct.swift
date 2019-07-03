@@ -65,7 +65,7 @@ public protocol Computable {
   func compute()
 }
 
-public typealias Cacheable = protocol<Resettable, Computable>
+public typealias Cacheable = Resettable & Computable
 
 public protocol SpecialResettable : Resettable, Computable {}
 
@@ -89,8 +89,8 @@ public struct ResettableWrapper<T : Resettable> : AnotherAssociated {
 
 public func cacheViaWrappers<
   T : HasAssociatedType, U : AnotherAssociated
-    where T.ComputableType == U.ResettableType
->(_ computable : T, _ resettable : U) {}
+>(_ computable : T, _ resettable : U)
+  where T.ComputableType == U.ResettableType {}
 
 
 // Subscripts

@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -37,17 +37,21 @@
 //===----------------------------------------------------------------------===//
 
 import SwiftPrivate
-import SwiftPrivatePthreadExtras
-#if os(OSX) || os(iOS)
+import SwiftPrivateLibcExtras
+import SwiftPrivateThreadExtras
+#if os(macOS) || os(iOS)
 import Darwin
-#elseif os(Linux) || os(FreeBSD) || os(Android)
+#elseif os(Linux) || os(FreeBSD) || os(PS4) || os(Android) || os(Cygwin) || os(Haiku)
 import Glibc
+#elseif os(Windows)
+import MSVCRT
+import WinSDK
 #endif
 
 #if _runtime(_ObjC)
 import ObjectiveC
 #else
-func autoreleasepool(_ code: @noescape () -> Void) {
+func autoreleasepool(invoking code: () -> Void) {
   // Native runtime does not have autorelease pools.  Execute the code
   // directly.
   code()
@@ -391,9 +395,10 @@ class _RaceTestWorkerState<RT : RaceTestWithPerTrialData> {
 
 class _RaceTestSharedState<RT : RaceTestWithPerTrialData> {
   var racingThreadCount: Int
+  var stopNow = _stdlib_AtomicInt(0)
 
   var trialBarrier: _stdlib_Barrier
-  var trialSpinBarrier: _stdlib_AtomicInt = _stdlib_AtomicInt()
+  var trialSpinBarrier = _stdlib_AtomicInt()
 
   var raceData: [RT.RaceData] = []
   var workerStates: [_RaceTestWorkerState<RT>] = []
@@ -411,16 +416,22 @@ class _RaceTestSharedState<RT : RaceTestWithPerTrialData> {
   }
 }
 
-func _masterThreadOneTrial<RT : RaceTestWithPerTrialData>(
-  _ sharedState: _RaceTestSharedState<RT>
-) {
+func _masterThreadStopWorkers<RT>( _ sharedState: _RaceTestSharedState<RT>) {
+  // Workers are proceeding to the first barrier in _workerThreadOneTrial.
+  sharedState.stopNow.store(1)
+  // Allow workers to proceed past that first barrier. They will then see
+  // stopNow==true and stop.
+  sharedState.trialBarrier.wait()
+}
+
+func _masterThreadOneTrial<RT>(_ sharedState: _RaceTestSharedState<RT>) {
   let racingThreadCount = sharedState.racingThreadCount
   let raceDataCount = racingThreadCount * racingThreadCount
   let rt = RT()
 
   sharedState.raceData.removeAll(keepingCapacity: true)
 
-  sharedState.raceData.append(contentsOf: (0..<raceDataCount).lazy.map { i in
+  sharedState.raceData.append(contentsOf: (0..<raceDataCount).lazy.map { _ in
     rt.makeRaceData()
   })
 
@@ -428,11 +439,11 @@ func _masterThreadOneTrial<RT : RaceTestWithPerTrialData>(
   sharedState.workerStates.removeAll(keepingCapacity: true)
   
   sharedState.workerStates.append(contentsOf: (0..<racingThreadCount).lazy.map {
-    i in
+    _ in
     let workerState = _RaceTestWorkerState<RT>()
 
     // Shuffle the data so that threads process it in different order.
-    let shuffle = randomShuffle(identityShuffle)
+    let shuffle = identityShuffle.shuffled()
     workerState.raceData = scatter(sharedState.raceData, shuffle)
     workerState.raceDataShuffle = shuffle
 
@@ -473,15 +484,18 @@ func _masterThreadOneTrial<RT : RaceTestWithPerTrialData>(
   }
 }
 
-func _workerThreadOneTrial<RT : RaceTestWithPerTrialData>(
+func _workerThreadOneTrial<RT>(
   _ tid: Int, _ sharedState: _RaceTestSharedState<RT>
-) {
+) -> Bool {
   sharedState.trialBarrier.wait()
+  if sharedState.stopNow.load() == 1 {
+    return true
+  }
   let racingThreadCount = sharedState.racingThreadCount
   let workerState = sharedState.workerStates[tid]
   let rt = RT()
   var threadLocalData = rt.makeThreadLocalData()
-  if true {
+  do {
     let trialSpinBarrier = sharedState.trialSpinBarrier
     _ = trialSpinBarrier.fetchAndAdd(1)
     while trialSpinBarrier.load() < racingThreadCount {}
@@ -493,53 +507,173 @@ func _workerThreadOneTrial<RT : RaceTestWithPerTrialData>(
     workerState.observations.append(rt.thread1(raceData, &threadLocalData))
   }
   sharedState.trialBarrier.wait()
+  return false
 }
+
+/// One-shot sleep in one thread, allowing interrupt by another.
+#if os(Windows)
+class _InterruptibleSleep {
+  let event: HANDLE?
+  var completed: Bool = false
+
+  init() {
+    self.event = CreateEventW(nil, true, false, nil)
+    precondition(self.event != nil)
+  }
+
+  deinit {
+    CloseHandle(self.event)
+  }
+
+  func sleep(durationInSeconds duration: Int) {
+    guard completed == false else { return }
+
+    let result: DWORD = WaitForSingleObject(event, DWORD(duration * 1000))
+    precondition(result == WAIT_OBJECT_0)
+
+    completed = true
+  }
+
+  func wake() {
+    guard completed == false else { return }
+    let result: Bool = SetEvent(self.event)
+    precondition(result == true)
+  }
+}
+#else
+class _InterruptibleSleep {
+  let writeEnd: CInt
+  let readEnd: CInt
+  var completed = false
+
+  init() {
+    (readEnd: readEnd, writeEnd: writeEnd, _) = _stdlib_pipe()
+  }
+
+  deinit {
+    close(readEnd)
+    close(writeEnd)
+  }
+
+  /// Sleep for durationInSeconds or until another
+  /// thread calls wake(), whichever comes first.
+  func sleep(durationInSeconds duration: Int) {
+    if completed {
+      return
+    }
+
+    var timeout = timeval(tv_sec: duration, tv_usec: 0)
+
+    var readFDs = _stdlib_fd_set()
+    var writeFDs = _stdlib_fd_set()
+    var errorFDs = _stdlib_fd_set()
+    readFDs.set(readEnd)
+
+    let ret = _stdlib_select(&readFDs, &writeFDs, &errorFDs, &timeout)
+    precondition(ret >= 0)
+    completed = true
+  }
+
+  /// Wake the thread in sleep().
+  func wake() {
+    if completed { return }
+
+    let buffer: [UInt8] = [1]
+    let ret = write(writeEnd, buffer, 1)
+    precondition(ret >= 0)
+  }
+}
+#endif
+
+#if os(Windows)
+typealias ThreadHandle = HANDLE
+#else
+typealias ThreadHandle = pthread_t
+#endif
 
 public func runRaceTest<RT : RaceTestWithPerTrialData>(
   _: RT.Type,
   trials: Int,
+  timeoutInSeconds: Int? = nil,
   threads: Int? = nil
 ) {
   let racingThreadCount = threads ?? max(2, _stdlib_getHardwareConcurrency())
   let sharedState = _RaceTestSharedState<RT>(racingThreadCount: racingThreadCount)
 
-  let masterThreadBody: () -> Void = {
+  // Alarm thread sets timeoutReached.
+  // Master thread sees timeoutReached and tells worker threads to stop.
+  let timeoutReached = _stdlib_AtomicInt(0)
+  let alarmTimer = _InterruptibleSleep()
+
+  let masterThreadBody = {
     () -> Void in
-    for _ in 0..<trials {
+    for t in 0..<trials {
+      // Check for timeout.
+      // _masterThreadStopWorkers must run BEFORE the last _masterThreadOneTrial
+      // to make the thread coordination barriers work
+      // but we do want to run at least one trial even if the timeout occurs.
+      if timeoutReached.load() == 1 && t > 0 {
+        _masterThreadStopWorkers(sharedState)
+        break
+      }
+
       autoreleasepool {
         _masterThreadOneTrial(sharedState)
       }
     }
   }
 
-  let racingThreadBody: (Int) -> Void = {
+  let racingThreadBody = {
     (tid: Int) -> Void in
     for _ in 0..<trials {
-      _workerThreadOneTrial(tid, sharedState)
+      let stopNow = _workerThreadOneTrial(tid, sharedState)
+      if stopNow { break }
     }
   }
 
-  var allTids = [pthread_t]()
+  let alarmThreadBody = {
+    () -> Void in
+    guard let timeoutInSeconds = timeoutInSeconds
+    else { return }
+
+    alarmTimer.sleep(durationInSeconds: timeoutInSeconds)
+    _ = timeoutReached.fetchAndAdd(1)
+  }
+
+  var testTids = [ThreadHandle]()
+  var alarmTid: ThreadHandle
 
   // Create the master thread.
-  if true {
-    let (ret, tid) = _stdlib_pthread_create_block(
-      nil, masterThreadBody, ())
+  do {
+    let (ret, tid) = _stdlib_thread_create_block(masterThreadBody, ())
     expectEqual(0, ret)
-    allTids.append(tid!)
+    testTids.append(tid!)
   }
 
   // Create racing threads.
   for i in 0..<racingThreadCount {
-    let (ret, tid) = _stdlib_pthread_create_block(
-      nil, racingThreadBody, i)
+    let (ret, tid) = _stdlib_thread_create_block(racingThreadBody, i)
     expectEqual(0, ret)
-    allTids.append(tid!)
+    testTids.append(tid!)
   }
 
-  // Join all threads.
-  for tid in allTids {
-    let (ret, _) = _stdlib_pthread_join(tid, Void.self)
+  // Create the alarm thread that enforces the timeout.
+  do {
+    let (ret, tid) = _stdlib_thread_create_block(alarmThreadBody, ())
+    expectEqual(0, ret)
+    alarmTid = tid!
+  }
+
+  // Join all testing threads.
+  for tid in testTids {
+    let (ret, _) = _stdlib_thread_join(tid, Void.self)
+    expectEqual(0, ret)
+  }
+
+  // Tell the alarm thread to stop if it hasn't already, then join it.
+  do {
+    alarmTimer.wake()
+    let (ret, _) = _stdlib_thread_join(alarmTid, Void.self)
     expectEqual(0, ret)
   }
 
@@ -555,6 +689,7 @@ internal func _divideRoundUp(_ lhs: Int, _ rhs: Int) -> Int {
 public func runRaceTest<RT : RaceTestWithPerTrialData>(
   _ test: RT.Type,
   operations: Int,
+  timeoutInSeconds: Int? = nil,
   threads: Int? = nil
 ) {
   let racingThreadCount = threads ?? max(2, _stdlib_getHardwareConcurrency())
@@ -562,7 +697,8 @@ public func runRaceTest<RT : RaceTestWithPerTrialData>(
   // Each trial runs threads^2 operations.
   let operationsPerTrial = racingThreadCount * racingThreadCount
   let trials = _divideRoundUp(operations, operationsPerTrial)
-  runRaceTest(test, trials: trials, threads: threads)
+  runRaceTest(test, trials: trials, timeoutInSeconds: timeoutInSeconds,
+    threads: threads)
 }
 
 public func consumeCPU(units amountOfWork: Int) {
@@ -575,7 +711,7 @@ public func consumeCPU(units amountOfWork: Int) {
 }
 
 internal struct ClosureBasedRaceTest : RaceTestWithPerTrialData {
-  static var thread: () -> () = {}
+  static var thread: () -> Void = {}
 
   class RaceData {}
   typealias ThreadLocalData = Void
@@ -596,8 +732,25 @@ internal struct ClosureBasedRaceTest : RaceTestWithPerTrialData {
   ) {}
 }
 
-public func runRaceTest(trials: Int, threads: Int? = nil, body: () -> ()) {
+public func runRaceTest(
+  trials: Int,
+  timeoutInSeconds: Int? = nil,
+  threads: Int? = nil,
+  invoking body: @escaping () -> Void
+) {
   ClosureBasedRaceTest.thread = body
-  runRaceTest(ClosureBasedRaceTest.self, trials: trials, threads: threads)
+  runRaceTest(ClosureBasedRaceTest.self, trials: trials,
+    timeoutInSeconds: timeoutInSeconds, threads: threads)
+}
+
+public func runRaceTest(
+  operations: Int,
+  timeoutInSeconds: Int? = nil,
+  threads: Int? = nil,
+  invoking body: @escaping () -> Void
+) {
+  ClosureBasedRaceTest.thread = body
+  runRaceTest(ClosureBasedRaceTest.self, operations: operations,
+    timeoutInSeconds: timeoutInSeconds, threads: threads)
 }
 

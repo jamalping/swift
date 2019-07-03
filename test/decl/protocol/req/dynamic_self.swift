@@ -1,8 +1,14 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 protocol P {
-  func f() -> Self // expected-note 2{{protocol requires function 'f()' with type '() -> Self'}}
+  func f() -> Self
+  // expected-note@-1{{protocol requires function 'f()' with type '() -> Self'}}
+  // expected-note@-2{{protocol requires function 'f()' with type '() -> EError'}}
+  // expected-note@-3{{protocol requires function 'f()' with type '() -> SError'}}
 }
+
+// Error: Missing Self method in a class.
+class W : P {} // expected-error{{type 'W' does not conform to protocol 'P'}}
 
 // Okay: Self method in class.
 class X : P {
@@ -22,7 +28,7 @@ class Z : Y, P { }
 
 // Erro: Z2 conforms, but subclass would not
 class Z2 : P {
-  func f() -> Z2 { return self } // expected-error{{method 'f()' in non-final class 'Z2' must return `Self` to conform to protocol 'P'}}
+  func f() -> Z2 { return self } // expected-error{{method 'f()' in non-final class 'Z2' must return 'Self' to conform to protocol 'P'}}
 }
 
 // Okay: struct conforms by returning itself

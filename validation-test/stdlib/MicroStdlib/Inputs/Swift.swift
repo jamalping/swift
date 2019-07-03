@@ -2,53 +2,55 @@
 // A bare-bones Swift standard library
 //
 
+precedencegroup AssignmentPrecedence { assignment: true }
+
 public enum Optional<Wrapped> {
   case none
   case some(Wrapped)
 }
 
 public typealias IntegerLiteralType = Int
-public typealias _MaxBuiltinIntegerType = Builtin.Int2048
+public typealias _MaxBuiltinIntegerType = Builtin.IntLiteral
 public typealias _MaxBuiltinFloatType = Builtin.FPIEEE80
 
-public protocol _BuiltinIntegerLiteralConvertible {
+public protocol _ExpressibleByBuiltinIntegerLiteral {
   init(_builtinIntegerLiteral value: _MaxBuiltinIntegerType)
 }
 
-public protocol _BuiltinFloatLiteralConvertible {
+public protocol _ExpressibleByBuiltinFloatLiteral {
   init(_builtinFloatLiteral value: _MaxBuiltinFloatType)
 }
 
-public protocol IntegerLiteralConvertible {
-  associatedtype IntegerLiteralType : _BuiltinIntegerLiteralConvertible
+public protocol ExpressibleByIntegerLiteral {
+  associatedtype IntegerLiteralType : _ExpressibleByBuiltinIntegerLiteral
   init(integerLiteral value: IntegerLiteralType)
 }
 
-public protocol FloatLiteralConvertible {
-  associatedtype FloatLiteralType : _BuiltinFloatLiteralConvertible
+public protocol ExpressibleByFloatLiteral {
+  associatedtype FloatLiteralType : _ExpressibleByBuiltinFloatLiteral
   init(floatLiteral value: FloatLiteralType)
 }
 
-public struct Int : _BuiltinIntegerLiteralConvertible, IntegerLiteralConvertible {
+public struct Int : _ExpressibleByBuiltinIntegerLiteral, ExpressibleByIntegerLiteral {
   var value: Builtin.Word
   public init() {
     self = 0
   }
   public init(_builtinIntegerLiteral value: _MaxBuiltinIntegerType) {
-    let builtinValue = Builtin.truncOrBitCast_Int2048_Word(value)
+    let builtinValue = Builtin.s_to_s_checked_trunc_IntLiteral_Word(value).0
     self.value = builtinValue
   }
   public init(integerLiteral value: IntegerLiteralType) {
     self = value
   }
 }
-public struct Int32 : _BuiltinIntegerLiteralConvertible, IntegerLiteralConvertible {
+public struct Int32 : _ExpressibleByBuiltinIntegerLiteral, ExpressibleByIntegerLiteral {
   var value: Builtin.Int32
   public init() {
     self.init(integerLiteral: 0)
   }
   public init(_builtinIntegerLiteral value: _MaxBuiltinIntegerType) {
-    let builtinValue = Builtin.truncOrBitCast_Int2048_Int32(value)
+    let builtinValue = Builtin.s_to_s_checked_trunc_IntLiteral_Int32(value).0
     self.value = builtinValue
   }
   public init(integerLiteral value: IntegerLiteralType) {
@@ -56,13 +58,13 @@ public struct Int32 : _BuiltinIntegerLiteralConvertible, IntegerLiteralConvertib
     self.value = builtinValue
   }
 }
-public struct Int8 : _BuiltinIntegerLiteralConvertible, IntegerLiteralConvertible {
+public struct Int8 : _ExpressibleByBuiltinIntegerLiteral, ExpressibleByIntegerLiteral {
   var value: Builtin.Int8
   public init() {
     self.init(integerLiteral: 0)
   }
   public init(_builtinIntegerLiteral value: _MaxBuiltinIntegerType) {
-    let builtinValue = Builtin.truncOrBitCast_Int2048_Int8(value)
+    let builtinValue = Builtin.s_to_s_checked_trunc_IntLiteral_Int8(value).0
     self.value = builtinValue
   }
   public init(integerLiteral value: IntegerLiteralType) {

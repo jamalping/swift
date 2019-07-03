@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -22,7 +22,7 @@
 #include "swift/SILOptimizer/Analysis/Analysis.h"
 #include "swift/SILOptimizer/PassManager/Passes.h"
 #include "swift/SILOptimizer/PassManager/Transforms.h"
-#include "swift/SILOptimizer/Utils/LSBase.h"
+#include "swift/SILOptimizer/Utils/LoadStoreOptUtils.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 
@@ -50,7 +50,7 @@ static llvm::cl::opt<MLKind> LSLocationKinds(
         clEnumValN(MLKind::OnlyReduction, "only-reduction", "only-reduction"),
         clEnumValN(MLKind::OnlyTypeExpansion, "only-type-expansion",
                    "only-type-expansion"),
-        clEnumValN(MLKind::All, "all", "all"), clEnumValEnd));
+        clEnumValN(MLKind::All, "all", "all")));
 
 static llvm::cl::opt<bool> UseProjection("lslocation-dump-use-new-projection",
                                             llvm::cl::init(false));
@@ -165,7 +165,7 @@ public:
 
         llvm::outs() << "#" << Counter++ << II;
         for (auto &Loc : Locs) {
-          Loc.print(&Fn.getModule());
+          Loc.print(llvm::outs(), &Fn.getModule());
         }
         Locs.clear();
       }
@@ -181,7 +181,7 @@ public:
   void printMemReduction(SILFunction &Fn) {
     LSLocation L;
     LSLocationList Locs;
-    llvm::DenseSet<LSLocation> SLocs;
+    LSLocationList SLocs;
     unsigned Counter = 0;
     for (auto &BB : Fn) {
       for (auto &II : BB) {
@@ -212,14 +212,14 @@ public:
         // Reduction should not care about the order of the memory locations in
         // the set.
         for (auto I = Locs.begin(); I != Locs.end(); ++I) {
-          SLocs.insert(*I);
+          SLocs.push_back(*I);
         }
 
         // This should get the original (unexpanded) location back.
         LSLocation::reduce(L, &Fn.getModule(), SLocs);
         llvm::outs() << "#" << Counter++ << II;
         for (auto &Loc : SLocs) {
-          Loc.print(&Fn.getModule());
+          Loc.print(llvm::outs(), &Fn.getModule());
         }
         L.reset();
         Locs.clear();
@@ -253,7 +253,6 @@ public:
     }
   }
 
-  StringRef getName() override { return "Mem Location Dumper"; }
 };
 
 } // end anonymous namespace

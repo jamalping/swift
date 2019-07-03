@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -41,6 +41,21 @@ public final class LifetimeTracked {
   public var serialNumber: Int = 0
 }
 
+extension LifetimeTracked : Equatable {
+  public static func == (x: LifetimeTracked, y: LifetimeTracked) -> Bool {
+    return x.value == y.value
+  }
+}
+
+extension LifetimeTracked : Hashable {
+  public var hashValue: Int {
+    return value
+  }
+  public func hash(into hasher: inout Hasher) {
+    hasher.combine(value)
+  }
+}
+
 extension LifetimeTracked : Strideable {
   public func distance(to other: LifetimeTracked) -> Int {
     return self.value.distance(to: other.value)
@@ -56,10 +71,6 @@ extension LifetimeTracked : CustomStringConvertible {
     assert(serialNumber > 0, "dead Tracked!")
     return value.description
   }
-}
-
-public func == (x: LifetimeTracked, y: LifetimeTracked) -> Bool {
-  return x.value == y.value
 }
 
 public func < (x: LifetimeTracked, y: LifetimeTracked) -> Bool {

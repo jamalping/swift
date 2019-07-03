@@ -39,7 +39,7 @@ var FooEnum3Y: FooEnum3 { get }
 enum FooComparisonResult : Int {
   init?(rawValue: Int)
   var rawValue: Int { get }
-  
+
   // This is ascending
   case orderedAscending
   case orderedSame // But this is the same.
@@ -50,7 +50,7 @@ enum FooComparisonResult : Int {
 struct FooRuncingOptions : OptionSet {
   init(rawValue: Int)
   let rawValue: Int
-  
+
   // This is mince.
   static var enableMince: FooRuncingOptions { get }
   static var enableQuince: FooRuncingOptions { get } /* But this is quince */
@@ -62,6 +62,7 @@ struct FooStruct1 {
   init()
   init(x: Int32, y: Double)
 }
+typealias FooStruct1Pointer = UnsafeMutablePointer<FooStruct1>
 
 struct FooStruct2 {
   var x: Int32
@@ -94,12 +95,12 @@ func fooFunc3(_ a: Int32, _ b: Float, _ c: Double, _ d: UnsafeMutablePointer<Int
   Very good
   fooFuncWithBlock function.
 */
-func fooFuncWithBlock(_ blk: ((Float) -> Int32)!)
+func fooFuncWithBlock(_ blk: (@escaping (Float) -> Int32)!)
 
-func fooFuncWithFunctionPointer(_ fptr: (@convention(c) (Float) -> Int32)!)
+func fooFuncWithFunctionPointer(_ fptr: (@escaping @convention(c) (Float) -> Int32)!)
 
-@noreturn func fooFuncNoreturn1()
-@noreturn func fooFuncNoreturn2()
+func fooFuncNoreturn1() -> Never
+func fooFuncNoreturn2() -> Never
 
 /**
  * Aaa.  fooFuncWithComment1.  Bbb.
@@ -142,23 +143,23 @@ func fooFuncUsingVararg(_ a: Int32, _ varargs: Any...) -> Int32 // This comment 
 
 /// Aaa.  FooProtocolBase.  Bbb.
 protocol FooProtocolBase {
-  
+
   /// Aaa.  fooProtoFunc.  Bbb.
   /// Ccc.
   func fooProtoFunc()
-  
+
   /// Aaa.  fooProtoFuncWithExtraIndentation1.  Bbb.
   /// Ccc.
   func fooProtoFuncWithExtraIndentation1()
-  
+
   /**
    * Aaa.  fooProtoFuncWithExtraIndentation2.  Bbb.
    * Ccc.
    */
   func fooProtoFuncWithExtraIndentation2()
-  
+
   static func fooProtoClassFunc()
-  
+
   var fooProperty1: Int32 { get set }
   var fooProperty2: Int32 { get set }
   var fooProperty3: Int32 { get }
@@ -176,7 +177,7 @@ class FooClassBase {
   convenience init!(float f: Float)
   class func fooBaseInstanceFuncOverridden()
   func fooBaseInstanceFuncOverridden()
-  
+
   class func fooBaseClassFunc0()
   /*not inherited*/ init!(_ x: Int32)
   @available(*, unavailable, message: "use object construction 'FooClassBase(_:)'")
@@ -185,11 +186,11 @@ class FooClassBase {
 
 /// Aaa.  FooClassDerived.  Bbb.
 class FooClassDerived : FooClassBase, FooProtocolDerived {
-  
+
   var fooProperty1: Int32
   var fooProperty2: Int32
   var fooProperty3: Int32 { get }
-  
+
   /* Blah..
      for fooInstanceFunc0..
      blah blah.
@@ -197,9 +198,9 @@ class FooClassDerived : FooClassBase, FooProtocolDerived {
   func fooInstanceFunc0()
   func fooInstanceFunc1(_ a: Int32)
   func fooInstanceFunc2(_ a: Int32, withB b: Int32)
-  
+
   func fooBaseInstanceFuncOverridden()
-  
+
   class func fooClassFunc0()
   init!()
   convenience init!(float f: Float)
@@ -217,12 +218,24 @@ class FooClassDerived : FooClassBase, FooProtocolDerived {
   class func fooProtoClassFunc()
 }
 
+typealias typedef_int_t = Int32
+
 /* FOO_MACRO_1 is the answer */
 var FOO_MACRO_1: Int32 { get }
 var FOO_MACRO_2: Int32 { get }
 var FOO_MACRO_3: Int32 { get } // Don't use FOO_MACRO_3 on Saturdays.
 var FOO_MACRO_4: UInt32 { get }
 var FOO_MACRO_5: UInt64 { get }
+var FOO_MACRO_6: typedef_int_t { get }
+var FOO_MACRO_7: typedef_int_t { get }
+var FOO_MACRO_8: Int8 { get }
+var FOO_MACRO_9: Int32 { get }
+var FOO_MACRO_10: Int16 { get }
+var FOO_MACRO_11: Int { get }
+var FOO_MACRO_OR: Int32 { get }
+var FOO_MACRO_AND: Int32 { get }
+var FOO_MACRO_BITWIDTH: UInt64 { get }
+var FOO_MACRO_SIGNED: Int32 { get }
 
 var FOO_MACRO_REDEF_1: Int32 { get }
 
@@ -286,18 +299,21 @@ class FooClassWithClassProperties : FooClassBase {
   convenience init!(float f: Float)
 }
 
+@available(*, unavailable, message: "use 'nil' instead of this imported macro")
+var FOO_NIL: ()
+
 class FooUnavailableMembers : FooClassBase {
   convenience init!(int i: Int32)
   @available(*, unavailable, message: "use object construction 'FooUnavailableMembers(int:)'")
   class func withInt(_ i: Int32) -> Self!
-  
+
   @available(*, unavailable, message: "x")
   func unavailable() // This comment should not show without decl. rdar://20092567
   @available(*, unavailable, message: "Not available in Swift")
   func swiftUnavailable()
   @available(*, deprecated, message: "x")
   func deprecated()
-  
+
   @available(OSX 10.1, *)
   func availabilityIntroduced()
   @available(OSX, unavailable, deprecated: 10.1, message: "APIs deprecated as of OS X 10.9 and earlier are unavailable in Swift")
@@ -306,7 +322,7 @@ class FooUnavailableMembers : FooClassBase {
   func availabilityObsoleted()
   @available(OSX, unavailable)
   func availabilityUnavailable()
-  
+
   @available(OSX, introduced: 10.1, message: "x")
   func availabilityIntroducedMsg()
   @available(OSX, unavailable, deprecated: 10.1, message: "x")
@@ -344,7 +360,7 @@ extension FooRepeatedMembers {
 enum SCNFilterMode : Int {
   init?(rawValue: Int)
   var rawValue: Int { get }
-  
+
   case none
   case nearest
   case linear

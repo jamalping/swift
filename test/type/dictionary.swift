@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 // Dictionary types.
 class Base {
@@ -33,3 +33,13 @@ var y2: [String : ] // expected-error{{expected dictionary value type}}
 struct NotHashable { }
 
 var nh1 : [NotHashable : Int] // expected-error{{'NotHashable' does not conform to protocol 'Hashable'}}
+
+struct Y<T> : Hashable {
+  func hash(into hasher: inout Hasher) {}
+
+  static func ==(this: Y<T>, other: Y<T>) -> Bool { return true }
+}
+
+let _ = [Y<Int>: Int]()
+let _ = [Y<Int> : Int]()
+let _ = [Y<Int> :Int]()

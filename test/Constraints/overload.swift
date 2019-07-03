@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 func markUsed<T>(_ t: T) {}
 
@@ -129,9 +129,13 @@ func test20886179(_ handlers: [(Int) -> Void], buttonIndex: Int) {
 func overloaded_identity(_ a : Int) -> Int {}
 func overloaded_identity(_ b : Float) -> Float {}
 
-func test_contextual_result() {
-  return overloaded_identity()  // expected-error {{no 'overloaded_identity' candidates produce the expected contextual result type '()'}}
-  // expected-note @-1 {{overloads for 'overloaded_identity' exist with these result types: Int, Float}}
+func test_contextual_result_1() {
+  return overloaded_identity()  // expected-error {{cannot invoke 'overloaded_identity' with no arguments}}
+  // expected-note @-1 {{overloads for 'overloaded_identity' exist with these partially matching parameter lists: (Float), (Int)}}
+}
+
+func test_contextual_result_2() {
+  return overloaded_identity(1)  // expected-error {{unexpected non-void return value in void function}}
 }
 
 // rdar://problem/24128153
@@ -149,7 +153,9 @@ struct X1 {
 }
 
 let x1 = X1(Int.self)
-let x1check: X1 = x1 // expected-error{{value of optional type 'X1?' not unwrapped; did you mean to use '!' or '?'?}}
+let x1check: X1 = x1 // expected-error{{value of optional type 'X1?' must be unwrapped}}
+  // expected-note@-1{{coalesce}}
+  // expected-note@-2{{force-unwrap}}
 
 
 struct X2 {
@@ -160,4 +166,73 @@ struct X2 {
 }
 
 let x2 = X2(Int.self)
-let x2check: X2 = x2 // expected-error{{value of optional type 'X2?' not unwrapped; did you mean to use '!' or '?'?}}
+let x2check: X2 = x2 // expected-error{{value of optional type 'X2?' must be unwrapped}}
+  // expected-note@-1{{coalesce}}
+  // expected-note@-2{{force-unwrap}}
+
+// rdar://problem/28051973
+struct R_28051973 {
+  mutating func f(_ i: Int) {}
+  @available(*, deprecated, message: "deprecated")
+  func f(_ f: Float) {}
+}
+
+let r28051973: Int = 42
+R_28051973().f(r28051973) // expected-error {{cannot use mutating member on immutable value: function call returns immutable value}}
+
+
+// Fix for CSDiag vs CSSolver disagreement on what constitutes a
+// valid overload.
+
+func overloadedMethod(n: Int) {} // expected-note {{'overloadedMethod(n:)' declared here}}
+func overloadedMethod<T>() {}
+// expected-error@-1 {{generic parameter 'T' is not used in function signature}}
+
+overloadedMethod()
+// expected-error@-1 {{missing argument for parameter 'n' in call}}
+
+// Ensure we select the overload of '??' returning T? rather than T.
+func SR3817(_ d: [String : Any], _ s: String, _ t: String) -> Any {
+  if let r = d[s] ?? d[t] {
+    return r
+  } else {
+    return 0
+  }
+}
+
+// Overloading with mismatched labels.
+func f6<T>(foo: T) { }
+func f6<T: P1>(bar: T) { }
+
+struct X6 {
+	init<T>(foo: T) { }
+	init<T: P1>(bar: T) { }
+}
+
+func test_f6() {
+	let _: (X1a) -> Void = f6
+	let _: (X1a) -> X6 = X6.init
+}
+
+func curry<LHS, RHS, R>(_ f: @escaping (LHS, RHS) -> R) -> (LHS) -> (RHS) -> R {
+  return { lhs in { rhs in f(lhs, rhs) } }
+}
+
+// We need to have an alternative version of this to ensure that there's an overload disjunction created.
+func curry<F, S, T, R>(_ f: @escaping (F, S, T) -> R) -> (F) -> (S) -> (T) -> R {
+  return { fst in { snd in { thd in f(fst, snd, thd) } } }
+}
+
+// Ensure that we consider these unambiguous
+let _ = curry(+)(1)
+let _ = [0].reduce(0, +)
+let _ = curry(+)("string vs. pointer")
+
+
+func autoclosure1<T>(_: T, _: @autoclosure () -> X) { }
+
+func autoclosure1<T>(_: [T], _: X) { }
+
+func test_autoclosure1(ia: [Int]) {
+  autoclosure1(ia, X()) // okay: resolves to the second function
+}

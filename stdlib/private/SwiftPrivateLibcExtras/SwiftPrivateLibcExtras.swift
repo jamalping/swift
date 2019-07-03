@@ -2,30 +2,32 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
 import SwiftPrivate
-#if os(OSX) || os(iOS) || os(watchOS) || os(tvOS)
+#if os(macOS) || os(iOS) || os(watchOS) || os(tvOS)
 import Darwin
-#elseif os(Linux) || os(FreeBSD) || os(Android)
+#elseif os(Linux) || os(FreeBSD) || os(PS4) || os(Android) || os(Cygwin) || os(Haiku)
 import Glibc
+#elseif os(Windows)
+import MSVCRT
 #endif
 
 public func _stdlib_mkstemps(_ template: inout String, _ suffixlen: CInt) -> CInt {
-#if os(Android)
-  preconditionFailure("mkstemps doesn't work on Android")
+#if os(Android) || os(Haiku) || os(Windows)
+  preconditionFailure("mkstemps doesn't work on your platform")
 #else
-  var utf8 = template.nulTerminatedUTF8
-  let (fd, fileName) = utf8.withUnsafeMutableBufferPointer {
-    (utf8) -> (CInt, String) in
-    let fd = mkstemps(UnsafeMutablePointer(utf8.baseAddress!), suffixlen)
-    let fileName = String(cString: UnsafePointer(utf8.baseAddress!))
+  var utf8CStr = template.utf8CString
+  let (fd, fileName) = utf8CStr.withUnsafeMutableBufferPointer {
+    (utf8CStr) -> (CInt, String) in
+    let fd = mkstemps(utf8CStr.baseAddress!, suffixlen)
+    let fileName = String(cString: utf8CStr.baseAddress!)
     return (fd, fileName)
   }
   template = fileName
@@ -33,6 +35,7 @@ public func _stdlib_mkstemps(_ template: inout String, _ suffixlen: CInt) -> CIn
 #endif
 }
 
+#if !os(Windows)
 public var _stdlib_FD_SETSIZE: CInt {
   return 1024
 }
@@ -40,7 +43,7 @@ public var _stdlib_FD_SETSIZE: CInt {
 public struct _stdlib_fd_set {
   var _data: [UInt]
   static var _wordBits: Int {
-    return sizeof(UInt) * 8
+    return MemoryLayout<UInt>.size * 8
   }
 
   public init() {
@@ -94,17 +97,43 @@ public func _stdlib_select(
         let readAddr = readfds.baseAddress
         let writeAddr = writefds.baseAddress
         let errorAddr = errorfds.baseAddress
+#if os(Cygwin)
+        typealias fd_set = _types_fd_set
+#endif
+        func asFdSetPtr(
+          _ p: UnsafeMutablePointer<UInt>?
+        ) -> UnsafeMutablePointer<fd_set>? {
+          return UnsafeMutableRawPointer(p)?
+            .assumingMemoryBound(to: fd_set.self)
+        }
         return select(
           _stdlib_FD_SETSIZE,
-          UnsafeMutablePointer(readAddr),
-          UnsafeMutablePointer(writeAddr),
-          UnsafeMutablePointer(errorAddr),
+          asFdSetPtr(readAddr),
+          asFdSetPtr(writeAddr),
+          asFdSetPtr(errorAddr),
           timeout)
       }
     }
   }
 }
+#endif
 
+
+/// Swift-y wrapper around pipe(2)
+public func _stdlib_pipe() -> (readEnd: CInt, writeEnd: CInt, error: CInt) {
+  var fds: [CInt] = [0, 0]
+  let ret = fds.withUnsafeMutableBufferPointer { unsafeFds -> CInt in
+#if os(Windows)
+    return _pipe(unsafeFds.baseAddress, 0, 0)
+#else
+    return pipe(unsafeFds.baseAddress)
+#endif
+  }
+  return (readEnd: fds[0], writeEnd: fds[1], error: ret)
+}
+
+
+#if !os(Windows)
 //
 // Functions missing in `Darwin` module.
 //
@@ -131,3 +160,5 @@ public func WEXITSTATUS(_ status: CInt) -> CInt {
 public func WTERMSIG(_ status: CInt) -> CInt {
   return _WSTATUS(status)
 }
+#endif
+

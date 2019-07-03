@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -23,7 +23,7 @@
 
 using namespace swift;
 
-/// \brief Return true if the operand of the cond_fail instruction looks like
+/// Return true if the operand of the cond_fail instruction looks like
 /// the overflow bit of an arithmetic instruction.
 static bool hasOverflowConditionOperand(CondFailInst *CFI) {
   if (auto *TEI = dyn_cast<TupleExtractInst>(CFI->getOperand()))
@@ -43,8 +43,6 @@ class MergeCondFailInsts : public SILFunctionTransform {
 public:
   MergeCondFailInsts() {}
 
-  StringRef getName() override { return "Merge cond_fail instructions"; }
-
   void run() override {
     bool Changed = false;
     auto *F = getFunction();
@@ -56,7 +54,7 @@ public:
       for (auto InstIt = BB.begin(), End = BB.end(); InstIt != End;) {
         auto *CurInst = &*InstIt;
         ++InstIt;
-        CondFailInst *CFI = dyn_cast<CondFailInst>(CurInst);
+        auto *CFI = dyn_cast<CondFailInst>(CurInst);
 
         // Stop merging at side-effects or reads from memory.
         if (!CFI && (CurInst->mayHaveSideEffects() ||
@@ -86,7 +84,7 @@ public:
     }
   }
 
-  /// \brief Try to merge the cond_fail instructions. Returns true if any could
+  /// Try to merge the cond_fail instructions. Returns true if any could
   /// be merge.
   bool mergeCondFails(SmallVectorImpl<CondFailInst *> &CondFailToMerge) {
     assert(CondFailToMerge.size() > 1 &&
@@ -120,7 +118,7 @@ public:
     return true;
   }
 };
-}
+} // end anonymous namespace
 
 SILTransform *swift::createMergeCondFails() {
   return new MergeCondFailInsts();

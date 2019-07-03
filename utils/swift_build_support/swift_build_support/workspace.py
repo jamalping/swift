@@ -2,11 +2,11 @@
 #
 # This source file is part of the Swift.org open source project
 #
-# Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+# Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 # Licensed under Apache License v2.0 with Runtime Library Exception
 #
-# See http://swift.org/LICENSE.txt for license information
-# See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+# See https://swift.org/LICENSE.txt for license information
+# See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 #
 # ----------------------------------------------------------------------------
 """
@@ -55,25 +55,25 @@ def compute_build_subdir(args):
     # FIXME: mangle LLDB build configuration into the directory name.
     if (llvm_build_dir_label == swift_build_dir_label and
             llvm_build_dir_label == swift_stdlib_build_dir_label and
-            llvm_build_dir_label == cmark_build_dir_label):
+            swift_build_dir_label == cmark_build_dir_label):
         # Use a simple directory name if all projects use the same build
         # type.
         build_subdir += "-" + llvm_build_dir_label
     elif (llvm_build_dir_label != swift_build_dir_label and
             llvm_build_dir_label == swift_stdlib_build_dir_label and
-            llvm_build_dir_label == cmark_build_dir_label):
+            swift_build_dir_label == cmark_build_dir_label):
         # Swift build type differs.
         build_subdir += "-" + llvm_build_dir_label
         build_subdir += "+swift-" + swift_build_dir_label
     elif (llvm_build_dir_label == swift_build_dir_label and
             llvm_build_dir_label != swift_stdlib_build_dir_label and
-            llvm_build_dir_label == cmark_build_dir_label):
+            swift_build_dir_label == cmark_build_dir_label):
         # Swift stdlib build type differs.
         build_subdir += "-" + llvm_build_dir_label
         build_subdir += "+stdlib-" + swift_stdlib_build_dir_label
     elif (llvm_build_dir_label == swift_build_dir_label and
             llvm_build_dir_label == swift_stdlib_build_dir_label and
-            llvm_build_dir_label != cmark_build_dir_label):
+            swift_build_dir_label != cmark_build_dir_label):
         # cmark build type differs.
         build_subdir += "-" + llvm_build_dir_label
         build_subdir += "+cmark-" + cmark_build_dir_label
@@ -85,4 +85,11 @@ def compute_build_subdir(args):
         build_subdir += "+swift-" + swift_build_dir_label
         build_subdir += "+stdlib-" + swift_stdlib_build_dir_label
 
+    # If we have a sanitizer enabled, mangle it into the subdir.
+    if args.enable_asan:
+        build_subdir += "+asan"
+    if args.enable_ubsan:
+        build_subdir += "+ubsan"
+    if args.enable_tsan:
+        build_subdir += "+tsan"
     return build_subdir

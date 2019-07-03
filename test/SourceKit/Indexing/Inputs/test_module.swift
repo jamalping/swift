@@ -1,7 +1,7 @@
 public class Empty {}
 
 public class TwoInts {
-  var x, y : Int
+  public var x, y : Int
   
   public init(a : Int, b : Int) {
     x = a
@@ -28,3 +28,11 @@ public protocol Prot3 { }
 public class C2 { }
 
 extension C2 : Prot3, Prot1, Prot2 { }
+
+public func globalFunc() {}
+
+private func SECRET() {}
+
+extension C2 {
+  internal func SECRET() {}
+}

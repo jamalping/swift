@@ -1,4 +1,4 @@
-// RUN: %target-repl-run-simple-swift | FileCheck %s
+// RUN: %target-repl-run-simple-swift | %FileCheck %s
 
 // REQUIRES: objc_interop
 // REQUIRES: swift_repl
@@ -23,9 +23,9 @@ extension CGRect: Q {
 // non-imported types.
 struct Empty {}
 let _: Optional = Empty()
-// CHECK: Optional(REPL.Empty())
+// CHECK: Optional(REPL_{{.+}}.Empty())
 let _: Optional = CGPoint.zero
 // CHECK: Optional((0.0, 0.0))
-let _: Optional = NSString.availableStringEncodings()
+let _: Optional = NSString.availableStringEncodings
 // CHECK: Optional(0x{{[0-9a-fA-F]+}})
 

@@ -1,117 +1,117 @@
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_IMPLICIT_GET_1 | FileCheck %s -check-prefix=WITH_GLOBAL_DECLS
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_IMPLICIT_GET_2 | FileCheck %s -check-prefix=FOO_OBJECT_DOT
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_IMPLICIT_GET_1 | %FileCheck %s -check-prefix=WITH_GLOBAL_DECLS
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_IMPLICIT_GET_2 | %FileCheck %s -check-prefix=FOO_OBJECT_DOT
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_GET_1 | FileCheck %s -check-prefix=WITH_GLOBAL_DECLS
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_GET_2 | FileCheck %s -check-prefix=FOO_OBJECT_DOT
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_GET_1 | %FileCheck %s -check-prefix=WITH_GLOBAL_DECLS
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_GET_2 | %FileCheck %s -check-prefix=FOO_OBJECT_DOT
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_SET_1 > %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_GLOBAL_DECLS < %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_SET_2 | FileCheck %s -check-prefix=FOO_OBJECT_DOT
+// RUN: %FileCheck %s -check-prefix=WITH_GLOBAL_DECLS < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_SET_2 | %FileCheck %s -check-prefix=FOO_OBJECT_DOT
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_SET_3 > %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_GLOBAL_DECLS < %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_SET_4 | FileCheck %s -check-prefix=FOO_OBJECT_DOT
+// RUN: %FileCheck %s -check-prefix=WITH_GLOBAL_DECLS < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_SET_4 | %FileCheck %s -check-prefix=FOO_OBJECT_DOT
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_WILLSET_1 > %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_GLOBAL_DECLS < %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_WILLSET_2 | FileCheck %s -check-prefix=FOO_OBJECT_DOT
+// RUN: %FileCheck %s -check-prefix=WITH_GLOBAL_DECLS < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_WILLSET_2 | %FileCheck %s -check-prefix=FOO_OBJECT_DOT
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_WILLSET_3 > %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_GLOBAL_DECLS < %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_GLOBAL_DECLS < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_DIDSET_1 > %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_GLOBAL_DECLS < %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_OLDVALUE < %t.txt
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_DIDSET_2 | FileCheck %s -check-prefix=FOO_OBJECT_DOT
+// RUN: %FileCheck %s -check-prefix=WITH_GLOBAL_DECLS < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_OLDVALUE < %t.txt
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_DIDSET_2 | %FileCheck %s -check-prefix=FOO_OBJECT_DOT
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_DIDSET_3 > %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_GLOBAL_DECLS < %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_OLDVALUE < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_GLOBAL_DECLS < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_OLDVALUE < %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_INIT_1 | FileCheck %s -check-prefix=WITH_GLOBAL_DECLS1
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_INIT_2 | FileCheck %s -check-prefix=WITH_GLOBAL_DECLS1
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_INIT_1 | %FileCheck %s -check-prefix=WITH_GLOBAL_DECLS1
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=GLOBAL_ACCESSOR_INIT_2 | %FileCheck %s -check-prefix=WITH_GLOBAL_DECLS1
 
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_IMPLICIT_GET_1 | FileCheck %s -check-prefix=WITH_MEMBER_DECLS
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_IMPLICIT_GET_2 | FileCheck %s -check-prefix=FOO_OBJECT_DOT
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_IMPLICIT_GET_1 | %FileCheck %s -check-prefix=WITH_MEMBER_DECLS
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_IMPLICIT_GET_2 | %FileCheck %s -check-prefix=FOO_OBJECT_DOT
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_GET_1 | FileCheck %s -check-prefix=WITH_MEMBER_DECLS
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_GET_2 | FileCheck %s -check-prefix=FOO_OBJECT_DOT
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_GET_1 | %FileCheck %s -check-prefix=WITH_MEMBER_DECLS
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_GET_2 | %FileCheck %s -check-prefix=FOO_OBJECT_DOT
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_SET_1 > %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_MEMBER_DECLS < %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_SET_2 | FileCheck %s -check-prefix=FOO_OBJECT_DOT
+// RUN: %FileCheck %s -check-prefix=WITH_MEMBER_DECLS < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_SET_2 | %FileCheck %s -check-prefix=FOO_OBJECT_DOT
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_SET_3 > %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_MEMBER_DECLS < %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_SET_4 | FileCheck %s -check-prefix=FOO_OBJECT_DOT
+// RUN: %FileCheck %s -check-prefix=WITH_MEMBER_DECLS < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_SET_4 | %FileCheck %s -check-prefix=FOO_OBJECT_DOT
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_WILLSET_1 > %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_MEMBER_DECLS < %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_WILLSET_2 | FileCheck %s -check-prefix=FOO_OBJECT_DOT
+// RUN: %FileCheck %s -check-prefix=WITH_MEMBER_DECLS < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_WILLSET_2 | %FileCheck %s -check-prefix=FOO_OBJECT_DOT
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_WILLSET_3 > %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_MEMBER_DECLS < %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_MEMBER_DECLS < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_DIDSET_1 > %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_MEMBER_DECLS < %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_OLDVALUE < %t.txt
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_DIDSET_2 | FileCheck %s -check-prefix=FOO_OBJECT_DOT
+// RUN: %FileCheck %s -check-prefix=WITH_MEMBER_DECLS < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_OLDVALUE < %t.txt
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_DIDSET_2 | %FileCheck %s -check-prefix=FOO_OBJECT_DOT
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_DIDSET_3 > %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_MEMBER_DECLS < %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_OLDVALUE < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_MEMBER_DECLS < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_OLDVALUE < %t.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_INIT_1 > %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_MEMBER_DECLS_INIT < %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_MEMBER_DECLS_INIT_WRONG < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_MEMBER_DECLS_INIT < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_MEMBER_DECLS_INIT_WRONG < %t.txt
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MEMBER_ACCESSOR_INIT_2 > %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_MEMBER_DECLS_INIT < %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_MEMBER_DECLS_INIT_WRONG < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_MEMBER_DECLS_INIT < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_MEMBER_DECLS_INIT_WRONG < %t.txt
 
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_IMPLICIT_GET_1 | FileCheck %s -check-prefix=WITH_LOCAL_DECLS
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_IMPLICIT_GET_2 | FileCheck %s -check-prefix=FOO_OBJECT_DOT
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_IMPLICIT_GET_1 | %FileCheck %s -check-prefix=WITH_LOCAL_DECLS
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_IMPLICIT_GET_2 | %FileCheck %s -check-prefix=FOO_OBJECT_DOT
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_GET_1 | FileCheck %s -check-prefix=WITH_LOCAL_DECLS
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_GET_2 | FileCheck %s -check-prefix=FOO_OBJECT_DOT
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_GET_1 | %FileCheck %s -check-prefix=WITH_LOCAL_DECLS
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_GET_2 | %FileCheck %s -check-prefix=FOO_OBJECT_DOT
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_SET_1 > %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_LOCAL_DECLS < %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_SET_2 | FileCheck %s -check-prefix=FOO_OBJECT_DOT
+// RUN: %FileCheck %s -check-prefix=WITH_LOCAL_DECLS < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_SET_2 | %FileCheck %s -check-prefix=FOO_OBJECT_DOT
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_SET_3 > %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_LOCAL_DECLS < %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_SET_4 | FileCheck %s -check-prefix=FOO_OBJECT_DOT
+// RUN: %FileCheck %s -check-prefix=WITH_LOCAL_DECLS < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_SET_4 | %FileCheck %s -check-prefix=FOO_OBJECT_DOT
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_WILLSET_1 > %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_LOCAL_DECLS < %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_WILLSET_2 | FileCheck %s -check-prefix=FOO_OBJECT_DOT
+// RUN: %FileCheck %s -check-prefix=WITH_LOCAL_DECLS < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_WILLSET_2 | %FileCheck %s -check-prefix=FOO_OBJECT_DOT
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_WILLSET_3 > %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_LOCAL_DECLS < %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_LOCAL_DECLS < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_NEWVALUE < %t.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_DIDSET_1 > %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_LOCAL_DECLS < %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_OLDVALUE < %t.txt
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_DIDSET_2 | FileCheck %s -check-prefix=FOO_OBJECT_DOT
+// RUN: %FileCheck %s -check-prefix=WITH_LOCAL_DECLS < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_OLDVALUE < %t.txt
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_DIDSET_2 | %FileCheck %s -check-prefix=FOO_OBJECT_DOT
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_DIDSET_3 > %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_LOCAL_DECLS < %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_OLDVALUE < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_LOCAL_DECLS < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_OLDVALUE < %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_INIT_1 | FileCheck %s -check-prefix=WITH_LOCAL_DECLS1
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_INIT_2 | FileCheck %s -check-prefix=WITH_LOCAL_DECLS1
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_INIT_1 | %FileCheck %s -check-prefix=WITH_LOCAL_DECLS1
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=LOCAL_ACCESSOR_INIT_2 | %FileCheck %s -check-prefix=WITH_LOCAL_DECLS1
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ACCESSOR_IN_MEMBER_FUNC_1 > %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_GLOBAL_DECLS1 < %t.txt
-// RUN: FileCheck %s -check-prefix=ACCESSORS_IN_MEMBER_FUNC_1 < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_GLOBAL_DECLS1 < %t.txt
+// RUN: %FileCheck %s -check-prefix=ACCESSORS_IN_MEMBER_FUNC_1 < %t.txt
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ACCESSOR_IN_MEMBER_FUNC_2 > %t.txt
-// RUN: FileCheck %s -check-prefix=WITH_GLOBAL_DECLS < %t.txt
-// RUN: FileCheck %s -check-prefix=ACCESSORS_IN_MEMBER_FUNC_2 < %t.txt
+// RUN: %FileCheck %s -check-prefix=WITH_GLOBAL_DECLS < %t.txt
+// RUN: %FileCheck %s -check-prefix=ACCESSORS_IN_MEMBER_FUNC_2 < %t.txt
 
 //===--- Helper types that are used in this test
 
@@ -125,13 +125,14 @@ struct FooStruct {
 func returnsInt() -> Int {}
 
 // FOO_OBJECT_DOT: Begin completions
+// FOO_OBJECT_DOT-NEXT: Keyword[self]/CurrNominal: self[#FooStruct#]; name=self
 // FOO_OBJECT_DOT-NEXT: Decl[InstanceVar]/CurrNominal:    instanceVar[#Int#]{{; name=.+$}}
 // FOO_OBJECT_DOT-NEXT: Decl[InstanceMethod]/CurrNominal: instanceFunc0()[#Void#]{{; name=.+$}}
 // FOO_OBJECT_DOT-NEXT: End completions
 
 // WITH_GLOBAL_DECLS: Begin completions
 // WITH_GLOBAL_DECLS-DAG: Decl[Struct]/CurrModule:       FooStruct[#FooStruct#]{{; name=.+$}}
-// WITH_GLOBAL_DECLS-DAG: Decl[FreeFunction]/CurrModule: returnsInt()[#Int#]{{; name=.+$}}
+// WITH_GLOBAL_DECLS-DAG: Decl[FreeFunction]/CurrModule{{(/TypeRelation\[Identical\])?}}: returnsInt()[#Int#]{{; name=.+$}}
 // WITH_GLOBAL_DECLS: End completions
 
 // WITH_GLOBAL_DECLS1: Begin completions
@@ -141,7 +142,7 @@ func returnsInt() -> Int {}
 
 // WITH_MEMBER_DECLS: Begin completions
 // WITH_MEMBER_DECLS-DAG: Decl[Struct]/CurrModule:          FooStruct[#FooStruct#]{{; name=.+$}}
-// WITH_MEMBER_DECLS-DAG: Decl[FreeFunction]/CurrModule:    returnsInt()[#Int#]{{; name=.+$}}
+// WITH_MEMBER_DECLS-DAG: Decl[FreeFunction]/CurrModule{{(/TypeRelation\[Identical\])?}}:    returnsInt()[#Int#]{{; name=.+$}}
 // WITH_MEMBER_DECLS-DAG: Decl[LocalVar]/Local:             self[#MemberAccessors#]{{; name=.+$}}
 // WITH_MEMBER_DECLS-DAG: Decl[InstanceVar]/CurrNominal:    instanceVar[#Double#]{{; name=.+$}}
 // WITH_MEMBER_DECLS-DAG: Decl[InstanceMethod]/CurrNominal: instanceFunc({#(a): Int#})[#Float#]{{; name=.+$}}
@@ -149,8 +150,8 @@ func returnsInt() -> Int {}
 
 // WITH_MEMBER_DECLS_INIT: Begin completions
 // WITH_MEMBER_DECLS_INIT-DAG: Decl[Struct]/CurrModule:          FooStruct[#FooStruct#]{{; name=.+$}}
-// WITH_MEMBER_DECLS_INIT-DAG: Decl[FreeFunction]/CurrModule:    returnsInt()[#Int#]{{; name=.+$}}
-// WITH_MEMBER_DECLS_INIT-DAG: Decl[InstanceMethod]/CurrNominal: instanceFunc({#self: MemberAccessors#})[#(Int) -> Float#]{{; name=.+$}}
+// WITH_MEMBER_DECLS_INIT-DAG: Decl[FreeFunction]/CurrModule/TypeRelation[Identical]: returnsInt()[#Int#]{{; name=.+$}}
+// WITH_MEMBER_DECLS_INIT-DAG: Decl[InstanceMethod]/CurrNominal: instanceFunc({#(self): MemberAccessors#})[#(Int) -> Float#]{{; name=.+$}}
 // WITH_MEMBER_DECLS_INIT: End completions
 
 // WITH_MEMBER_DECLS_INIT_WRONG-NOT: self[
@@ -158,8 +159,8 @@ func returnsInt() -> Int {}
 
 // WITH_LOCAL_DECLS: Begin completions
 // WITH_LOCAL_DECLS-DAG: Decl[Struct]/CurrModule:          FooStruct[#FooStruct#]{{; name=.+$}}
-// WITH_LOCAL_DECLS-DAG: Decl[FreeFunction]/CurrModule:    returnsInt()[#Int#]{{; name=.+$}}
-// WITH_LOCAL_DECLS-DAG: Decl[LocalVar]/Local:             functionParam[#Int#]{{; name=.+$}}
+// WITH_LOCAL_DECLS-DAG: Decl[FreeFunction]/CurrModule{{(/TypeRelation\[Identical\])?}}:    returnsInt()[#Int#]{{; name=.+$}}
+// WITH_LOCAL_DECLS-DAG: Decl[LocalVar]/Local{{(/TypeRelation\[Identical\])?}}:             functionParam[#Int#]{{; name=.+$}}
 // WITH_LOCAL_DECLS-DAG: Decl[FreeFunction]/Local:         localFunc({#(a): Int#})[#Float#]{{; name=.+$}}
 // WITH_LOCAL_DECLS: End completions
 
@@ -455,7 +456,7 @@ func accessorsInFunction(_ functionParam: Int) {
 
 // ACCESSORS_IN_MEMBER_FUNC_2: Begin completions
 // ACCESSORS_IN_MEMBER_FUNC_2-DAG: Decl[LocalVar]/Local:            self[#AccessorsInMemberFunction#]
-// ACCESSORS_IN_MEMBER_FUNC_2-DAG: Decl[LocalVar]/Local:            functionParam[#Int#]
+// ACCESSORS_IN_MEMBER_FUNC_2-DAG: Decl[LocalVar]/Local{{(/TypeRelation\[Identical\])?}}:            functionParam[#Int#]
 // ACCESSORS_IN_MEMBER_FUNC_2-DAG: Decl[InstanceVar]/OutNominal:    instanceVar[#Double#]
 // ACCESSORS_IN_MEMBER_FUNC_2-DAG: Decl[InstanceMethod]/OutNominal: instanceFunc({#(a): Int#})[#Float#]
 // ACCESSORS_IN_MEMBER_FUNC_2: End completions

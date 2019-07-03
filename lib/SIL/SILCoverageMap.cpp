@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -15,6 +15,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ADT/STLExtras.h"
 #include "swift/SIL/SILCoverageMap.h"
 #include "swift/SIL/SILModule.h"
 
@@ -24,41 +25,33 @@ using llvm::coverage::CounterExpression;
 
 SILCoverageMap *
 SILCoverageMap::create(SILModule &M, StringRef Filename, StringRef Name,
-                       bool External, uint64_t Hash,
+                       StringRef PGOFuncName, uint64_t Hash,
                        ArrayRef<MappedRegion> MappedRegions,
                        ArrayRef<CounterExpression> Expressions) {
-  void *Buf = M.allocate(sizeof(SILCoverageMap), alignof(SILCoverageMap));
-  SILCoverageMap *CM = ::new (Buf) SILCoverageMap(Hash, External);
+  auto *Buf = M.allocate<SILCoverageMap>(1);
+  SILCoverageMap *CM = ::new (Buf) SILCoverageMap(Hash);
 
-  // Store a copy of the name so that we own the lifetime.
-  char *AllocatedName = (char *)M.allocate(Filename.size(), alignof(char));
-  memcpy(AllocatedName, Filename.data(), Filename.size());
-  CM->Filename = StringRef(AllocatedName, Filename.size());
-
-  AllocatedName = (char *)M.allocate(Name.size(), alignof(char));
-  memcpy(AllocatedName, Name.data(), Name.size());
-  CM->Name = StringRef(AllocatedName, Name.size());
+  // Store a copy of the names so that we own the lifetime.
+  CM->Filename = M.allocateCopy(Filename);
+  CM->Name = M.allocateCopy(Name);
+  CM->PGOFuncName = M.allocateCopy(PGOFuncName);
 
   // Since we have two arrays, we need to manually tail allocate each of them,
   // rather than relying on the flexible array trick.
-  size_t MappedRegionsSize = sizeof(MappedRegion) * MappedRegions.size();
-  CM->MappedRegions =
-      (MappedRegion *)M.allocate(MappedRegionsSize, alignof(MappedRegion));
-  CM->NumMappedRegions = MappedRegions.size();
-  memcpy(CM->MappedRegions, MappedRegions.begin(), MappedRegionsSize);
+  CM->MappedRegions = M.allocateCopy(MappedRegions);
+  CM->Expressions = M.allocateCopy(Expressions);
 
-  size_t ExpressionsSize = sizeof(CounterExpression) * Expressions.size();
-  CM->Expressions = (CounterExpression *)M.allocate(ExpressionsSize,
-                                                    alignof(CounterExpression));
-  CM->NumExpressions = Expressions.size();
-  memcpy(CM->Expressions, Expressions.begin(), ExpressionsSize);
+  auto result = M.coverageMaps.insert({CM->PGOFuncName, CM});
 
-  M.coverageMaps.push_back(CM);
+  // Assert that this coverage map is unique.
+  assert(result.second && "Duplicate coverage mapping for function");
+  (void)result;
+
   return CM;
 }
 
-SILCoverageMap::SILCoverageMap(uint64_t Hash, bool External)
-    : External(External), Hash(Hash) {}
+SILCoverageMap::SILCoverageMap(uint64_t Hash)
+    : Hash(Hash), HasSymtabEntry(false) {}
 
 SILCoverageMap::~SILCoverageMap() {}
 
@@ -90,7 +83,7 @@ struct Printer {
     return OS;
   }
 };
-}
+} // end anonymous namespace
 
 void SILCoverageMap::printCounter(llvm::raw_ostream &OS,
                                   llvm::coverage::Counter C) const {

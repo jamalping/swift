@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 protocol P1  {
   func foo() -> Int
@@ -46,9 +46,8 @@ protocol MyCollection : Swift.Collection {}
 struct TestClass<
   Factory : FactoryProtocol,
   NodeCollection : MyCollection
-  where
-  NodeCollection.Iterator.Element == Factory.Item
-> {
+  >
+  where NodeCollection.Iterator.Element == Factory.Item {
   var flattenedNodes: NodeCollection
 
   func test() {

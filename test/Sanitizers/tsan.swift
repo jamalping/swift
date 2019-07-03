@@ -1,30 +1,75 @@
-// RUN: %target-swiftc_driver %s -g -sanitize=thread -o %t_tsan-binary
-// RUN: not env TSAN_OPTIONS=abort_on_error=0 %target-run %t_tsan-binary 2>&1 | FileCheck %s
+// RUN: %target-swiftc_driver %s -target %sanitizers-target-triple -g -sanitize=thread %import-libdispatch -o %t_tsan-binary
+// RUN: %target-codesign %t_tsan-binary
+// RUN: not env %env-TSAN_OPTIONS="abort_on_error=0" %target-run %t_tsan-binary 2>&1 | %FileCheck %s
 // REQUIRES: executable_test
-// REQUIRES: objc_interop
-// REQUIRES: CPU=x86_64
 // REQUIRES: tsan_runtime
-// XFAIL: linux
+// UNSUPPORTED: OS=tvos
+// UNSUPPORTED: CPU=powerpc64le
+
+// FIXME: This should be covered by "tsan_runtime"; older versions of Apple OSs
+// don't support TSan.
+// UNSUPPORTED: remote_run
+
+#if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
+  import Darwin
+#elseif os(Linux) || os(FreeBSD) || os(PS4) || os(Android) || os(Cygwin) || os(Haiku)
+  import Glibc
+#elseif os(Windows)
+  import MSVCRT
+#else
+#error("Unsupported platform")
+#endif
+
+// Make sure we can handle swifterror and don't bail during the LLVM
+// threadsanitizer pass.
+
+enum MyError : Error {
+    case A
+}
+
+public func foobar(_ x: Int) throws {
+  if x == 0 {
+    throw MyError.A
+  }
+}
+
+public func call_foobar() {
+  do {
+    try foobar(1)
+  } catch(_) { }
+}
 
 // Test ThreadSanitizer execution end-to-end.
 
-import Darwin
-var user_interactive_thread: pthread_t? = nil
-var user_interactive_thread2: pthread_t? = nil
+var threads: [pthread_t] = []
 var racey_x: Int;
 
-pthread_create(&user_interactive_thread, nil, { _ in
+// TSan %deflake as part of the test.
+for _ in 1...5 {
+#if os(macOS) || os(iOS)
+  var t : pthread_t?
+#else
+  var t : pthread_t = 0
+#endif
+  pthread_create(&t, nil, { _ in
     print("pthread ran")
     racey_x = 5;
 
     return nil
-}, nil)
+  }, nil)
+#if os(macOS) || os(iOS)
+  threads.append(t!)
+#else
+  threads.append(t)
+#endif
+}
 
-pthread_create(&user_interactive_thread2, nil, { _ in
-    print("pthread2 ran")
-    racey_x = 6;
-
-    return nil
-}, nil)
+for t in threads {
+  if t == nil {
+    print("nil thread")
+    continue
+  }
+  pthread_join(t, nil)
+}
 
 // CHECK: ThreadSanitizer: data race

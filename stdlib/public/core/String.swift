@@ -2,49 +2,70 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
 import SwiftShims
 
-// FIXME: complexity documentation for most of methods on String is ought to be
-// qualified with "amortized" at least, as Characters are variable-length.
+@inlinable @_transparent
+internal func unimplemented_utf8_32bit(
+  _ message: String = "",
+  file: StaticString = #file, line: UInt = #line
+) -> Never {
+  fatalError("32-bit: Unimplemented for UTF-8 support", file: file, line: line)
+}
 
-/// A Unicode string value.
+/// A Unicode string value that is a collection of characters.
 ///
-/// A string is a series of characters, such as `"Swift"`. Strings in Swift are
-/// Unicode correct, locale insensitive, and designed to be efficient. The
-/// `String` type bridges with the Objective-C class `NSString` and offers
-/// interoperability with C functions that works with strings.
+/// A string is a series of characters, such as `"Swift"`, that forms a
+/// collection. Strings in Swift are Unicode correct and locale insensitive,
+/// and are designed to be efficient. The `String` type bridges with the
+/// Objective-C class `NSString` and offers interoperability with C functions
+/// that works with strings.
 ///
 /// You can create new strings using string literals or string interpolations.
-/// A string literal is a series of characters enclosed in quotes.
+/// A *string literal* is a series of characters enclosed in quotes.
 ///
 ///     let greeting = "Welcome!"
 ///
-/// String interpolations are string literals that evaluate any included
+/// *String interpolations* are string literals that evaluate any included
 /// expressions and convert the results to string form. String interpolations
-/// are an easy way to build a string from multiple pieces. Wrap each
+/// give you an easy way to build a string from multiple pieces. Wrap each
 /// expression in a string interpolation in parentheses, prefixed by a
 /// backslash.
 ///
 ///     let name = "Rosa"
 ///     let personalizedGreeting = "Welcome, \(name)!"
+///     // personalizedGreeting == "Welcome, Rosa!"
 ///
 ///     let price = 2
 ///     let number = 3
 ///     let cookiePrice = "\(number) cookies: $\(price * number)."
+///     // cookiePrice == "3 cookies: $6."
 ///
 /// Combine strings using the concatenation operator (`+`).
 ///
 ///     let longerGreeting = greeting + " We're glad you're here!"
-///     print(longerGreeting)
-///     // Prints "Welcome! We're glad you're here!"
+///     // longerGreeting == "Welcome! We're glad you're here!"
+///
+/// Multiline string literals are enclosed in three double quotation marks
+/// (`"""`), with each delimiter on its own line. Indentation is stripped from
+/// each line of a multiline string literal to match the indentation of the
+/// closing delimiter.
+///
+///     let banner = """
+///               __,
+///              (           o  /) _/_
+///               `.  , , , ,  //  /
+///             (___)(_(_/_(_ //_ (__
+///                          /)
+///                         (/
+///             """
 ///
 /// Modifying and Comparing Strings
 /// ===============================
@@ -54,38 +75,63 @@ import SwiftShims
 ///
 ///     var otherGreeting = greeting
 ///     otherGreeting += " Have a nice time!"
-///     print(otherGreeting)
-///     // Prints "Welcome! Have a nice time!"
+///     // otherGreeting == "Welcome! Have a nice time!"
 ///
 ///     print(greeting)
 ///     // Prints "Welcome!"
 ///
-/// Comparing strings for equality using the is-equal-to operator (`==`) or a
-/// relational operator (like `<` and `>=`) is always performed using the
-/// Unicode canonical representation. This means that different
-/// representations of a string compare as being equal.
+/// Comparing strings for equality using the equal-to operator (`==`) or a
+/// relational operator (like `<` or `>=`) is always performed using Unicode
+/// canonical representation. As a result, different representations of a
+/// string compare as being equal.
 ///
 ///     let cafe1 = "Cafe\u{301}"
 ///     let cafe2 = "Café"
 ///     print(cafe1 == cafe2)
 ///     // Prints "true"
 ///
-/// The Unicode code point `"\u{301}"` modifies the preceding character to
+/// The Unicode scalar value `"\u{301}"` modifies the preceding character to
 /// include an accent, so `"e\u{301}"` has the same canonical representation
-/// as the single Unicode code point `"é"`.
+/// as the single Unicode scalar value `"é"`.
 ///
-/// Basic string operations are not sensitive to locale settings. This ensures
-/// that string comparisons and other operations always have a single, stable
+/// Basic string operations are not sensitive to locale settings, ensuring that
+/// string comparisons and other operations always have a single, stable
 /// result, allowing strings to be used as keys in `Dictionary` instances and
 /// for other purposes.
 ///
-/// Representing Strings: Views
-/// ===========================
+/// Accessing String Elements
+/// =========================
 ///
-/// A string is not itself a collection. Instead, it has properties that
-/// present its contents as meaningful collections. Each of these collections
-/// is a particular type of *view* of the string's visible and data
-/// representation.
+/// A string is a collection of *extended grapheme clusters*, which approximate
+/// human-readable characters. Many individual characters, such as "é", "김",
+/// and "🇮🇳", can be made up of multiple Unicode scalar values. These scalar
+/// values are combined by Unicode's boundary algorithms into extended
+/// grapheme clusters, represented by the Swift `Character` type. Each element
+/// of a string is represented by a `Character` instance.
+///
+/// For example, to retrieve the first word of a longer string, you can search
+/// for a space and then create a substring from a prefix of the string up to
+/// that point:
+///
+///     let name = "Marie Curie"
+///     let firstSpace = name.firstIndex(of: " ") ?? name.endIndex
+///     let firstName = name[..<firstSpace]
+///     // firstName == "Marie"
+///
+/// The `firstName` constant is an instance of the `Substring` type---a type
+/// that represents substrings of a string while sharing the original string's
+/// storage. Substrings present the same interface as strings.
+///
+///     print("\(name)'s first name has \(firstName.count) letters.")
+///     // Prints "Marie Curie's first name has 5 letters."
+///
+/// Accessing a String's Unicode Representation
+/// ===========================================
+///
+/// If you need to access the contents of a string as encoded in different
+/// Unicode encodings, use one of the string's `unicodeScalars`, `utf16`, or
+/// `utf8` properties. Each property provides access to a view of the string
+/// as a series of code units, each encoded in a different Unicode encoding.
 ///
 /// To demonstrate the different views available for every string, the
 /// following examples use this `String` instance:
@@ -94,31 +140,20 @@ import SwiftShims
 ///     print(cafe)
 ///     // Prints "Café du 🌍"
 ///
-/// Character View
-/// --------------
+/// The `cafe` string is a collection of the nine characters that are visible
+/// when the string is displayed.
 ///
-/// A string's `characters` property is a collection of *extended grapheme
-/// clusters*, which approximate human-readable characters. Many individual
-/// characters, such as "é", "김", and "🇮🇳", can be made up of multiple Unicode
-/// code points. These code points are combined by Unicode's boundary
-/// algorithms into extended grapheme clusters, represented by Swift's
-/// `Character` type. Each element of the `characters` view is represented by
-/// a `Character` instance.
-///
-///     print(cafe.characters.count)
+///     print(cafe.count)
 ///     // Prints "9"
-///     print(Array(cafe.characters))
+///     print(Array(cafe))
 ///     // Prints "["C", "a", "f", "é", " ", "d", "u", " ", "🌍"]"
-///
-/// Each visible character in the `cafe` string is a separate element of the
-/// `characters` view.
 ///
 /// Unicode Scalar View
 /// -------------------
 ///
 /// A string's `unicodeScalars` property is a collection of Unicode scalar
 /// values, the 21-bit codes that are the basic unit of Unicode. Each scalar
-/// value is represented by a `UnicodeScalar` instance and is equivalent to a
+/// value is represented by a `Unicode.Scalar` instance and is equivalent to a
 /// UTF-32 code unit.
 ///
 ///     print(cafe.unicodeScalars.count)
@@ -130,9 +165,9 @@ import SwiftShims
 ///
 /// The `unicodeScalars` view's elements comprise each Unicode scalar value in
 /// the `cafe` string. In particular, because `cafe` was declared using the
-/// decomposed form of the `"é"` character, `unicodeScalars` contains the code
-/// points for both the letter `"e"` (101) and the accent character `"´"`
-/// (769).
+/// decomposed form of the `"é"` character, `unicodeScalars` contains the
+/// scalar values for both the letter `"e"` (101) and the accent character
+/// `"´"` (769).
 ///
 /// UTF-16 View
 /// -----------
@@ -147,9 +182,7 @@ import SwiftShims
 ///     // Prints "[67, 97, 102, 101, 769, 32, 100, 117, 32, 55356, 57101]"
 ///
 /// The elements of the `utf16` view are the code units for the string when
-/// encoded in UTF-16.
-///
-/// The elements of this collection match those accessed through indexed
+/// encoded in UTF-16. These elements match those accessed through indexed
 /// `NSString` APIs.
 ///
 ///     let nscafe = cafe as NSString
@@ -178,8 +211,8 @@ import SwiftShims
 ///     print(cLength)
 ///     // Prints "14"
 ///
-/// Counting the Length of a String
-/// ===============================
+/// Measuring the Length of a String
+/// ================================
 ///
 /// When you need to know the length of a string, you must first consider what
 /// you'll use the length for. Are you measuring the number of characters that
@@ -193,7 +226,7 @@ import SwiftShims
 /// UTF-16 and UTF-8.
 ///
 ///     let capitalA = "A"
-///     print(capitalA.characters.count)
+///     print(capitalA.count)
 ///     // Prints "1"
 ///     print(capitalA.unicodeScalars.count)
 ///     // Prints "1"
@@ -202,15 +235,14 @@ import SwiftShims
 ///     print(capitalA.utf8.count)
 ///     // Prints "1"
 ///
-///
 /// On the other hand, an emoji flag character is constructed from a pair of
-/// Unicode scalars values, like `"\u{1F1F5}"` and `"\u{1F1F7}"`. Each of
-/// these scalar values, in turn, is too large to fit into a single UTF-16 or
-/// UTF-8 code unit. As a result, each view of the string `"🇵🇷"` reports a
-/// different length.
+/// Unicode scalar values, like `"\u{1F1F5}"` and `"\u{1F1F7}"`. Each of these
+/// scalar values, in turn, is too large to fit into a single UTF-16 or UTF-8
+/// code unit. As a result, each view of the string `"🇵🇷"` reports a different
+/// length.
 ///
 ///     let flag = "🇵🇷"
-///     print(flag.characters.count)
+///     print(flag.count)
 ///     // Prints "1"
 ///     print(flag.unicodeScalars.count)
 ///     // Prints "2"
@@ -219,26 +251,63 @@ import SwiftShims
 ///     print(flag.utf8.count)
 ///     // Prints "8"
 ///
+/// To check whether a string is empty, use its `isEmpty` property instead of
+/// comparing the length of one of the views to `0`. Unlike with `isEmpty`,
+/// calculating a view's `count` property requires iterating through the
+/// elements of the string.
+///
 /// Accessing String View Elements
 /// ==============================
 ///
 /// To find individual elements of a string, use the appropriate view for your
 /// task. For example, to retrieve the first word of a longer string, you can
-/// search the `characters` view for a space and then create a new string from
-/// a prefix of the `characters` view up to that point.
+/// search the string for a space and then create a new string from a prefix
+/// of the string up to that point.
 ///
 ///     let name = "Marie Curie"
-///     let firstSpace = name.characters.index(of: " ")!
-///     let firstName = String(name.characters.prefix(upTo: firstSpace))
+///     let firstSpace = name.firstIndex(of: " ") ?? name.endIndex
+///     let firstName = name[..<firstSpace]
 ///     print(firstName)
 ///     // Prints "Marie"
 ///
-/// You can convert an index into one of a string's views to an index into
-/// another view.
+/// Strings and their views share indices, so you can access the UTF-8 view of
+/// the `name` string using the same `firstSpace` index.
 ///
-///     let firstSpaceUTF8 = firstSpace.samePosition(in: name.utf8)
-///     print(Array(name.utf8.prefix(upTo: firstSpaceUTF8)))
+///     print(Array(name.utf8[..<firstSpace]))
 ///     // Prints "[77, 97, 114, 105, 101]"
+///
+/// Note that an index into one view may not have an exact corresponding
+/// position in another view. For example, the `flag` string declared above
+/// comprises a single character, but is composed of eight code units when
+/// encoded as UTF-8. The following code creates constants for the first and
+/// second positions in the `flag.utf8` view. Accessing the `utf8` view with
+/// these indices yields the first and second code UTF-8 units.
+///
+///     let firstCodeUnit = flag.startIndex
+///     let secondCodeUnit = flag.utf8.index(after: firstCodeUnit)
+///     // flag.utf8[firstCodeUnit] == 240
+///     // flag.utf8[secondCodeUnit] == 159
+///
+/// When used to access the elements of the `flag` string itself, however, the
+/// `secondCodeUnit` index does not correspond to the position of a specific
+/// character. Instead of only accessing the specific UTF-8 code unit, that
+/// index is treated as the position of the character at the index's encoded
+/// offset. In the case of `secondCodeUnit`, that character is still the flag
+/// itself.
+///
+///     // flag[firstCodeUnit] == "🇵🇷"
+///     // flag[secondCodeUnit] == "🇵🇷"
+///
+/// If you need to validate that an index from one string's view corresponds
+/// with an exact position in another view, use the index's
+/// `samePosition(in:)` method or the `init(_:within:)` initializer.
+///
+///     if let exactIndex = secondCodeUnit.samePosition(in: flag) {
+///         print(flag[exactIndex])
+///     } else {
+///         print("No exact match for this position.")
+///     }
+///     // Prints "No exact match for this position."
 ///
 /// Performance Optimizations
 /// =========================
@@ -255,7 +324,7 @@ import SwiftShims
 /// exponential growth strategy that makes appending to a string a constant
 /// time operation when averaged over many append operations.
 ///
-/// Bridging between String and NSString
+/// Bridging Between String and NSString
 /// ====================================
 ///
 /// Any `String` instance can be bridged to `NSString` using the type-cast
@@ -264,7 +333,7 @@ import SwiftShims
 /// subclass of `NSString` can become a `String` instance, there are no
 /// guarantees about representation or efficiency when a `String` instance is
 /// backed by `NSString` storage. Because `NSString` is immutable, it is just
-/// as though the storage was shared by a copy: The first in any sequence of
+/// as though the storage was shared by a copy. The first in any sequence of
 /// mutating operations causes elements to be copied into unique, contiguous
 /// storage which may cost O(*n*) time and space, where *n* is the length of
 /// the string's encoded representation (or more, if the underlying `NSString`
@@ -272,184 +341,214 @@ import SwiftShims
 ///
 /// For more information about the Unicode terms used in this discussion, see
 /// the [Unicode.org glossary][glossary]. In particular, this discussion
-/// mentions [extended grapheme clusters][clusters],
-/// [Unicode scalar values][scalars], and [canonical equivalence][equivalence].
+/// mentions [extended grapheme clusters][clusters], [Unicode scalar
+/// values][scalars], and [canonical equivalence][equivalence].
 ///
 /// [glossary]: http://www.unicode.org/glossary/
 /// [clusters]: http://www.unicode.org/glossary/#extended_grapheme_cluster
 /// [scalars]: http://www.unicode.org/glossary/#unicode_scalar_value
 /// [equivalence]: http://www.unicode.org/glossary/#canonical_equivalent
-///
-/// - SeeAlso: `String.CharacterView`, `String.UnicodeScalarView`,
-///   `String.UTF16View`, `String.UTF8View`
-@_fixed_layout
+@frozen
 public struct String {
+  public // @SPI(Foundation)
+  var _guts: _StringGuts
+
+  @inlinable @inline(__always)
+  internal init(_ _guts: _StringGuts) {
+    self._guts = _guts
+    _invariantCheck()
+  }
+
   /// Creates an empty string.
-  public init() {
-    _core = _StringCore()
-  }
-
-  public // @testable
-  init(_ _core: _StringCore) {
-    self._core = _core
-  }
-
-  public // @testable
-  var _core: _StringCore
+  ///
+  /// Using this initializer is equivalent to initializing a string with an
+  /// empty string literal.
+  ///
+  ///     let empty = ""
+  ///     let alsoEmpty = String()
+  @inlinable @inline(__always)
+  @_semantics("string.init_empty")
+  public init() { self.init(_StringGuts()) }
 }
 
 extension String {
-  public // @testable
-  static func _fromWellFormedCodeUnitSequence<Encoding, Input>(
-    _ encoding: Encoding.Type, input: Input
-  ) -> String
-    where
-    Encoding: UnicodeCodec,
-    Input: Collection,
-    Input.Iterator.Element == Encoding.CodeUnit {
-    return String._fromCodeUnitSequence(encoding, input: input)!
+  #if !INTERNAL_CHECKS_ENABLED
+  @inlinable @inline(__always) internal func _invariantCheck() {}
+  #else
+  @usableFromInline @inline(never) @_effects(releasenone)
+  internal func _invariantCheck() {
+  }
+  #endif // INTERNAL_CHECKS_ENABLED
+
+  public func _dump() {
+    #if INTERNAL_CHECKS_ENABLED
+    _guts._dump()
+    #endif // INTERNAL_CHECKS_ENABLED
+  }
+}
+
+extension String {
+  /// Creates a string from the given Unicode code units in the specified
+  /// encoding.
+  ///
+  /// - Parameters:
+  ///   - codeUnits: A collection of code units encoded in the encoding
+  ///     specified in `sourceEncoding`.
+  ///   - sourceEncoding: The encoding in which `codeUnits` should be
+  ///     interpreted.
+  @inlinable
+  @inline(__always) // Eliminate dynamic type check when possible
+  public init<C: Collection, Encoding: Unicode.Encoding>(
+    decoding codeUnits: C, as sourceEncoding: Encoding.Type
+  ) where C.Iterator.Element == Encoding.CodeUnit {
+    guard _fastPath(sourceEncoding == UTF8.self) else {
+      self = String._fromCodeUnits(
+        codeUnits, encoding: sourceEncoding, repair: true)!.0
+      return
+    }
+
+    if let contigBytes = codeUnits as? _HasContiguousBytes,
+       contigBytes._providesContiguousBytesNoCopy
+    {
+      self = contigBytes.withUnsafeBytes { rawBufPtr in
+        return String._fromUTF8Repairing(
+          UnsafeBufferPointer(
+            start: rawBufPtr.baseAddress?.assumingMemoryBound(to: UInt8.self),
+            count: rawBufPtr.count)).0
+      }
+      return
+    }
+
+    // Just copying to an Array is significantly faster than performing
+    // generic operations
+    self = Array(codeUnits).withUnsafeBufferPointer {
+      let raw = UnsafeRawBufferPointer($0)
+      return String._fromUTF8Repairing(raw.bindMemory(to: UInt8.self)).0
+    }
+    return
   }
 
-  public // @testable
-  static func _fromCodeUnitSequence<Encoding, Input>(
-    _ encoding: Encoding.Type, input: Input
-  ) -> String?
-    where
-    Encoding: UnicodeCodec,
-    Input: Collection,
-    Input.Iterator.Element == Encoding.CodeUnit {
-    let (stringBufferOptional, _) =
-        _StringBuffer.fromCodeUnits(input, encoding: encoding,
-            repairIllFormedSequences: false)
-    if let stringBuffer = stringBufferOptional {
-      return String(_storage: stringBuffer)
-    } else {
-      return nil
+  /// Calls the given closure with a pointer to the contents of the string,
+  /// represented as a null-terminated sequence of code units.
+  ///
+  /// The pointer passed as an argument to `body` is valid only during the
+  /// execution of `withCString(encodedAs:_:)`. Do not store or return the
+  /// pointer for later use.
+  ///
+  /// - Parameters:
+  ///   - body: A closure with a pointer parameter that points to a
+  ///     null-terminated sequence of code units. If `body` has a return
+  ///     value, that value is also used as the return value for the
+  ///     `withCString(encodedAs:_:)` method. The pointer argument is valid
+  ///     only for the duration of the method's execution.
+  ///   - targetEncoding: The encoding in which the code units should be
+  ///     interpreted.
+  /// - Returns: The return value, if any, of the `body` closure parameter.
+  @inlinable
+  @inline(__always) // Eliminate dynamic type check when possible
+  public func withCString<Result, TargetEncoding: Unicode.Encoding>(
+    encodedAs targetEncoding: TargetEncoding.Type,
+    _ body: (UnsafePointer<TargetEncoding.CodeUnit>) throws -> Result
+  ) rethrows -> Result {
+    if targetEncoding == UTF8.self {
+      return try self.withCString {
+        (cPtr: UnsafePointer<CChar>) -> Result  in
+        _internalInvariant(UInt8.self == TargetEncoding.CodeUnit.self)
+        let ptr = UnsafeRawPointer(cPtr).assumingMemoryBound(
+          to: TargetEncoding.CodeUnit.self)
+        return try body(ptr)
+      }
+    }
+    return try _slowWithCString(encodedAs: targetEncoding, body)
+  }
+
+  @usableFromInline @inline(never) // slow-path
+  @_effects(releasenone)
+  internal func _slowWithCString<Result, TargetEncoding: Unicode.Encoding>(
+    encodedAs targetEncoding: TargetEncoding.Type,
+    _ body: (UnsafePointer<TargetEncoding.CodeUnit>) throws -> Result
+  ) rethrows -> Result {
+    var copy = self
+    return try copy.withUTF8 { utf8 in
+      var arg = Array<TargetEncoding.CodeUnit>()
+      arg.reserveCapacity(1 &+ self._guts.count / 4)
+      let repaired = transcode(
+        utf8.makeIterator(),
+        from: UTF8.self,
+        to: targetEncoding,
+        stoppingOnError: false,
+        into: { arg.append($0) })
+      arg.append(TargetEncoding.CodeUnit(0))
+      _internalInvariant(!repaired)
+      return try body(arg)
     }
   }
+}
 
-  public // @testable
-  static func _fromCodeUnitSequenceWithRepair<Encoding, Input>(
-    _ encoding: Encoding.Type, input: Input
-  ) -> (String, hadError: Bool)
-    where
-    Encoding: UnicodeCodec,
-    Input: Collection,
-    Input.Iterator.Element == Encoding.CodeUnit {
+extension String: _ExpressibleByBuiltinUnicodeScalarLiteral {
+  @_effects(readonly)
+  @inlinable @inline(__always)
+  public init(_builtinUnicodeScalarLiteral value: Builtin.Int32) {
+    self.init(Unicode.Scalar(_unchecked: UInt32(value)))
+  }
 
-    let (stringBuffer, hadError) =
-        _StringBuffer.fromCodeUnits(input, encoding: encoding,
-            repairIllFormedSequences: true)
-    return (String(_storage: stringBuffer!), hadError)
+  @inlinable @inline(__always)
+  public init(_ scalar: Unicode.Scalar) {
+    self = scalar.withUTF8CodeUnits { String._uncheckedFromUTF8($0) }
   }
 }
 
-extension String : _BuiltinUnicodeScalarLiteralConvertible {
-  @effects(readonly)
-  public // @testable
-  init(_builtinUnicodeScalarLiteral value: Builtin.Int32) {
-    self = String._fromWellFormedCodeUnitSequence(
-      UTF32.self, input: CollectionOfOne(UInt32(value)))
-  }
-}
-
-extension String : UnicodeScalarLiteralConvertible {
-  /// Creates an instance initialized to the given Unicode scalar value.
-  ///
-  /// Don't call this initializer directly. It may be used by the compiler when
-  /// you initialize a string using a string literal that contains a single
-  /// Unicode scalar value.
-  public init(unicodeScalarLiteral value: String) {
-    self = value
-  }
-}
-
-extension String : _BuiltinExtendedGraphemeClusterLiteralConvertible {
-  @effects(readonly)
-  @_semantics("string.makeUTF8")
+extension String: _ExpressibleByBuiltinExtendedGraphemeClusterLiteral {
+  @inlinable @inline(__always)
+  @_effects(readonly) @_semantics("string.makeUTF8")
   public init(
     _builtinExtendedGraphemeClusterLiteral start: Builtin.RawPointer,
     utf8CodeUnitCount: Builtin.Word,
-    isASCII: Builtin.Int1) {
-    self = String._fromWellFormedCodeUnitSequence(
-      UTF8.self,
-      input: UnsafeBufferPointer(
-        start: UnsafeMutablePointer<UTF8.CodeUnit>(start),
-        count: Int(utf8CodeUnitCount)))
-  }
-}
-
-extension String : ExtendedGraphemeClusterLiteralConvertible {
-  /// Creates an instance initialized to the given extended grapheme cluster
-  /// literal.
-  ///
-  /// Don't call this initializer directly. It may be used by the compiler when
-  /// you initialize a string using a string literal containing a single
-  /// extended grapheme cluster.
-  public init(extendedGraphemeClusterLiteral value: String) {
-    self = value
-  }
-}
-
-extension String : _BuiltinUTF16StringLiteralConvertible {
-  @effects(readonly)
-  @_semantics("string.makeUTF16")
-  public init(
-    _builtinUTF16StringLiteral start: Builtin.RawPointer,
-    utf16CodeUnitCount: Builtin.Word
+    isASCII: Builtin.Int1
   ) {
-    self = String(
-      _StringCore(
-        baseAddress: OpaquePointer(start),
-        count: Int(utf16CodeUnitCount),
-        elementShift: 1,
-        hasCocoaBuffer: false,
-        owner: nil))
+    self.init(
+      _builtinStringLiteral: start,
+      utf8CodeUnitCount: utf8CodeUnitCount,
+      isASCII: isASCII)
   }
 }
 
-extension String : _BuiltinStringLiteralConvertible {
-  @effects(readonly)
-  @_semantics("string.makeUTF8")
+extension String: _ExpressibleByBuiltinStringLiteral {
+  @inlinable @inline(__always)
+  @_effects(readonly) @_semantics("string.makeUTF8")
   public init(
     _builtinStringLiteral start: Builtin.RawPointer,
     utf8CodeUnitCount: Builtin.Word,
-    isASCII: Builtin.Int1) {
-    if Bool(isASCII) {
-      self = String(
-        _StringCore(
-          baseAddress: OpaquePointer(start),
-          count: Int(utf8CodeUnitCount),
-          elementShift: 0,
-          hasCocoaBuffer: false,
-          owner: nil))
+    isASCII: Builtin.Int1
+    ) {
+    let bufPtr = UnsafeBufferPointer(
+      start: UnsafeRawPointer(start).assumingMemoryBound(to: UInt8.self),
+      count: Int(utf8CodeUnitCount))
+    if let smol = _SmallString(bufPtr) {
+      self = String(_StringGuts(smol))
+      return
     }
-    else {
-      self = String._fromWellFormedCodeUnitSequence(
-        UTF8.self,
-        input: UnsafeBufferPointer(
-          start: UnsafeMutablePointer<UTF8.CodeUnit>(start),
-          count: Int(utf8CodeUnitCount)))
-    }
+    self.init(_StringGuts(bufPtr, isASCII: Bool(isASCII)))
   }
 }
 
-extension String : StringLiteralConvertible {
+extension String: ExpressibleByStringLiteral {
   /// Creates an instance initialized to the given string value.
   ///
-  /// Don't call this initializer directly. It is used by the compiler when you
+  /// Do not call this initializer directly. It is used by the compiler when you
   /// initialize a string using a string literal. For example:
   ///
   ///     let nextStop = "Clark & Lake"
   ///
   /// This assignment to the `nextStop` constant calls this string literal
   /// initializer behind the scenes.
+  @inlinable @inline(__always)
   public init(stringLiteral value: String) {
-     self = value
+    self = value
   }
 }
 
-extension String : CustomDebugStringConvertible {
+extension String: CustomDebugStringConvertible {
   /// A representation of the string that is suitable for debugging.
   public var debugDescription: String {
     var result = "\""
@@ -462,297 +561,23 @@ extension String : CustomDebugStringConvertible {
 }
 
 extension String {
-  /// Returns the number of code units occupied by this string
-  /// in the given encoding.
-  func _encodedLength<
-    Encoding: UnicodeCodec
-  >(_ encoding: Encoding.Type) -> Int {
-    var codeUnitCount = 0
-    let output: (Encoding.CodeUnit) -> Void = { _ in codeUnitCount += 1 }
-    self._encode(encoding, output: output)
-    return codeUnitCount
+  @inlinable // Forward inlinability to append
+  @_effects(readonly) @_semantics("string.concat")
+  public static func + (lhs: String, rhs: String) -> String {
+    var result = lhs
+    result.append(rhs)
+    return result
   }
 
-  // FIXME: this function does not handle the case when a wrapped NSString
-  // contains unpaired surrogates.  Fix this before exposing this function as a
-  // public API.  But it is unclear if it is valid to have such an NSString in
-  // the first place.  If it is not, we should not be crashing in an obscure
-  // way -- add a test for that.
-  // Related: <rdar://problem/17340917> Please document how NSString interacts
-  // with unpaired surrogates
-  func _encode<
-    Encoding: UnicodeCodec
-  >(_ encoding: Encoding.Type, output: @noescape (Encoding.CodeUnit) -> Void)
-  {
-    return _core.encode(encoding, output: output)
+  // String append
+  @inlinable // Forward inlinability to append
+  @_semantics("string.plusequals")
+  public static func += (lhs: inout String, rhs: String) {
+    lhs.append(rhs)
   }
 }
 
-#if _runtime(_ObjC)
-/// Compare two strings using the Unicode collation algorithm in the
-/// deterministic comparison mode. (The strings which are equivalent according
-/// to their NFD form are considered equal. Strings which are equivalent
-/// according to the plain Unicode collation algorithm are additionally ordered
-/// based on their NFD.)
-///
-/// See Unicode Technical Standard #10.
-///
-/// The behavior is equivalent to `NSString.compare()` with default options.
-///
-/// - returns:
-///   * an unspecified value less than zero if `lhs < rhs`,
-///   * zero if `lhs == rhs`,
-///   * an unspecified value greater than zero if `lhs > rhs`.
-@_silgen_name("swift_stdlib_compareNSStringDeterministicUnicodeCollation")
-public func _stdlib_compareNSStringDeterministicUnicodeCollation(
-  _ lhs: AnyObject, _ rhs: AnyObject
-) -> Int32
-
-@_silgen_name("swift_stdlib_compareNSStringDeterministicUnicodeCollationPtr")
-public func _stdlib_compareNSStringDeterministicUnicodeCollationPointer(
-  _ lhs: OpaquePointer, _ rhs: OpaquePointer
-) -> Int32
-#endif
-
-extension String : Equatable {
-}
-
-public func ==(lhs: String, rhs: String) -> Bool {
-  if lhs._core.isASCII && rhs._core.isASCII {
-    if lhs._core.count != rhs._core.count {
-      return false
-    }
-    return _swift_stdlib_memcmp(
-      lhs._core.startASCII, rhs._core.startASCII,
-      rhs._core.count) == 0
-  }
-  return lhs._compareString(rhs) == 0
-}
-
-extension String : Comparable {
-}
-
-extension String {
-#if _runtime(_ObjC)
-  /// This is consistent with Foundation, but incorrect as defined by Unicode.
-  /// Unicode weights some ASCII punctuation in a different order than ASCII
-  /// value. Such as:
-  ///
-  ///   0022  ; [*02FF.0020.0002] # QUOTATION MARK
-  ///   0023  ; [*038B.0020.0002] # NUMBER SIGN
-  ///   0025  ; [*038C.0020.0002] # PERCENT SIGN
-  ///   0026  ; [*0389.0020.0002] # AMPERSAND
-  ///   0027  ; [*02F8.0020.0002] # APOSTROPHE
-  ///
-  /// - Precondition: Both `self` and `rhs` are ASCII strings.
-  public // @testable
-  func _compareASCII(_ rhs: String) -> Int {
-    var compare = Int(_swift_stdlib_memcmp(
-      self._core.startASCII, rhs._core.startASCII,
-      min(self._core.count, rhs._core.count)))
-    if compare == 0 {
-      compare = self._core.count - rhs._core.count
-    }
-    // This efficiently normalizes the result to -1, 0, or 1 to match the
-    // behavior of NSString's compare function.
-    return (compare > 0 ? 1 : 0) - (compare < 0 ? 1 : 0)
-  }
-#endif
-
-  /// Compares two strings with the Unicode Collation Algorithm.
-  @inline(never)
-  @_semantics("stdlib_binary_only") // Hide the CF/ICU dependency
-  public  // @testable
-  func _compareDeterministicUnicodeCollation(_ rhs: String) -> Int {
-    // Note: this operation should be consistent with equality comparison of
-    // Character.
-#if _runtime(_ObjC)
-    if self._core.hasContiguousStorage && rhs._core.hasContiguousStorage {
-      let lhsStr = _NSContiguousString(self._core)
-      let rhsStr = _NSContiguousString(rhs._core)
-      let res = lhsStr._unsafeWithNotEscapedSelfPointerPair(rhsStr) {
-        return Int(
-            _stdlib_compareNSStringDeterministicUnicodeCollationPointer($0, $1))
-      }
-      return res
-    }
-    return Int(_stdlib_compareNSStringDeterministicUnicodeCollation(
-      _bridgeToObjectiveCImpl(), rhs._bridgeToObjectiveCImpl()))
-#else
-    switch (_core.isASCII, rhs._core.isASCII) {
-    case (true, false):
-      let lhsPtr = UnsafePointer<Int8>(_core.startASCII)
-      let rhsPtr = UnsafePointer<UTF16.CodeUnit>(rhs._core.startUTF16)
-
-      return Int(_swift_stdlib_unicode_compare_utf8_utf16(
-        lhsPtr, Int32(_core.count), rhsPtr, Int32(rhs._core.count)))
-    case (false, true):
-      // Just invert it and recurse for this case.
-      return -rhs._compareDeterministicUnicodeCollation(self)
-    case (false, false):
-      let lhsPtr = UnsafePointer<UTF16.CodeUnit>(_core.startUTF16)
-      let rhsPtr = UnsafePointer<UTF16.CodeUnit>(rhs._core.startUTF16)
-
-      return Int(_swift_stdlib_unicode_compare_utf16_utf16(
-        lhsPtr, Int32(_core.count),
-        rhsPtr, Int32(rhs._core.count)))
-    case (true, true):
-      let lhsPtr = UnsafePointer<Int8>(_core.startASCII)
-      let rhsPtr = UnsafePointer<Int8>(rhs._core.startASCII)
-
-      return Int(_swift_stdlib_unicode_compare_utf8_utf8(
-        lhsPtr, Int32(_core.count),
-        rhsPtr, Int32(rhs._core.count)))
-    }
-#endif
-  }
-
-  public  // @testable
-  func _compareString(_ rhs: String) -> Int {
-#if _runtime(_ObjC)
-    // We only want to perform this optimization on objc runtimes. Elsewhere,
-    // we will make it follow the unicode collation algorithm even for ASCII.
-    if (_core.isASCII && rhs._core.isASCII) {
-      return _compareASCII(rhs)
-    }
-#endif
-    return _compareDeterministicUnicodeCollation(rhs)
-  }
-}
-
-public func <(lhs: String, rhs: String) -> Bool {
-  return lhs._compareString(rhs) < 0
-}
-
-// Support for copy-on-write
-extension String {
-
-  /// Appends the given string to this string.
-  ///
-  /// The following example builds a customized greeting by using the
-  /// `append(_:)` method:
-  ///
-  ///     var greeting = "Hello, "
-  ///     if let name = getUserName() {
-  ///         greeting.append(name)
-  ///     } else {
-  ///         greeting.append("friend")
-  ///     }
-  ///     print(greeting)
-  ///     // Prints "Hello, friend"
-  ///
-  /// - Parameter other: Another string.
-  public mutating func append(_ other: String) {
-    _core.append(other._core)
-  }
-
-  /// Appends the given Unicode scalar to the string.
-  ///
-  /// - Parameter x: A Unicode scalar value.
-  ///
-  /// - Complexity: Appending a Unicode scalar to a string averages to O(1)
-  ///   over many additions.
-  public mutating func append(_ x: UnicodeScalar) {
-    _core.append(x)
-  }
-
-  public // SPI(Foundation)
-  init(_storage: _StringBuffer) {
-    _core = _StringCore(_storage)
-  }
-}
-
-#if _runtime(_ObjC)
-@_silgen_name("swift_stdlib_NSStringHashValue")
-func _stdlib_NSStringHashValue(_ str: AnyObject, _ isASCII: Bool) -> Int
-
-@_silgen_name("swift_stdlib_NSStringHashValuePointer")
-func _stdlib_NSStringHashValuePointer(_ str: OpaquePointer, _ isASCII: Bool) -> Int
-#endif
-
-extension String : Hashable {
-  /// The string's hash value.
-  ///
-  /// Hash values are not guaranteed to be equal across different executions of
-  /// your program. Do not save hash values to use during a future execution.
-  public var hashValue: Int {
-#if _runtime(_ObjC)
-    // Mix random bits into NSString's hash so that clients don't rely on
-    // Swift.String.hashValue and NSString.hash being the same.
-#if arch(i386) || arch(arm)
-    let hashOffset = Int(bitPattern: 0x88dd_cc21)
-#else
-    let hashOffset = Int(bitPattern: 0x429b_1266_88dd_cc21)
-#endif
-    // If we have a contiguous string then we can use the stack optimization.
-    let core = self._core
-    let isASCII = core.isASCII
-    if core.hasContiguousStorage {
-      let stackAllocated = _NSContiguousString(core)
-      return hashOffset ^ stackAllocated._unsafeWithNotEscapedSelfPointer {
-        return _stdlib_NSStringHashValuePointer($0, isASCII)
-      }
-    } else {
-      let cocoaString = unsafeBitCast(
-        self._bridgeToObjectiveCImpl(), to: _NSStringCore.self)
-      return hashOffset ^ _stdlib_NSStringHashValue(cocoaString, isASCII)
-    }
-#else
-    if self._core.isASCII {
-      return _swift_stdlib_unicode_hash_ascii(
-        UnsafeMutablePointer<Int8>(_core.startASCII),
-        Int32(_core.count))
-    } else {
-      return _swift_stdlib_unicode_hash(
-        UnsafeMutablePointer<UInt16>(_core.startUTF16),
-        Int32(_core.count))
-    }
-#endif
-  }
-}
-
-@effects(readonly)
-@_semantics("string.concat")
-public func + (lhs: String, rhs: String) -> String {
-  var lhs = lhs
-  if (lhs.isEmpty) {
-    return rhs
-  }
-  lhs._core.append(rhs._core)
-  return lhs
-}
-
-// String append
-public func += (lhs: inout String, rhs: String) {
-  if lhs.isEmpty {
-    lhs = rhs
-  }
-  else {
-    lhs._core.append(rhs._core)
-  }
-}
-
-extension String {
-  /// Constructs a `String` in `resultStorage` containing the given UTF-8.
-  ///
-  /// Low-level construction interface used by introspection
-  /// implementation in the runtime library.
-  @_silgen_name("swift_stringFromUTF8InRawMemory")
-  public // COMPILER_INTRINSIC
-  static func _fromUTF8InRawMemory(
-    _ resultStorage: UnsafeMutablePointer<String>,
-    start: UnsafeMutablePointer<UTF8.CodeUnit>,
-    utf8CodeUnitCount: Int
-  ) {
-    resultStorage.initialize(with: 
-      String._fromWellFormedCodeUnitSequence(
-        UTF8.self,
-        input: UnsafeBufferPointer(start: start, count: utf8CodeUnitCount)))
-  }
-}
-
-extension Sequence where Iterator.Element == String {
-
+extension Sequence where Element: StringProtocol {
   /// Returns a new string by concatenating the elements of the sequence,
   /// adding the given separator between each element.
   ///
@@ -765,175 +590,175 @@ extension Sequence where Iterator.Element == String {
   ///     // Prints "Vivien, Marlon, Kim, Karl"
   ///
   /// - Parameter separator: A string to insert between each of the elements
-  ///   in this sequence.
+  ///   in this sequence. The default separator is an empty string.
   /// - Returns: A single, concatenated string.
-  public func joined(separator: String) -> String {
+  @_specialize(where Self == Array<Substring>)
+  @_specialize(where Self == Array<String>)
+  public func joined(separator: String = "") -> String {
+    return _joined(separator: separator)
+  }
+
+  @inline(__always) // Pick up @_specialize and devirtualize from two callers
+  internal func _joined(separator: String) -> String {
+    // A likely-under-estimate, but lets us skip some of the growth curve
+    // for large Sequences.
+    let underestimatedCap =
+      (1 &+ separator._guts.count) &* self.underestimatedCount
     var result = ""
-
-    // FIXME(performance): this code assumes UTF-16 in-memory representation.
-    // It should be switched to low-level APIs.
-    let separatorSize = separator.utf16.count
-
-    let reservation = self._preprocessingPass {
-      () -> Int in
-      var r = 0
-      for chunk in self {
-        // FIXME(performance): this code assumes UTF-16 in-memory representation.
-        // It should be switched to low-level APIs.
-        r += separatorSize + chunk.utf16.count
-      }
-      return r - separatorSize
-    }
-
-    if let n = reservation {
-      result.reserveCapacity(n)
-    }
-
-    if separatorSize == 0 {
+    result.reserveCapacity(underestimatedCap)
+    if separator.isEmpty {
       for x in self {
-        result.append(x)
+        result.append(x._ephemeralString)
       }
       return result
     }
 
     var iter = makeIterator()
     if let first = iter.next() {
-      result.append(first)
+      result.append(first._ephemeralString)
       while let next = iter.next() {
         result.append(separator)
-        result.append(next)
+        result.append(next._ephemeralString)
       }
     }
-
     return result
   }
 }
 
-#if _runtime(_ObjC)
-@_silgen_name("swift_stdlib_NSStringLowercaseString")
-func _stdlib_NSStringLowercaseString(_ str: AnyObject) -> _CocoaString
-
-@_silgen_name("swift_stdlib_NSStringUppercaseString")
-func _stdlib_NSStringUppercaseString(_ str: AnyObject) -> _CocoaString
-#else
-internal func _nativeUnicodeLowercaseString(_ str: String) -> String {
-  var buffer = _StringBuffer(
-    capacity: str._core.count, initialSize: str._core.count, elementWidth: 2)
-
-  // Try to write it out to the same length.
-  let dest = UnsafeMutablePointer<UTF16.CodeUnit>(buffer.start)
-  let z = _swift_stdlib_unicode_strToLower(
-    dest, Int32(str._core.count),
-    str._core.startUTF16, Int32(str._core.count))
-  let correctSize = Int(z)
-
-  // If more space is needed, do it again with the correct buffer size.
-  if correctSize != str._core.count {
-    buffer = _StringBuffer(
-      capacity: correctSize, initialSize: correctSize, elementWidth: 2)
-    let dest = UnsafeMutablePointer<UTF16.CodeUnit>(buffer.start)
-    _swift_stdlib_unicode_strToLower(
-      dest, Int32(correctSize), str._core.startUTF16, Int32(str._core.count))
+// This overload is necessary because String now conforms to
+// BidirectionalCollection, and there are other `joined` overloads that are
+// considered more specific. See Flatten.swift.gyb.
+extension BidirectionalCollection where Element == String {
+  /// Returns a new string by concatenating the elements of the sequence,
+  /// adding the given separator between each element.
+  ///
+  /// The following example shows how an array of strings can be joined to a
+  /// single, comma-separated string:
+  ///
+  ///     let cast = ["Vivien", "Marlon", "Kim", "Karl"]
+  ///     let list = cast.joined(separator: ", ")
+  ///     print(list)
+  ///     // Prints "Vivien, Marlon, Kim, Karl"
+  ///
+  /// - Parameter separator: A string to insert between each of the elements
+  ///   in this sequence. The default separator is an empty string.
+  /// - Returns: A single, concatenated string.
+  @_specialize(where Self == Array<String>)
+  public func joined(separator: String = "") -> String {
+    return _joined(separator: separator)
   }
-
-  return String(_storage: buffer)
 }
-
-internal func _nativeUnicodeUppercaseString(_ str: String) -> String {
-  var buffer = _StringBuffer(
-    capacity: str._core.count, initialSize: str._core.count, elementWidth: 2)
-
-  // Try to write it out to the same length.
-  let dest = UnsafeMutablePointer<UTF16.CodeUnit>(buffer.start)
-  let z = _swift_stdlib_unicode_strToUpper(
-    dest, Int32(str._core.count),
-    str._core.startUTF16, Int32(str._core.count))
-  let correctSize = Int(z)
-
-  // If more space is needed, do it again with the correct buffer size.
-  if correctSize != str._core.count {
-    buffer = _StringBuffer(
-      capacity: correctSize, initialSize: correctSize, elementWidth: 2)
-    let dest = UnsafeMutablePointer<UTF16.CodeUnit>(buffer.start)
-    _swift_stdlib_unicode_strToUpper(
-      dest, Int32(correctSize), str._core.startUTF16, Int32(str._core.count))
-  }
-
-  return String(_storage: buffer)
-}
-#endif
 
 // Unicode algorithms
 extension String {
-  // FIXME: implement case folding without relying on Foundation.
-  // <rdar://problem/17550602> [unicode] Implement case folding
+  @inline(__always)
+  internal func _uppercaseASCII(_ x: UInt8) -> UInt8 {
+    /// A "table" for which ASCII characters need to be upper cased.
+    /// To determine which bit corresponds to which ASCII character, subtract 1
+    /// from the ASCII value of that character and divide by 2. The bit is set iff
+    /// that character is a lower case character.
+    let _lowercaseTable: UInt64 =
+      0b0001_1111_1111_1111_0000_0000_0000_0000 &<< 32
 
-  /// A "table" for which ASCII characters need to be upper cased.
-  /// To determine which bit corresponds to which ASCII character, subtract 1
-  /// from the ASCII value of that character and divide by 2. The bit is set iff
-  /// that character is a lower case character.
-  internal var _asciiLowerCaseTable: UInt64 {
-    @inline(__always)
-    get {
-      return 0b0001_1111_1111_1111_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000
-    }
+    // Lookup if it should be shifted in our ascii table, then we subtract 0x20 if
+    // it should, 0x0 if not.
+    // This code is equivalent to:
+    // This code is equivalent to:
+    // switch sourcex {
+    // case let x where (x >= 0x41 && x <= 0x5a):
+    //   return x &- 0x20
+    // case let x:
+    //   return x
+    // }
+    let isLower = _lowercaseTable &>> UInt64(((x &- 1) & 0b0111_1111) &>> 1)
+    let toSubtract = (isLower & 0x1) &<< 5
+    return x &- UInt8(truncatingIfNeeded: toSubtract)
   }
 
-  /// The same table for upper case characters.
-  internal var _asciiUpperCaseTable: UInt64 {
-    @inline(__always)
-    get {
-      return 0b0000_0000_0000_0000_0001_1111_1111_1111_0000_0000_0000_0000_0000_0000_0000_0000
-    }
+  @inline(__always)
+  internal func _lowercaseASCII(_ x: UInt8) -> UInt8 {
+    /// A "table" for which ASCII characters need to be lower cased.
+    /// To determine which bit corresponds to which ASCII character, subtract 1
+    /// from the ASCII value of that character and divide by 2. The bit is set iff
+    /// that character is a upper case character.
+    let _uppercaseTable: UInt64 =
+      0b0000_0000_0000_0000_0001_1111_1111_1111 &<< 32
+
+    // Lookup if it should be shifted in our ascii table, then we add 0x20 if
+    // it should, 0x0 if not.
+    // This code is equivalent to:
+    // This code is equivalent to:
+    // switch sourcex {
+    // case let x where (x >= 0x41 && x <= 0x5a):
+    //   return x &- 0x20
+    // case let x:
+    //   return x
+    // }
+    let isUpper = _uppercaseTable &>> UInt64(((x &- 1) & 0b0111_1111) &>> 1)
+    let toAdd = (isUpper & 0x1) &<< 5
+    return x &+ UInt8(truncatingIfNeeded: toAdd)
   }
+
 
   /// Returns a lowercase version of the string.
   ///
   /// Here's an example of transforming a string to all lowercase letters.
   ///
-  ///     let cafe = "Café 🍵"
+  ///     let cafe = "BBQ Café 🍵"
   ///     print(cafe.lowercased())
-  ///     // Prints "café 🍵"
+  ///     // Prints "bbq café 🍵"
   ///
   /// - Returns: A lowercase copy of the string.
   ///
-  /// - Complexity: O(n)
+  /// - Complexity: O(*n*)
+  @_effects(releasenone)
   public func lowercased() -> String {
-    if self._core.isASCII {
-      let count = self._core.count
-      let source = self._core.startASCII
-      let buffer = _StringBuffer(
-        capacity: count, initialSize: count, elementWidth: 1)
-      let dest = UnsafeMutablePointer<UInt8>(buffer.start)
-      for i in 0..<count {
-        // For each character in the string, we lookup if it should be shifted
-        // in our ascii table, then we return 0x20 if it should, 0x0 if not.
-        // This code is equivalent to:
-        // switch source[i] {
-        // case let x where (x >= 0x41 && x <= 0x5a):
-        //   dest[i] = x &+ 0x20
-        // case let x:
-        //   dest[i] = x
-        // }
-        let value = source[i]
-        let isUpper =
-          _asciiUpperCaseTable >>
-          UInt64(((value &- 1) & 0b0111_1111) >> 1)
-        let add = (isUpper & 0x1) << 5
-        // Since we are left with either 0x0 or 0x20, we can safely truncate to
-        // a UInt8 and add to our ASCII value (this will not overflow numbers in
-        // the ASCII range).
-        dest[i] = value &+ UInt8(truncatingBitPattern: add)
+    if _fastPath(_guts.isFastASCII) {
+      return _guts.withFastUTF8 { utf8 in
+        // TODO(String performance): We can directly call appendInPlace
+        var result = String()
+        result.reserveCapacity(utf8.count)
+        for u8 in utf8 {
+          result._guts.append(String(Unicode.Scalar(_lowercaseASCII(u8)))._guts)
+        }
+        return result
       }
-      return String(_storage: buffer)
     }
 
-#if _runtime(_ObjC)
-    return _cocoaStringToSwiftString_NonASCII(
-      _stdlib_NSStringLowercaseString(self._bridgeToObjectiveCImpl()))
-#else
-    return _nativeUnicodeLowercaseString(self)
-#endif
+    // TODO(String performance): Try out incremental case-conversion rather than
+    // make UTF-16 array beforehand
+    let codeUnits = Array(self.utf16).withUnsafeBufferPointer {
+      (uChars: UnsafeBufferPointer<UInt16>) -> Array<UInt16> in
+      var result = Array<UInt16>(repeating: 0, count: uChars.count)
+      let len = result.withUnsafeMutableBufferPointer {
+        (output) -> Int in
+        var err = __swift_stdlib_U_ZERO_ERROR
+        return Int(truncatingIfNeeded:
+          __swift_stdlib_u_strToLower(
+            output.baseAddress._unsafelyUnwrappedUnchecked,
+            Int32(output.count),
+            uChars.baseAddress._unsafelyUnwrappedUnchecked,
+            Int32(uChars.count),
+            "",
+            &err))
+      }
+      if len > uChars.count {
+        var err = __swift_stdlib_U_ZERO_ERROR
+        result = Array<UInt16>(repeating: 0, count: len)
+        result.withUnsafeMutableBufferPointer {
+          output -> Void in
+          __swift_stdlib_u_strToLower(
+            output.baseAddress._unsafelyUnwrappedUnchecked,
+            Int32(output.count),
+            uChars.baseAddress._unsafelyUnwrappedUnchecked,
+            Int32(uChars.count),
+            "",
+            &err)
+        }
+      }
+      return result
+    }
+    return codeUnits.withUnsafeBufferPointer { String._uncheckedFromUTF16($0) }
   }
 
   /// Returns an uppercase version of the string.
@@ -946,92 +771,200 @@ extension String {
   ///
   /// - Returns: An uppercase copy of the string.
   ///
-  /// - Complexity: O(n)
+  /// - Complexity: O(*n*)
+  @_effects(releasenone)
   public func uppercased() -> String {
-    if self._core.isASCII {
-      let count = self._core.count
-      let source = self._core.startASCII
-      let buffer = _StringBuffer(
-        capacity: count, initialSize: count, elementWidth: 1)
-      let dest = UnsafeMutablePointer<UInt8>(buffer.start)
-      for i in 0..<count {
-        // See the comment above in lowercaseString.
-        let value = source[i]
-        let isLower =
-          _asciiLowerCaseTable >>
-          UInt64(((value &- 1) & 0b0111_1111) >> 1)
-        let add = (isLower & 0x1) << 5
-        dest[i] = value &- UInt8(truncatingBitPattern: add)
+    if _fastPath(_guts.isFastASCII) {
+      return _guts.withFastUTF8 { utf8 in
+        // TODO(String performance): code-unit appendInPlace on guts
+        var result = String()
+        result.reserveCapacity(utf8.count)
+        for u8 in utf8 {
+          result._guts.append(String(Unicode.Scalar(_uppercaseASCII(u8)))._guts)
+        }
+        return result
       }
-      return String(_storage: buffer)
     }
 
-#if _runtime(_ObjC)
-    return _cocoaStringToSwiftString_NonASCII(
-      _stdlib_NSStringUppercaseString(self._bridgeToObjectiveCImpl()))
-#else
-    return _nativeUnicodeUppercaseString(self)
-#endif
+    // TODO(String performance): Try out incremental case-conversion rather than
+    // make UTF-16 array beforehand
+    let codeUnits = Array(self.utf16).withUnsafeBufferPointer {
+      (uChars: UnsafeBufferPointer<UInt16>) -> Array<UInt16> in
+      var result = Array<UInt16>(repeating: 0, count: uChars.count)
+      let len = result.withUnsafeMutableBufferPointer {
+        (output) -> Int in
+        var err = __swift_stdlib_U_ZERO_ERROR
+        return Int(truncatingIfNeeded:
+          __swift_stdlib_u_strToUpper(
+            output.baseAddress._unsafelyUnwrappedUnchecked,
+            Int32(output.count),
+            uChars.baseAddress._unsafelyUnwrappedUnchecked,
+            Int32(uChars.count),
+            "",
+            &err))
+      }
+      if len > uChars.count {
+        var err = __swift_stdlib_U_ZERO_ERROR
+        result = Array<UInt16>(repeating: 0, count: len)
+        result.withUnsafeMutableBufferPointer {
+          output -> Void in
+          __swift_stdlib_u_strToUpper(
+            output.baseAddress._unsafelyUnwrappedUnchecked,
+            Int32(output.count),
+            uChars.baseAddress._unsafelyUnwrappedUnchecked,
+            Int32(uChars.count),
+            "",
+            &err)
+        }
+      }
+      return result
+    }
+    return codeUnits.withUnsafeBufferPointer { String._uncheckedFromUTF16($0) }
   }
+
+  /// Creates an instance from the description of a given
+  /// `LosslessStringConvertible` instance.
+  @inlinable @inline(__always)
+  public init<T : LosslessStringConvertible>(_ value: T) {
+    self = value.description
+  }
+}
+
+extension String: CustomStringConvertible {
+  /// The value of this string.
+  ///
+  /// Using this property directly is discouraged. Instead, use simple
+  /// assignment to create a new constant or variable equal to this string.
+  @inlinable
+  public var description: String { return self }
 }
 
 extension String {
-  @available(*, unavailable, renamed: "append")
-  public mutating func appendContentsOf(_ other: String) {
-    Builtin.unreachable()
+  public // @testable
+  var _nfcCodeUnits: [UInt8] {
+    var codeUnits = [UInt8]()
+    _withNFCCodeUnits {
+      codeUnits.append($0)
+    }
+    return codeUnits
   }
 
-  @available(*, unavailable, renamed: "append(contentsOf:)")
-  public mutating func appendContentsOf<S : Sequence>(_ newElements: S)
-    where S.Iterator.Element == Character {
-    Builtin.unreachable()
-  }
-
-  @available(*, unavailable, renamed: "insert(contentsOf:at:)")
-  public mutating func insertContentsOf<S : Collection>(
-    _ newElements: S, at i: Index
-  ) where S.Iterator.Element == Character {
-    Builtin.unreachable()
-  }
-
-  @available(*, unavailable, renamed: "replaceSubrange")
-  public mutating func replaceRange<C : Collection>(
-    _ subRange: Range<Index>, with newElements: C
-  ) where C.Iterator.Element == Character {
-    Builtin.unreachable()
-  }
-    
-  @available(*, unavailable, renamed: "replaceSubrange")
-  public mutating func replaceRange(
-    _ subRange: Range<Index>, with newElements: String
-  ) {
-    Builtin.unreachable()
-  }
-  
-  @available(*, unavailable, renamed: "removeAt")
-  public mutating func removeAtIndex(_ i: Index) -> Character {
-    Builtin.unreachable()
-  }
-
-  @available(*, unavailable, renamed: "removeSubrange")
-  public mutating func removeRange(_ subRange: Range<Index>) {
-    Builtin.unreachable()
-  }
-
-  @available(*, unavailable, renamed: "lowercased()")
-  public var lowercaseString: String {
-    Builtin.unreachable()
-  }
-
-  @available(*, unavailable, renamed: "uppercased()")
-  public var uppercaseString: String {
-    Builtin.unreachable()
+  public // @testable
+  func _withNFCCodeUnits(_ f: (UInt8) throws -> Void) rethrows {
+    try _gutsSlice._withNFCCodeUnits(f)
   }
 }
 
-extension Sequence where Iterator.Element == String {
-  @available(*, unavailable, renamed: "joined")
-  public func joinWithSeparator(_ separator: String) -> String {
-    Builtin.unreachable()
+extension _StringGutsSlice {
+  internal func _withNFCCodeUnits(_ f: (UInt8) throws -> Void) rethrows {
+    var output = _FixedArray16<UInt8>(allZeros: ())
+    var icuInput = _FixedArray16<UInt16>(allZeros: ())
+    var icuOutput = _FixedArray16<UInt16>(allZeros: ())
+    if _fastPath(isFastUTF8) {
+      try withFastUTF8 {
+        return try _fastWithNormalizedCodeUnitsImpl(
+          sourceBuffer: $0,
+          outputBuffer: _castOutputBuffer(&output),
+          icuInputBuffer: _castOutputBuffer(&icuInput),
+          icuOutputBuffer: _castOutputBuffer(&icuOutput),
+          f
+        )
+      }
+    } else {
+      return try _foreignWithNormalizedCodeUnitsImpl(
+        outputBuffer: _castOutputBuffer(&output),
+        icuInputBuffer: _castOutputBuffer(&icuInput),
+        icuOutputBuffer: _castOutputBuffer(&icuOutput),
+        f
+      )
+    }
+  }
+
+  internal func _foreignWithNormalizedCodeUnitsImpl(
+    outputBuffer: UnsafeMutableBufferPointer<UInt8>,
+    icuInputBuffer: UnsafeMutableBufferPointer<UInt16>,
+    icuOutputBuffer: UnsafeMutableBufferPointer<UInt16>,
+    _ f: (UInt8) throws -> Void
+  ) rethrows {
+    var outputBuffer = outputBuffer
+    var icuInputBuffer = icuInputBuffer
+    var icuOutputBuffer = icuOutputBuffer
+  
+    var index = range.lowerBound
+    let cachedEndIndex = range.upperBound
+  
+    var hasBufferOwnership = false
+    
+    defer {
+      if hasBufferOwnership {
+        outputBuffer.deallocate()
+        icuInputBuffer.deallocate()
+        icuOutputBuffer.deallocate()
+      }
+    }
+    
+    while index < cachedEndIndex {
+      let result = _foreignNormalize(
+        readIndex: index,
+        endIndex: cachedEndIndex,
+        guts: _guts,
+        outputBuffer: &outputBuffer,
+        icuInputBuffer: &icuInputBuffer,
+        icuOutputBuffer: &icuOutputBuffer
+      )
+      for i in 0..<result.amountFilled {
+        try f(outputBuffer[i])
+      }
+      _internalInvariant(result.nextReadPosition != index)
+      index = result.nextReadPosition
+      if result.allocatedBuffers {
+        _internalInvariant(!hasBufferOwnership)
+        hasBufferOwnership = true
+      }
+    }
+  }
+}
+
+internal func _fastWithNormalizedCodeUnitsImpl(
+  sourceBuffer: UnsafeBufferPointer<UInt8>,
+  outputBuffer: UnsafeMutableBufferPointer<UInt8>,
+  icuInputBuffer: UnsafeMutableBufferPointer<UInt16>,
+  icuOutputBuffer: UnsafeMutableBufferPointer<UInt16>,
+  _ f: (UInt8) throws -> Void
+) rethrows {
+  var outputBuffer = outputBuffer
+  var icuInputBuffer = icuInputBuffer
+  var icuOutputBuffer = icuOutputBuffer
+
+  var index = String.Index(_encodedOffset: 0)
+  let cachedEndIndex = String.Index(_encodedOffset: sourceBuffer.count)
+  
+  var hasBufferOwnership = false
+  
+  defer {
+    if hasBufferOwnership {
+      outputBuffer.deallocate()
+      icuInputBuffer.deallocate()
+      icuOutputBuffer.deallocate()
+    }
+  }
+  
+  while index < cachedEndIndex {
+    let result = _fastNormalize(
+      readIndex: index,
+      sourceBuffer: sourceBuffer,
+      outputBuffer: &outputBuffer,
+      icuInputBuffer: &icuInputBuffer,
+      icuOutputBuffer: &icuOutputBuffer
+    )
+    for i in 0..<result.amountFilled {
+      try f(outputBuffer[i])
+    }
+    _internalInvariant(result.nextReadPosition != index)
+    index = result.nextReadPosition
+    if result.allocatedBuffers {
+      _internalInvariant(!hasBufferOwnership)
+      hasBufferOwnership = true
+    }
   }
 }

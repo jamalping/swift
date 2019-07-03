@@ -1,4 +1,4 @@
-// RUN: rm -rf %t && mkdir -p %t
+// RUN: %empty-directory(%t)
 
 // RUN: %clang -arch x86_64 -mmacosx-version-min=10.11 -isysroot %sdk -fobjc-arc %S/Inputs/ObjCClasses/ObjCClasses.m -c -o %t/ObjCClasses.o
 
@@ -74,10 +74,10 @@ ClassProperties.test("runtime")
   .code {
   let theClass: AnyObject = SwiftClass.self
   let prop = class_getProperty(object_getClass(theClass), "value")
-  expectNotEmpty(prop)
+  expectNotNil(prop)
 
-  let nameAsCString = property_getName(prop)!
-  expectNotEmpty(nameAsCString)
+  let nameAsCString = property_getName(prop!)
+  expectNotNil(nameAsCString)
   expectEqual("value", String(cString: nameAsCString))
 }
 

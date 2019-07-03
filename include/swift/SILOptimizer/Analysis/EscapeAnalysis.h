@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -15,6 +15,7 @@
 
 #include "swift/SIL/SILInstruction.h"
 #include "swift/SIL/SILFunction.h"
+#include "swift/SILOptimizer/Analysis/BasicCalleeAnalysis.h"
 #include "swift/SILOptimizer/Analysis/BottomUpIPAnalysis.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
@@ -145,7 +146,7 @@ public:
     /// Information where the node's value is used in its function.
     /// Each bit corresponds to an argument/instruction where the value is used.
     /// The UsePoints on demand when calling ConnectionGraph::getUsePoints().
-    llvm::SmallBitVector UsePoints;
+    SmallBitVector UsePoints;
 
     /// The actual result of the escape analysis. It tells if and how (global or
     /// through arguments) the value escapes.
@@ -298,6 +299,8 @@ public:
         case EscapeState::Global:
           return true;
       }
+
+      llvm_unreachable("Unhandled EscapeState in switch.");
     }
 
     /// Returns the content node if of this node if it exists in the graph.
@@ -374,8 +377,11 @@ public:
     /// NodeType::Return.
     CGNode *ReturnNode = nullptr;
 
+    /// The list of use points.
+    llvm::SmallVector<SILNode *, 16> UsePointTable;
+
     /// Mapping of use points to bit indices in CGNode::UsePoints.
-    llvm::DenseMap<ValueBase *, int> UsePoints;
+    llvm::DenseMap<SILNode *, int> UsePoints;
 
     /// The allocator for nodes.
     llvm::SpecificBumpPtrAllocator<CGNode> NodeAllocator;
@@ -480,13 +486,16 @@ public:
     }
 
     /// Adds an argument/instruction in which the node's value is used.
-    int addUsePoint(CGNode *Node, ValueBase *V) {
+    int addUsePoint(CGNode *Node, SILNode *User) {
       if (Node->getEscapeState() >= EscapeState::Global)
         return -1;
 
+      User = User->getRepresentativeSILNodeInObject();
       int Idx = (int)UsePoints.size();
-      assert(UsePoints.count(V) == 0 && "value is already a use-point");
-      UsePoints[V] = Idx;
+      assert(UsePoints.count(User) == 0 && "value is already a use-point");
+      UsePoints[User] = Idx;
+      UsePointTable.push_back(User);
+      assert(UsePoints.size() == UsePointTable.size());
       Node->setUsePointBit(Idx);
       return Idx;
     }
@@ -559,11 +568,15 @@ public:
       return Node->UsePoints.count();
     }
 
-    /// Returns true if \p V is a use of \p Node, i.e. V may (indirectly)
-    /// somehow refer to the Node's value.
+    /// Returns true if \p UsePoint is a use of \p Node, i.e. UsePoint may
+    /// (indirectly) somehow refer to the Node's value.
     /// Use-points are only values which are relevant for lifeness computation,
     /// e.g. release or apply instructions.
-    bool isUsePoint(ValueBase *V, CGNode *Node);
+    bool isUsePoint(SILNode *UsePoint, CGNode *Node);
+
+    /// Returns all use points of \p Node in \p UsePoints.
+    void getUsePoints(CGNode *Node,
+                      llvm::SmallVectorImpl<SILNode *> &UsePoints);
 
     /// Computes the use point information.
     void computeUsePoints();
@@ -654,14 +667,14 @@ private:
 
   /// Callee analysis, used for determining the callees at call sites.
   BasicCalleeAnalysis *BCA;
-  
-  /// Returns true if \p V is a "pointer" value.
+
+  /// Returns true if \p V may encapsulate a "pointer" value.
   /// See EscapeAnalysis::NodeType::Value.
   bool isPointer(ValueBase *V);
 
-  /// If V is a pointer, set it to global escaping.
-  void setEscapesGlobal(ConnectionGraph *ConGraph, ValueBase *V) {
-    if (CGNode *Node = ConGraph->getNode(V, this))
+  /// If \p pointer is a pointer, set it to global escaping.
+  void setEscapesGlobal(ConnectionGraph *ConGraph, ValueBase *pointer) {
+    if (CGNode *Node = ConGraph->getNode(pointer, this))
       ConGraph->setEscapesGlobal(Node);
   }
 
@@ -673,20 +686,35 @@ private:
     return FInfo;
   }
 
+  /// Build a connection graph for reach callee from the callee list.
+  bool buildConnectionGraphForCallees(SILInstruction *Caller,
+                                      CalleeList Callees,
+                                      FunctionInfo *FInfo,
+                                      FunctionOrder &BottomUpOrder,
+                                      int RecursionDepth);
+
+  /// Build a connection graph for the destructor invoked for a provided
+  /// SILValue.
+  bool buildConnectionGraphForDestructor(SILValue V,
+                                         SILInstruction *Caller,
+                                         FunctionInfo *FInfo,
+                                         FunctionOrder &BottomUpOrder,
+                                         int RecursionDepth);
+
   /// Builds the connection graph for a function, including called functions.
   /// Visited callees are added to \p BottomUpOrder until \p RecursionDepth
   /// reaches MaxRecursionDepth.
   void buildConnectionGraph(FunctionInfo *FInfo, FunctionOrder &BottomUpOrder,
                             int RecursionDepth);
 
-  /// Updates the graph by analysing instruction \p I.
+  /// Updates the graph by analyzing instruction \p I.
   /// Visited callees are added to \p BottomUpOrder until \p RecursionDepth
   /// reaches MaxRecursionDepth.
   void analyzeInstruction(SILInstruction *I, FunctionInfo *FInfo,
                           FunctionOrder &BottomUpOrder,
                           int RecursionDepth);
 
-  /// Updates the graph by analysing instruction \p SI, which may be a
+  /// Updates the graph by analyzing instruction \p SI, which may be a
   /// select_enum, select_enum_addr or select_value.
   template<class SelectInst>
   void analyzeSelectInst(SelectInst *SI, ConnectionGraph *ConGraph);
@@ -703,7 +731,7 @@ private:
 
   /// Merges the graph of a callee function into the graph of
   /// a caller function, whereas \p FAS is the call-site.
-  bool mergeCalleeGraph(FullApplySite FAS,
+  bool mergeCalleeGraph(SILInstruction *FAS,
                         ConnectionGraph *CallerGraph,
                         ConnectionGraph *CalleeGraph);
 
@@ -713,7 +741,7 @@ private:
 
   /// Returns true if the value \p V can escape to the \p UsePoint, where
   /// \p UsePoint is either a release-instruction or a function call.
-  bool canEscapeToUsePoint(SILValue V, ValueBase *UsePoint,
+  bool canEscapeToUsePoint(SILValue V, SILNode *UsePoint,
                            ConnectionGraph *ConGraph);
 
   friend struct ::CGForDotView;
@@ -722,7 +750,7 @@ public:
   EscapeAnalysis(SILModule *M);
 
   static bool classof(const SILAnalysis *S) {
-    return S->getKind() == AnalysisKind::Escape;
+    return S->getKind() == SILAnalysisKind::Escape;
   }
 
   virtual void initialize(SILPassManager *PM) override;
@@ -740,12 +768,6 @@ public:
   /// If \p V has reference semantics, this function returns false if only the
   /// address of a contained property escapes, but not the object itself.
   bool canEscapeTo(SILValue V, FullApplySite FAS);
-
-  /// Returns true if the value \p V or its content can escape to the
-  /// function call \p FAS.
-  /// This is the same as above, except that it returns true if an address of
-  /// a contained property escapes.
-  bool canObjectOrContentEscapeTo(SILValue V, FullApplySite FAS);
 
   /// Returns true if the value \p V can escape to the release-instruction \p
   /// RI. This means that \p RI may release \p V or any called destructor may
@@ -773,11 +795,25 @@ public:
   /// node, the pointers do not alias.
   bool canPointToSameMemory(SILValue V1, SILValue V2);
 
-  virtual void invalidate(InvalidationKind K) override;
+  /// Invalidate all information in this analysis.
+  virtual void invalidate() override;
 
+  /// Invalidate all of the information for a specific function.
   virtual void invalidate(SILFunction *F, InvalidationKind K) override;
 
-  virtual void handleDeleteNotification(ValueBase *I) override;
+  /// Notify the analysis about a newly created function.
+  virtual void notifyAddedOrModifiedFunction(SILFunction *F) override {}
+
+  /// Notify the analysis about a function which will be deleted from the
+  /// module.
+  virtual void notifyWillDeleteFunction(SILFunction *F) override {
+    invalidate(F, InvalidationKind::Nothing);
+  }
+
+  /// Notify the analysis about changed witness or vtables.
+  virtual void invalidateFunctionTables() override { }
+
+  virtual void handleDeleteNotification(SILNode *N) override;
 
   virtual bool needsNotifications() override { return true; }
 

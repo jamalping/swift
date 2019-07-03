@@ -2,11 +2,11 @@
 #
 # This source file is part of the Swift.org open source project
 #
-# Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+# Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 # Licensed under Apache License v2.0 with Runtime Library Exception
 #
-# See http://swift.org/LICENSE.txt for license information
-# See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+# See https://swift.org/LICENSE.txt for license information
+# See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 # ----------------------------------------------------------------------------
 
 import argparse
@@ -26,6 +26,7 @@ except ImportError:
 from swift_build_support import shell
 from swift_build_support import xcrun
 from swift_build_support.products import Ninja
+from swift_build_support.targets import StdlibDeploymentTarget
 from swift_build_support.toolchain import host_toolchain
 from swift_build_support.workspace import Workspace
 
@@ -40,6 +41,8 @@ class NinjaTestCase(unittest.TestCase):
 
         self.workspace = Workspace(source_root=tmpdir1,
                                    build_root=tmpdir2)
+
+        self.host = StdlibDeploymentTarget.host_target()
 
         # Setup toolchain
         self.toolchain = host_toolchain()
@@ -71,33 +74,43 @@ class NinjaTestCase(unittest.TestCase):
         self.args = None
 
     def test_ninja_bin_path(self):
-        ninja_build = Ninja(
+        ninja_build = Ninja.new_builder(
             args=self.args,
             toolchain=self.toolchain,
-            source_dir='/path/to/src',
-            build_dir='/path/to/build')
+            workspace=self.workspace,
+            host=self.host)
 
-        self.assertEqual(ninja_build.ninja_bin_path, '/path/to/build/ninja')
+        self.assertEqual(ninja_build.ninja_bin_path,
+                         os.path.join(
+                             self.workspace.build_dir('build', 'ninja'),
+                             'ninja'))
 
-    def test_do_build(self):
-        ninja_build = Ninja(
+    def test_build(self):
+        ninja_build = Ninja.new_builder(
             args=self.args,
             toolchain=self.toolchain,
-            source_dir=self.workspace.source_dir('ninja'),
-            build_dir=self.workspace.build_dir('build', 'ninja'))
+            workspace=self.workspace,
+            host=self.host)
 
-        ninja_build.do_build()
+        ninja_build.build()
 
         expect_env = ""
         if platform.system() == "Darwin":
             expect_env = (
                 "env "
-                "CXX={cxx} "
                 "'CFLAGS=-isysroot {sysroot} -mmacosx-version-min=10.9' "
+                "CXX={cxx} "
                 "LDFLAGS=-mmacosx-version-min=10.9 "
             ).format(
                 cxx=self.toolchain.cxx,
                 sysroot=xcrun.sdk_path('macosx')
+            )
+        elif self.toolchain.cxx:
+            expect_env = (
+                "env "
+                "CXX={cxx} "
+            ).format(
+                cxx=self.toolchain.cxx,
             )
 
         self.assertEqual(self.stdout.getvalue(), """\
@@ -106,8 +119,15 @@ class NinjaTestCase(unittest.TestCase):
 + pushd {build_dir}
 + {expect_env}{python} configure.py --bootstrap
 + popd
-""".format(
-            source_dir=os.path.join(self.workspace.source_root, 'ninja'),
-            build_dir=os.path.join(self.workspace.build_root, 'ninja-build'),
-            expect_env=expect_env,
-            python=sys.executable))
+""".format(source_dir=self._platform_quote(
+            self.workspace.source_dir('ninja')),
+           build_dir=self._platform_quote(
+            self.workspace.build_dir('build', 'ninja')),
+           expect_env=expect_env,
+           python=self._platform_quote(sys.executable)))
+
+    def _platform_quote(self, path):
+        if platform.system() == 'Windows':
+            return "'{}'".format(path)
+        else:
+            return path

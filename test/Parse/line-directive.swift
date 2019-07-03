@@ -1,4 +1,5 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
+// RUN: not %target-swift-frontend -c %s 2>&1 | %FileCheck %s
 
 let x = 0 // We need this because of the #sourceLocation-ends-with-a-newline requirement.
 
@@ -31,6 +32,31 @@ public struct S { // expected-note{{in declaration of 'S'}}
 
 #sourceLocation()
 
+// expected-error@+1 {{expected expression}}
+try #sourceLocation(file: "try.swift", line: 100)
+#sourceLocation()
 
-// expected-error@+1{{#line directive was renamed to #sourceLocation}}
-#setline 32000 "troops_on_the_water"
+// expected-error@+3 {{expected statement}}
+// expected-error@+2 {{#line directive was renamed to #sourceLocation}}
+LABEL:
+#line 200 "labeled.swift"
+#sourceLocation()
+
+class C {
+#sourceLocation(file: "sr5242.swift", line: 100)
+    func foo() {}
+    let bar = 12
+#sourceLocation(file: "sr5242.swift", line: 200)
+}
+enum E {
+#sourceLocation(file: "sr5242.swift", line: 300)
+    case A, B
+    case C, D
+#sourceLocation()
+}
+
+#sourceLocation(file: "sr8772.swift", line: 400)
+2., 3
+// CHECK: sr8772.swift:400:2: error: expected member name following '.'
+// CHECK: sr8772.swift:400:3: error: consecutive statements on a line must be separated by ';'
+// CHECK: sr8772.swift:400:3: error: expected expression

@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -31,17 +31,17 @@ void SILLoop::dump() const {
 #endif
 }
 
-SILLoopInfo::SILLoopInfo(SILFunction *F, DominanceInfo *DT) {
-  LI.analyze(*DT);
+SILLoopInfo::SILLoopInfo(SILFunction *F, DominanceInfo *DT) : Dominance(DT) {
+  LI.analyze(*Dominance);
 }
 
 bool SILLoop::canDuplicate(SILInstruction *I) const {
-  // The dealloc_stack of an alloc_stack must be in the loop, otherwise the
-  // dealloc_stack will be fed by a phi node of two alloc_stacks.
-  if (auto *Alloc = dyn_cast<AllocStackInst>(I)) {
-    for (auto *UI : Alloc->getUses()) {
-      if (auto *Dealloc = dyn_cast<DeallocStackInst>(UI->getUser())) {
-        if (!contains(Dealloc->getParent()))
+  // The deallocation of a stack allocation must be in the loop, otherwise the
+  // deallocation will be fed by a phi node of two allocations.
+  if (I->isAllocatingStack()) {
+    for (auto *UI : cast<SingleValueInstruction>(I)->getUses()) {
+      if (UI->getUser()->isDeallocatingStack()) {
+        if (!contains(UI->getUser()->getParent()))
           return false;
       }
     }
@@ -60,10 +60,12 @@ bool SILLoop::canDuplicate(SILInstruction *I) const {
   }
 
   // We can't have a phi of two openexistential instructions of different UUID.
-  SILInstruction *OEI = dyn_cast<OpenExistentialAddrInst>(I);
-  if (OEI || (OEI = dyn_cast<OpenExistentialRefInst>(I)) ||
-      (OEI = dyn_cast<OpenExistentialMetatypeInst>(I))) {
-    for (auto *UI : OEI->getUses())
+  if (isa<OpenExistentialAddrInst>(I) || isa<OpenExistentialRefInst>(I) ||
+      isa<OpenExistentialMetatypeInst>(I) ||
+      isa<OpenExistentialValueInst>(I) || isa<OpenExistentialBoxInst>(I) ||
+      isa<OpenExistentialBoxValueInst>(I)) {
+    SingleValueInstruction *OI = cast<SingleValueInstruction>(I);
+    for (auto *UI : OI->getUses())
       if (!contains(UI->getUser()))
         return false;
     return true;
@@ -76,11 +78,37 @@ bool SILLoop::canDuplicate(SILInstruction *I) const {
     return false;
   }
 
+  // The entire coroutine execution must be within the loop.
+  // Note that we don't have to worry about the reverse --- a loop which
+  // contains an end_apply or abort_apply of an external begin_apply ---
+  // because that wouldn't be structurally valid in the first place.
+  if (auto BAI = dyn_cast<BeginApplyInst>(I)) {
+    for (auto UI : BAI->getTokenResult()->getUses()) {
+      auto User = UI->getUser();
+      assert(isa<EndApplyInst>(User) || isa<AbortApplyInst>(User));
+      if (!contains(User))
+        return false;
+    }
+    return true;
+  }
+
+  if (isa<ThrowInst>(I))
+    return false;
+
+  if (isa<BeginAccessInst>(I))
+    return false;
+
+  if (isa<DynamicMethodBranchInst>(I))
+    return false;
+
+  if (auto *PA = dyn_cast<PartialApplyInst>(I))
+    return !PA->isOnStack();
+
   assert(I->isTriviallyDuplicatable() &&
-         "Code here must match isTriviallyDuplicatable in SILInstruction");
+    "Code here must match isTriviallyDuplicatable in SILInstruction");
   return true;
 }
 
 void SILLoopInfo::verify() const {
-  LI.verify();
+  LI.verify(*Dominance);
 }

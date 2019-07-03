@@ -1,6 +1,4 @@
-// RUN: %target-swift-frontend -emit-sil -sdk %S/Inputs -I %S/Inputs -enable-source-import %s | FileCheck %s
-
-// REQUIRES: objc_interop
+// RUN: %target-swift-emit-sil -sdk %S/Inputs -I %S/Inputs -enable-source-import %s -enable-objc-interop | %FileCheck %s
 
 import ObjectiveC
 import Foundation
@@ -10,7 +8,7 @@ class Foo {
   @objc(property) var isProperty: Bool = false
 }
 
-// CHECK-LABEL: sil hidden @_TF13objc_selector14createSelector
+// CHECK-LABEL: sil hidden @$s13objc_selector14createSelector{{[_0-9a-zA-Z]*}}F
 func createSelector(foo: Foo) -> Selector {
   // CHECK: [[LITERAL:%[0-9]+]] = string_literal objc_selector "methodForInt:"
   // CHECK-NEXT: [[PTR:%[0-9]+]] = struct $OpaquePointer ([[LITERAL]] : $Builtin.RawPointer)
@@ -21,7 +19,7 @@ func createSelector(foo: Foo) -> Selector {
 
 // CHECK-LABEL: sil hidden @{{.*}}createGetterSelector
 func createGetterSelector() -> Selector {
-  // CHECK: string_literal objc_selector "isProperty"
+  // CHECK: string_literal objc_selector "property"
   return #selector(getter: Foo.isProperty)
 }
 

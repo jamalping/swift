@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -55,8 +55,19 @@ SILInstruction *SILCombiner::optimizeBuiltinCompareEq(BuiltinInst *BI,
   IsZeroKind RHS = isZeroValue(BI->getArguments()[1]);
 
   // Can't handle unknown values.
-  if (LHS == IsZeroKind::Unknown || RHS == IsZeroKind::Unknown)
+  if (LHS == IsZeroKind::Unknown) {
     return nullptr;
+  }
+
+  // Canonicalize i1_const == X to X == i1_const.
+  // Canonicalize i1_const != X to X != i1_const.
+  if (RHS == IsZeroKind::Unknown) {
+    auto *CanonI =
+        Builder.createBuiltin(BI->getLoc(), BI->getName(), BI->getType(), {},
+                              {BI->getArguments()[1], BI->getArguments()[0]});
+    replaceInstUsesWith(*BI, CanonI);
+    return eraseInstFromFunction(*BI);
+  }
 
   // Can't handle non-zero ptr values.
   if (LHS == IsZeroKind::NotZero && RHS == IsZeroKind::NotZero)
@@ -73,10 +84,10 @@ SILInstruction *SILCombiner::optimizeBuiltinCanBeObjCClass(BuiltinInst *BI) {
   assert(BI->hasSubstitutions() && "Expected substitutions for canBeClass");
 
   auto const &Subs = BI->getSubstitutions();
-  assert((Subs.size() == 1) &&
+  assert((Subs.getReplacementTypes().size() == 1) &&
          "Expected one substitution in call to canBeClass");
 
-  auto Ty = Subs[0].getReplacement()->getCanonicalType();
+  auto Ty = Subs.getReplacementTypes()[0]->getCanonicalType();
   switch (Ty->canBeClass()) {
   case TypeTraitResult::IsNot:
     return Builder.createIntegerLiteral(BI->getLoc(), BI->getType(),
@@ -87,6 +98,82 @@ SILInstruction *SILCombiner::optimizeBuiltinCanBeObjCClass(BuiltinInst *BI) {
   case TypeTraitResult::CanBe:
     return nullptr;
   }
+
+  llvm_unreachable("Unhandled TypeTraitResult in switch.");
+}
+
+static unsigned getTypeWidth(SILType Ty) {
+  if (auto BuiltinIntTy = Ty.getAs<BuiltinIntegerType>()) {
+    if (BuiltinIntTy->isFixedWidth()) {
+      return BuiltinIntTy->getFixedWidth();
+    }
+  }
+  return 0;
+}
+
+SILInstruction *SILCombiner::optimizeBuiltinTruncOrBitCast(BuiltinInst *I) {
+  assert(I->getBuiltinInfo().ID == BuiltinValueKind::TruncOrBitCast &&
+         "BuiltinInst is not Trunc");
+  SILValue Op = I->getArguments()[0];
+  SILValue Source;
+  if (match(Op, m_ZExtOrBitCast(m_SILValue(Source)))) {
+    SILType ResultType = I->getType();
+    SILType SourceType = Source->getType();
+    SILType SourceTargetType = Op->getType();
+    unsigned ResultTypeWidth = getTypeWidth(ResultType);
+    unsigned SourceTypeWidth = getTypeWidth(SourceType);
+    unsigned SourceTargetTypeWidth = getTypeWidth(SourceTargetType);
+    if (ResultTypeWidth == 0 || SourceTypeWidth == 0 ||
+        SourceTargetTypeWidth == 0) {
+      // Not all types involved have fixed width
+      return nullptr;
+    }
+    if (SourceTargetTypeWidth <= SourceTypeWidth) {
+      return nullptr;
+    }
+    if (ResultTypeWidth < SourceTypeWidth) {
+      return nullptr;
+    }
+    // Reach here if and only if:
+    // SourceTargetTypeWidth > SourceTypeWidth and ResultTypeWidth >=
+    // SourceTypeWidth
+    auto *NI = Builder.createBuiltinBinaryFunctionWithTwoOpTypes(
+        I->getLoc(), "zextOrBitCast", Source->getType(), ResultType, ResultType,
+        Source);
+    replaceInstUsesWith(*I, NI);
+    return eraseInstFromFunction(*I);
+  }
+  return nullptr;
+}
+
+SILInstruction *SILCombiner::optimizeBuiltinZextOrBitCast(BuiltinInst *I) {
+  assert(I->getBuiltinInfo().ID == BuiltinValueKind::ZExtOrBitCast &&
+         "BuiltinInst is not ZExt");
+  SILValue Op = I->getArguments()[0];
+  SILValue Source;
+  if (match(Op, m_ZExtOrBitCast(m_SILValue(Source)))) {
+    SILType ResultType = I->getType();
+    // We can't extend to a size *smaller* than the source.
+    // As such, this transformation will always maintain correctness
+    auto *NI = Builder.createBuiltinBinaryFunctionWithTwoOpTypes(
+        I->getLoc(), "zextOrBitCast", Source->getType(), ResultType, ResultType,
+        Source);
+    replaceInstUsesWith(*I, NI);
+    return eraseInstFromFunction(*I);
+  }
+  // Optimize a sequence of conversion of an builtin integer to and from
+  // BridgeObject. This sequence appears in the String implementation.
+  if (auto *BO2W = dyn_cast<BridgeObjectToWordInst>(Op)) {
+    if (auto *V2BO = dyn_cast<ValueToBridgeObjectInst>(BO2W->getOperand())) {
+      if (auto *SI = dyn_cast<StructInst>(V2BO->getOperand())) {
+        if (SI->getNumOperands() == 1 && SI->getOperand(0)->getType() == I->getType()) {
+          replaceInstUsesWith(*I, SI->getOperand(0));
+          return eraseInstFromFunction(*I);
+        }
+      }
+    }
+  }
+  return nullptr;
 }
 
 /// Optimize builtins which receive the same value in their first and second
@@ -170,7 +257,7 @@ static IndexRawPointerInst *
 matchSizeOfMultiplication(SILValue I, MetatypeInst *RequiredType,
                           BuiltinInst *&TruncOrBitCast, SILValue &Ptr,
                           SILValue &Distance) {
-  IndexRawPointerInst *Res = dyn_cast<IndexRawPointerInst>(I);
+  auto *Res = dyn_cast<IndexRawPointerInst>(I);
   if (!Res)
     return nullptr;
 
@@ -184,7 +271,7 @@ matchSizeOfMultiplication(SILValue I, MetatypeInst *RequiredType,
                   m_ApplyInst(
                       BuiltinValueKind::SMulOver, m_SILValue(Dist),
                       m_ApplyInst(BuiltinValueKind::ZExtOrBitCast,
-                                  m_ApplyInst(BuiltinValueKind::StrideofNonZero,
+                                  m_ApplyInst(BuiltinValueKind::Strideof,
                                               m_MetatypeInst(StrideType)))),
                   0))) ||
       match(
@@ -195,7 +282,7 @@ matchSizeOfMultiplication(SILValue I, MetatypeInst *RequiredType,
                   m_ApplyInst(
                       BuiltinValueKind::SMulOver,
                       m_ApplyInst(BuiltinValueKind::ZExtOrBitCast,
-                                  m_ApplyInst(BuiltinValueKind::StrideofNonZero,
+                                  m_ApplyInst(BuiltinValueKind::Strideof,
                                               m_MetatypeInst(StrideType))),
                       m_SILValue(Dist)),
                   0)))) {
@@ -212,18 +299,21 @@ matchSizeOfMultiplication(SILValue I, MetatypeInst *RequiredType,
 /// Given an index_raw_pointer Ptr, size_of(Metatype) * Distance create an
 /// address_to_pointer (index_addr ptr, Distance : $*Metatype) : $RawPointer
 /// instruction.
-static SILInstruction *createIndexAddrFrom(IndexRawPointerInst *I,
-                                           MetatypeInst *Metatype,
-                                           BuiltinInst *TruncOrBitCast,
-                                           SILValue Ptr, SILValue Distance,
-                                           SILType RawPointerTy,
-                                           SILBuilder &Builder) {
+static SILValue createIndexAddrFrom(IndexRawPointerInst *I,
+                                    MetatypeInst *Metatype,
+                                    BuiltinInst *TruncOrBitCast,
+                                    SILValue Ptr, SILValue Distance,
+                                    SILType RawPointerTy,
+                                    SILBuilder &Builder) {
   Builder.setCurrentDebugScope(I->getDebugScope());
-  SILType InstanceType =
-    Metatype->getType().getMetatypeInstanceType(I->getModule());
 
+  CanType InstanceType =
+    Metatype->getType().castTo<MetatypeType>().getInstanceType();
+
+  // index_raw_pointer's address type is currently always strict.
   auto *NewPTAI = Builder.createPointerToAddress(
-    I->getLoc(), Ptr, InstanceType.getAddressType());
+    I->getLoc(), Ptr, SILType::getPrimitiveAddressType(InstanceType),
+    /*isStrict*/ true, /*isInvariant*/ false);
 
   auto *DistanceAsWord =
       Builder.createBuiltin(I->getLoc(), TruncOrBitCast->getName(),
@@ -248,7 +338,7 @@ SILInstruction *optimizeBuiltinArrayOperation(BuiltinInst *I,
   //     = builtin "takeArrayFrontToBack"<Int>(%metatype, %ptr', ...
 
   // And convert it to this:
-  //   %addr = pointer_to_address %ptr, $T
+  //   %addr = pointer_to_address %ptr, strict $*T
   //   %result = index_addr %addr, %distance
   //   %ptr' = address_to_pointer result : $RawPointer
   //     = builtin "takeArrayFrontToBack"<Int>(%metatype, %ptr', ...
@@ -331,9 +421,11 @@ SILInstruction *optimizeBitOp(BuiltinInst *BI,
          getBitOpArgs(Prev, op, prevBits)) {
     combine(bits, prevBits);
   }
-  if (isNeutral(bits))
+  if (isNeutral(bits)) {
     // The bit operation has no effect, e.g. x | 0 -> x
-    return C->replaceInstUsesWith(*BI, op);
+    C->replaceInstUsesWith(*BI, op);
+    return BI;
+  }
 
   if (isZero(bits))
     // The bit operation yields to a constant, e.g. x & 0 -> 0
@@ -351,13 +443,106 @@ SILInstruction *optimizeBitOp(BuiltinInst *BI,
   return nullptr;
 }
 
+/// Returns a 64-bit integer constant if \p op is an integer_literal instruction
+/// with a value which fits into 64 bits.
+static Optional<uint64_t> getIntConst(SILValue op) {
+  if (auto *ILI = dyn_cast<IntegerLiteralInst>(op)) {
+    if (ILI->getValue().getActiveBits() <= 64)
+      return ILI->getValue().getZExtValue();
+  }
+  return None;
+}
+
+/// Optimize the bit extract of a string object. Example in SIL pseudo-code,
+/// omitting the type-conversion instructions:
+///
+///    %0 = string_literal
+///    %1 = integer_literal 0x8000000000000000
+///    %2 = builtin "stringObjectOr_Int64" (%0, %1)
+///    %3 = integer_literal 0x4000000000000000
+///    %4 = builtin "and_Int64" (%2, %3)
+///
+/// optimizes to an integer_literal of 0.
+SILInstruction *SILCombiner::optimizeStringObject(BuiltinInst *BI) {
+  assert(BI->getBuiltinInfo().ID == BuiltinValueKind::And);
+  auto AndOp = getIntConst(BI->getArguments()[1]);
+  if (!AndOp)
+    return nullptr;
+
+  uint64_t andBits = AndOp.getValue();
+
+  // TODO: It's bad that we have to hardcode the payload bit mask here.
+  // Instead we should introduce builtins (or instructions) to extract the
+  // payload and extra bits, respectively.
+  const uint64_t payloadBits = 0x00ffffffffffffffll;
+  if ((andBits & payloadBits) != 0)
+    return nullptr;
+
+  uint64_t setBits = 0;
+  SILValue val = BI->getArguments()[0];
+  while (val->getKind() != ValueKind::StringLiteralInst) {
+    switch (val->getKind()) {
+      // Look through all the type conversion and projection instructions.
+      case ValueKind::StructExtractInst:
+      case ValueKind::UncheckedTrivialBitCastInst:
+      case ValueKind::ValueToBridgeObjectInst:
+        val = cast<SingleValueInstruction>(val)->getOperand(0);
+        break;
+      case ValueKind::StructInst: {
+        auto *SI = cast<StructInst>(val);
+        if (SI->getNumOperands() != 1)
+          return nullptr;
+        val = SI->getOperand(0);
+        break;
+      }
+      case ValueKind::BuiltinInst: {
+        auto *B = cast<BuiltinInst>(val);
+        switch (B->getBuiltinInfo().ID) {
+          case BuiltinValueKind::StringObjectOr:
+            // Note that it is a requirement that the or'd bits of the left
+            // operand are initially zero.
+            if (auto opVal = getIntConst(B->getArguments()[1])) {
+              setBits |= opVal.getValue();
+            } else {
+              return nullptr;
+            }
+            LLVM_FALLTHROUGH;
+          case BuiltinValueKind::ZExtOrBitCast:
+          case BuiltinValueKind::PtrToInt:
+            val = B->getArguments()[0];
+            break;
+          default:
+            return nullptr;
+        }
+        break;
+      }
+      default:
+        return nullptr;
+    }
+  }
+  return Builder.createIntegerLiteral(BI->getLoc(), BI->getType(),
+                                      setBits & andBits);
+}
+
 SILInstruction *SILCombiner::visitBuiltinInst(BuiltinInst *I) {
   if (I->getBuiltinInfo().ID == BuiltinValueKind::CanBeObjCClass)
     return optimizeBuiltinCanBeObjCClass(I);
   if (I->getBuiltinInfo().ID == BuiltinValueKind::TakeArrayFrontToBack ||
       I->getBuiltinInfo().ID == BuiltinValueKind::TakeArrayBackToFront ||
-      I->getBuiltinInfo().ID == BuiltinValueKind::CopyArray)
+      I->getBuiltinInfo().ID == BuiltinValueKind::TakeArrayNoAlias ||
+      I->getBuiltinInfo().ID == BuiltinValueKind::CopyArray ||
+      I->getBuiltinInfo().ID == BuiltinValueKind::AssignCopyArrayNoAlias ||
+      I->getBuiltinInfo().ID == BuiltinValueKind::AssignCopyArrayFrontToBack ||
+      I->getBuiltinInfo().ID == BuiltinValueKind::AssignCopyArrayBackToFront ||
+      I->getBuiltinInfo().ID == BuiltinValueKind::AssignTakeArray)
     return optimizeBuiltinArrayOperation(I, Builder);
+
+  if (I->getBuiltinInfo().ID == BuiltinValueKind::TruncOrBitCast) {
+    return optimizeBuiltinTruncOrBitCast(I);
+  }
+  if (I->getBuiltinInfo().ID == BuiltinValueKind::ZExtOrBitCast) {
+    return optimizeBuiltinZextOrBitCast(I);
+  }
 
   if (I->getNumOperands() >= 2 && I->getOperand(0) == I->getOperand(1)) {
     // It's a builtin which has the same value in its first and second operand.
@@ -370,12 +555,21 @@ SILInstruction *SILCombiner::visitBuiltinInst(BuiltinInst *I) {
   //   cmp_*_T . (zext U->T x, zext U->T y)
   //      => cmp_*_T (x, y)
   switch (I->getBuiltinInfo().ID) {
-  case BuiltinValueKind::ICMP_EQ:
-  case BuiltinValueKind::ICMP_NE:
+  case BuiltinValueKind::ICMP_ULT: {
+    if (auto *ILOp = dyn_cast<IntegerLiteralInst>(I->getArguments()[0])) {
+      if (ILOp->getValue().isMaxValue()) {
+        auto *Zero = Builder.createIntegerLiteral(I->getLoc(), I->getType(), 0);
+        replaceInstUsesWith(*I, Zero);
+        return eraseInstFromFunction(*I);
+      }
+    }
+  }
+    LLVM_FALLTHROUGH;
   case BuiltinValueKind::ICMP_ULE:
-  case BuiltinValueKind::ICMP_ULT:
   case BuiltinValueKind::ICMP_UGE:
-  case BuiltinValueKind::ICMP_UGT: {
+  case BuiltinValueKind::ICMP_UGT:
+  case BuiltinValueKind::ICMP_EQ:
+  case BuiltinValueKind::ICMP_NE: {
     SILValue LCast, RCast;
     if (match(I->getArguments()[0],
               m_ApplyInst(BuiltinValueKind::ZExtOrBitCast,
@@ -396,6 +590,9 @@ SILInstruction *SILCombiner::visitBuiltinInst(BuiltinInst *I) {
     break;
   }
   case BuiltinValueKind::And:
+    if (SILInstruction *optimized = optimizeStringObject(I))
+      return optimized;
+
     return optimizeBitOp(I,
       [](APInt &left, const APInt &right) { left &= right; }    /* combine */,
       [](const APInt &i) -> bool { return i.isAllOnesValue(); } /* isNeutral */,
@@ -414,17 +611,14 @@ SILInstruction *SILCombiner::visitBuiltinInst(BuiltinInst *I) {
       [](const APInt &i) -> bool { return false; }           /* isZero */,
       Builder, this);
   case BuiltinValueKind::DestroyArray: {
-    ArrayRef<Substitution> Substs = I->getSubstitutions();
+    SubstitutionMap Substs = I->getSubstitutions();
     // Check if the element type is a trivial type.
-    if (Substs.size() == 1) {
-      Substitution Subst = Substs[0];
-      Type ElemType = Subst.getReplacement();
-      if (ElemType->isCanonical() && ElemType->isLegalSILType()) {
-        SILType SILElemTy = SILType::getPrimitiveObjectType(CanType(ElemType));
-        // Destroying an array of trivial types is a no-op.
-        if (SILElemTy.isTrivial(I->getModule()))
-          return eraseInstFromFunction(*I);
-      }
+    if (Substs.getReplacementTypes().size() == 1) {
+      Type ElemType = Substs.getReplacementTypes()[0];
+      auto &SILElemTy = I->getFunction()->getTypeLowering(ElemType);
+      // Destroying an array of trivial types is a no-op.
+      if (SILElemTy.isTrivial())
+        return eraseInstFromFunction(*I);
     }
     break;
   }
@@ -463,9 +657,6 @@ SILInstruction *SILCombiner::visitBuiltinInst(BuiltinInst *I) {
 
   if (match(I, m_ApplyInst(BuiltinValueKind::SMulOver,
                             m_ApplyInst(BuiltinValueKind::Strideof),
-                            m_ValueBase(), m_IntegerLiteralInst())) ||
-      match(I, m_ApplyInst(BuiltinValueKind::SMulOver,
-                            m_ApplyInst(BuiltinValueKind::StrideofNonZero),
                             m_ValueBase(), m_IntegerLiteralInst()))) {
     I->swapOperands(0, 1);
     return I;

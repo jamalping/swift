@@ -1,12 +1,12 @@
-// RUN: %target-sil-opt %s -basic-instruction-property-dump -o /dev/null | FileCheck %s
+// RUN: %target-sil-opt %s -basic-instruction-property-dump -o /dev/null | %FileCheck %s
 
 // REQUIRES: asserts
 
 import Builtin
 
 class X {
-  @sil_stored var a: Builtin.Int32
-  @sil_stored var x: X
+  @_hasStorage var a: Builtin.Int32
+  @_hasStorage var x: X
 
   init()
   func foo()
@@ -71,7 +71,7 @@ bb0(%0 : $X):
   apply %3(%0) : $@callee_owned @convention(thick) (@owned X) -> ()
 
   apply %5(%0, %0) : $@callee_owned @convention(thick) (@owned X, @owned X) -> ()
-  apply %6(%0) : $@callee_owned @convention(thick) (@owned X) -> () 
+  apply %6(%0) : $@callee_owned @convention(thick) (@owned X) -> ()
   apply %7() : $@callee_owned @convention(thick) () -> ()
 
   // Make sure we properly handle full apply sites for which we can not

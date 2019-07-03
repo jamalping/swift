@@ -98,9 +98,8 @@ protocol Hasher {
   // collections.
   mutating func combineSequence<
     S : Sequence
-    where
-    S.Iterator.Element : NewHashable
   >(_ s: S)
+  where S.Iterator.Element : NewHashable
 
   mutating func combine<H : NewHashable>(_ value: H)
 }
@@ -127,9 +126,8 @@ struct InProcessHashtableHasher : Hasher {
 
   mutating func combineSequence<
     S : Sequence
-    where
-    S.Iterator.Element : NewHashable
-  >(_ s: S) {
+  >(_ s: S)
+  where S.Iterator.Element : NewHashable {
     for v in s {
       v.combineIntoHash(&self)
     }
@@ -142,12 +140,12 @@ struct InProcessHashtableHasher : Hasher {
   mutating func squeezeHashValue<I : SignedInteger>(
     _ resultRange: Range<I>) -> I {
     // ... finalize hash value computation first...
-    return I(IntMax(_state)) // Should actually clamp the value
+    return I(Int64(_state)) // Should actually clamp the value
   }
   mutating func squeezeHashValue<I : UnsignedInteger>(
     _ resultRange: Range<I>) -> I {
     // ... finalize hash value computation first...
-    return I(UIntMax(_state)) // Should actually clamp the value
+    return I(UInt64(_state)) // Should actually clamp the value
   }
 }
 

@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -20,6 +20,7 @@
 
 #include "llvm/Support/DataTypes.h"
 #include "clang/AST/CharUnits.h"
+#include "clang/CodeGen/ConstantInitFuture.h"
 #include "swift/AST/ResilienceExpansion.h"
 #include "swift/SIL/AbstractionPattern.h"
 #include <cassert>
@@ -32,9 +33,11 @@ namespace swift {
   class CanType;
   class ClusteredBitVector;
   enum ForDefinition_t : bool;
-  
+
 namespace irgen {
   using Lowering::AbstractionPattern;
+  using clang::CodeGen::ConstantInitFuture;
+  class IRGenFunction;
 
 /// In IRGen, we use Swift's ClusteredBitVector data structure to
 /// store vectors of spare bits.
@@ -74,47 +77,9 @@ inline IsBitwiseTakable_t &operator&=(IsBitwiseTakable_t &l, IsBitwiseTakable_t 
   return (l = (l & r));
 }
 
-/// The kind of reference counting implementation a heap object uses.
-enum class ReferenceCounting : unsigned char {
-  /// The object uses native Swift reference counting.
-  Native,
-  
-  /// The object uses ObjC reference counting.
-  ///
-  /// When ObjC interop is enabled, native Swift class objects are also ObjC
-  /// reference counting compatible. Swift non-class heap objects are never
-  /// ObjC reference counting compatible.
-  ///
-  /// Blocks are always ObjC reference counting compatible.
-  ObjC,
-  
-  /// The object uses _Block_copy/_Block_release reference counting.
-  ///
-  /// This is a strict subset of ObjC; all blocks are also ObjC reference
-  /// counting compatible. The block is assumed to have already been moved to
-  /// the heap so that _Block_copy returns the same object back.
-  Block,
-  
-  /// The object has an unknown reference counting implementation.
-  ///
-  /// This uses maximally-compatible reference counting entry points in the
-  /// runtime.
-  Unknown,
-  
-  /// Cases prior to this one are binary-compatible with Unknown reference
-  /// counting.
-  LastUnknownCompatible = Unknown,
-
-  /// The object has an unknown reference counting implementation and
-  /// the reference value may contain extra bits that need to be masked.
-  ///
-  /// This uses maximally-compatible reference counting entry points in the
-  /// runtime, with a masking layer on top. A bit inside the pointer is used
-  /// to signal native Swift refcounting.
-  Bridge,
-  
-  /// The object uses ErrorType's reference counting entry points.
-  Error,
+enum IsABIAccessible_t : bool {
+  IsNotABIAccessible = false,
+  IsABIAccessible = true  
 };
 
 /// The atomicity of a reference counting operation to be used.
@@ -132,16 +97,16 @@ enum OnHeap_t : unsigned char {
 };
 
 /// Whether a function requires extra data.
-enum class ExtraData : unsigned char {
+enum class ExtraData : uint8_t {
   /// The function requires no extra data.
   None,
 
   /// The function requires a retainable object pointer of extra data.
   Retainable,
-  
+
   /// The function takes its block object as extra data.
   Block,
-  
+
   Last_ExtraData = Block
 };
 
@@ -156,7 +121,7 @@ enum IsExact_t : bool {
 ///
 /// See the comment in RelativePointer.h.
 
-enum class SymbolReferenceKind : unsigned char {
+enum class SymbolReferenceKind : uint8_t {
   /// An absolute reference to the object, i.e. an ordinary pointer.
   ///
   /// Generally well-suited for when C compatibility is a must, dynamic
@@ -201,36 +166,83 @@ enum class SymbolReferenceKind : unsigned char {
   Far_Relative_Indirectable,
 };
 
-/// Destructor variants.
-enum class DestructorKind : uint8_t {
-  /// A deallocating destructor destroys the object and deallocates
-  /// the memory associated with it.
-  Deallocating,
+/// An initial value for a definition of an llvm::GlobalVariable.
+class ConstantInit {
+  llvm::PointerUnion<ConstantInitFuture, llvm::Type*> Data;
+public:
+  /// No initializer is given.  When this is used as an argument to
+  /// a getAddrOf... API, it means that only a declaration is being
+  /// requested.
+  ConstantInit() {}
 
-  /// A destroying destructor destroys the object but does not
-  /// deallocate the memory associated with it.
-  Destroying
+  /// Use a concrete value as a concrete initializer.
+  ConstantInit(llvm::Constant *initializer)
+    : Data(ConstantInitFuture(initializer)) {}
+
+  /// Use a ConstantInitBuilder future as a concrete initializer.
+  /*implicit*/ ConstantInit(ConstantInitFuture future) : Data(future) {
+    assert(future && "don't pass around null futures");
+  }
+
+  /// There will be a definition (with the given type), but we don't
+  /// have it yet.
+  static ConstantInit getDelayed(llvm::Type *type) {
+    auto result = ConstantInit();
+    result.Data = type;
+    return result;
+  }
+
+  explicit operator bool() const { return bool(Data); }
+
+  inline llvm::Type *getType() const {
+    assert(Data && "not a definition");
+    if (auto type = Data.dyn_cast<llvm::Type*>()) {
+      return type;
+    } else {
+      return Data.get<ConstantInitFuture>().getType();
+    }
+  }
+
+  bool hasInit() const {
+    return Data.is<ConstantInitFuture>();
+  }
+  ConstantInitFuture getInit() const {
+    return Data.get<ConstantInitFuture>();
+  }
 };
 
-/// Constructor variants.
-enum class ConstructorKind : uint8_t {
-  /// An allocating constructor allocates an object and initializes it.
-  Allocating,
-
-  /// An initializing constructor just initializes an existing object.
-  Initializing
+/// An abstraction for computing the cost of an operation.
+enum class OperationCost : unsigned {
+  Free = 0,
+  Arithmetic = 1,
+  Load = 3, // TODO: split into static- and dynamic-offset cases?
+  Call = 10
 };
+inline OperationCost operator+(OperationCost l, OperationCost r) {
+  return OperationCost(unsigned(l) + unsigned(r));
+}
+inline OperationCost &operator+=(OperationCost &l, OperationCost r) {
+  l = l + r;
+  return l;
+}
+inline bool operator<(OperationCost l, OperationCost r) {
+  return unsigned(l) < unsigned(r);
+}
+inline bool operator<=(OperationCost l, OperationCost r) {
+  return unsigned(l) <= unsigned(r);
+}
 
 /// An alignment value, in eight-bit units.
 class Alignment {
 public:
-  typedef uint32_t int_type;
+  using int_type = uint32_t;
 
-  Alignment() : Value(0) {}
-  explicit Alignment(int_type Value) : Value(Value) {}
+  constexpr Alignment() : Value(0) {}
+  constexpr explicit Alignment(int_type Value) : Value(Value) {}
+  explicit Alignment(clang::CharUnits value) : Value(value.getQuantity()) {}
 
-  int_type getValue() const { return Value; }
-  int_type getMaskValue() const { return Value - 1; }
+  constexpr int_type getValue() const { return Value; }
+  constexpr int_type getMaskValue() const { return Value - 1; }
 
   bool isOne() const { return Value == 1; }
   bool isZero() const { return Value == 0; }
@@ -240,6 +252,13 @@ public:
 
   unsigned log2() const {
     return llvm::Log2_64(Value);
+  }
+
+  operator clang::CharUnits() const {
+    return asCharUnits();
+  }
+  clang::CharUnits asCharUnits() const {
+    return clang::CharUnits::fromQuantity(getValue());
   }
 
   explicit operator bool() const { return Value != 0; }
@@ -258,10 +277,14 @@ private:
 /// A size value, in eight-bit units.
 class Size {
 public:
-  typedef uint64_t int_type;
+  using int_type = uint64_t;
 
   constexpr Size() : Value(0) {}
   explicit constexpr Size(int_type Value) : Value(Value) {}
+  
+  static constexpr Size forBits(int_type bitSize) {
+    return Size((bitSize + 7U) / 8U);
+  }
 
   /// An "invalid" size, equal to the maximum possible size.
   static constexpr Size invalid() { return Size(~int_type(0)); }
@@ -269,7 +292,7 @@ public:
   /// Is this the "invalid" size value?
   bool isInvalid() const { return *this == Size::invalid(); }
 
-  int_type getValue() const { return Value; }
+  constexpr int_type getValue() const { return Value; }
   
   int_type getValueInBits() const { return Value * 8; }
 
@@ -326,6 +349,9 @@ public:
     return llvm::Log2_64(Value);
   }
 
+  operator clang::CharUnits() const {
+    return asCharUnits();
+  }
   clang::CharUnits asCharUnits() const {
     return clang::CharUnits::fromQuantity(getValue());
   }
@@ -363,10 +389,46 @@ inline Alignment Alignment::alignmentAtOffset(Size S) const {
   return *this;
 }
 
-/// Get this alignment asx a Size value.
+/// Get this alignment as a Size value.
 inline Size Alignment::asSize() const {
   return Size(getValue());
 }
+
+/// A static or dynamic offset.
+class Offset {
+  enum Kind {
+    Static,
+    Dynamic,
+  };
+  enum : uint64_t {
+    KindBits = 1,
+    KindMask = (1 << KindBits) - 1,
+    PayloadMask = ~uint64_t(KindMask)
+  };
+  uint64_t Data;
+
+public:
+  explicit Offset(llvm::Value *offset)
+    : Data(reinterpret_cast<uintptr_t>(offset) | Dynamic) {}
+  explicit Offset(Size offset)
+    : Data((static_cast<uint64_t>(offset.getValue()) << KindBits) | Static) {
+    assert(getStatic() == offset && "overflow");
+  }
+
+  bool isStatic() const { return (Data & KindMask) == Static; }
+  bool isDynamic() const { return (Data & KindMask) == Dynamic; }
+  Size getStatic() const {
+    assert(isStatic());
+    return Size(static_cast<int64_t>(Data) >> KindBits);
+  }
+  llvm::Value *getDynamic() const {
+    assert(isDynamic());
+    return reinterpret_cast<llvm::Value*>(Data & PayloadMask);
+  }
+
+  llvm::Value *getAsValue(IRGenFunction &IGF) const;
+  Offset offsetBy(IRGenFunction &IGF, Size other) const;
+};
 
 } // end namespace irgen
 } // end namespace swift

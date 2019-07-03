@@ -2,11 +2,11 @@
 #
 # This source file is part of the Swift.org open source project
 #
-# Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+# Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 # Licensed under Apache License v2.0 with Runtime Library Exception
 #
-# See http://swift.org/LICENSE.txt for license information
-# See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+# See https://swift.org/LICENSE.txt for license information
+# See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 #
 # ----------------------------------------------------------------------------
 """
@@ -53,6 +53,7 @@ def type_bool(string):
         return True
     raise argparse.ArgumentTypeError("%r is not a boolean value" % string)
 
+
 _register(type, 'bool', type_bool)
 
 
@@ -70,7 +71,21 @@ def type_shell_split(string):
     lex.whitespace += ','
     return list(lex)
 
+
 _register(type, 'shell_split', type_shell_split)
+
+
+# NOTE: This class is deprecated, use the analgous class with the same name
+# in utils/build_swift/argparse/types.py instead.
+class CompilerVersion(object):
+    """A typed representation of a compiler version."""
+
+    def __init__(self, string_representation, components):
+        self.string_representation = string_representation
+        self.components = components
+
+    def __str__(self):
+        return self.string_representation
 
 
 def type_clang_compiler_version(string):
@@ -78,15 +93,41 @@ def type_clang_compiler_version(string):
     Parse version string and split into a tuple of strings
     (major, minor, patch)
 
-    Support only "MAJOR.MINOR.PATCH" format.
+    Supports "MAJOR.MINOR.PATCH" and "MAJOR.MINOR.PATCH.PATCH" formats.
     """
-    m = re.match(r'^([0-9]+)\.([0-9]+)\.([0-9]+)$', string)
+    m = re.match(r'^([0-9]+)\.([0-9]+)\.([0-9]+)(\.([0-9]+))?$', string)
     if m is not None:
-        return m.group(1, 2, 3)
+        return CompilerVersion(
+            string_representation=string,
+            components=m.group(1, 2, 3, 5))
     raise argparse.ArgumentTypeError(
-        "%r is invalid version value. must be 'MAJOR.MINOR.PATCH'" % string)
+        "%r is an invalid version value, "
+        "must be 'MAJOR.MINOR.PATCH' or "
+        "'MAJOR.MINOR.PATCH.PATCH'" % string)
+
 
 _register(type, 'clang_compiler_version', type_clang_compiler_version)
+
+
+def type_swift_compiler_version(string):
+    """
+    Parse version string and split into a tuple of strings
+    (major, minor, patch)
+
+    Supports "MAJOR.MINOR" and "MAJOR.MINOR.PATCH" formats.
+    """
+    m = re.match(r'^([0-9]+)\.([0-9]+)(\.([0-9]+))?$', string)
+    if m is not None:
+        return CompilerVersion(
+            string_representation=string,
+            components=m.group(1, 2, 4))
+    raise argparse.ArgumentTypeError(
+        "%r is an invalid version value, "
+        "must be 'MAJOR.MINOR' or "
+        "'MAJOR.MINOR.PATCH'" % string)
+
+
+_register(type, 'swift_compiler_version', type_swift_compiler_version)
 
 
 def type_executable(string):
@@ -99,6 +140,7 @@ def type_executable(string):
         return os.path.abspath(string)
     raise argparse.ArgumentTypeError(
         "%r is not executable" % string)
+
 
 _register(type, 'executable', type_executable)
 
@@ -127,6 +169,7 @@ class _UnavailableAction(argparse.Action):
             arg = str(values)
         parser.error('unknown argument: %s' % arg)
 
+
 _register(action, 'unavailable', _UnavailableAction)
 
 
@@ -140,4 +183,96 @@ class _ConcatAction(argparse.Action):
             val = old_val + values
         setattr(namespace, self.dest, val)
 
+
 _register(action, 'concat', _ConcatAction)
+
+
+class _OptionalBoolAction(argparse.Action):
+    def __init__(self,
+                 option_strings,
+                 dest,
+                 default=False,
+                 const=True,
+                 metavar="BOOL",
+                 help=None):
+        super(_OptionalBoolAction, self).__init__(
+            option_strings=option_strings,
+            dest=dest,
+            default=default,
+            metavar=metavar,
+            nargs="?",
+            type=type.bool,
+            help=help,
+            const=const)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, values)
+
+
+_register(action, 'optional_bool', _OptionalBoolAction)
+
+
+_TRUE_VALUES = [True, 1, 'true', 'True', 'TRUE', '1']
+_FALSE_VALUES = [False, 0, 'false', 'False', 'FALSE', '0']
+
+
+class _OnOffAction(argparse.Action):
+    """Action that can be toggled on or off, defaulting to the off state. An
+    optional bool-ish argument can be passed to set the state manually.
+    """
+
+    def __init__(self, **kwargs):
+        assert 'choices' in kwargs and len(kwargs['choices']) == 2
+
+        self._on_value, self._off_value = kwargs.pop('choices')
+        kwargs['nargs'] = '?'
+
+        if 'default' not in kwargs:
+            kwargs['default'] = self._off_value
+
+        if 'metavar' not in kwargs:
+            kwargs['metavar'] = 'BOOL'
+
+        super(_OnOffAction, self).__init__(**kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        if values is None:
+            val = self._on_value
+        elif values in _TRUE_VALUES:
+            val = self._on_value
+        elif values in _FALSE_VALUES:
+            val = self._off_value
+        else:
+            raise argparse.ArgumentTypeError(
+                values + ' is not a boolean value')
+
+        setattr(namespace, self.dest, val)
+
+
+class _EnableAction(_OnOffAction):
+    """Action that defaults to False when absent and to True when parsed with
+    the option to override the value by passing a bool-like value as an
+    argument.
+    """
+
+    def __init__(self, **kwargs):
+        kwargs['choices'] = (True, False)
+        super(_EnableAction, self).__init__(**kwargs)
+
+
+_register(action, 'enable', _EnableAction)
+
+
+class _DisableAction(_OnOffAction):
+    """Action that defaults to True when absent and to False when parsed with
+    the option to override the value by passing a bool-like value as an
+    argument. When overridden the resulting value is negated, thus passing
+    'True' will result in the destination being set to False.
+    """
+
+    def __init__(self, **kwargs):
+        kwargs['choices'] = (False, True)
+        super(_DisableAction, self).__init__(**kwargs)
+
+
+_register(action, 'disable', _DisableAction)

@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -57,7 +57,7 @@ protected:
                    const SpareBitVector &spareBits,
                    Alignment align,
                    IsPOD_t pod, IsFixedSize_t alwaysFixedSize,
-                   SpecialTypeInfoKind stik = STIK_Loadable)
+                   SpecialTypeInfoKind stik = SpecialTypeInfoKind::Loadable)
       : FixedTypeInfo(type, size, spareBits, align, pod,
                       // All currently implemented loadable types are bitwise-takable.
                       IsBitwiseTakable, alwaysFixedSize, stik) {
@@ -68,7 +68,7 @@ protected:
                    SpareBitVector &&spareBits,
                    Alignment align,
                    IsPOD_t pod, IsFixedSize_t alwaysFixedSize,
-                   SpecialTypeInfoKind stik = STIK_Loadable)
+                   SpecialTypeInfoKind stik = SpecialTypeInfoKind::Loadable)
       : FixedTypeInfo(type, size, std::move(spareBits), align, pod,
                       // All currently implemented loadable types are bitwise-takable.
                       IsBitwiseTakable, alwaysFixedSize, stik) {
@@ -94,17 +94,16 @@ public:
 
   /// Assign a set of exploded values into an address.  The values are
   /// consumed out of the explosion.
-  virtual void assign(IRGenFunction &IGF, Explosion &explosion,
-                      Address addr) const = 0;
+  virtual void assign(IRGenFunction &IGF, Explosion &explosion, Address addr,
+                      bool isOutlined) const = 0;
 
   /// Initialize an address by consuming values out of an explosion.
   virtual void initialize(IRGenFunction &IGF, Explosion &explosion,
-                          Address addr) const = 0;
-
+                          Address addr, bool isOutlined) const = 0;
 
   // We can give this a reasonable default implementation.
-  void initializeWithCopy(IRGenFunction &IGF, Address destAddr,
-                          Address srcAddr, SILType T) const override;
+  void initializeWithCopy(IRGenFunction &IGF, Address destAddr, Address srcAddr,
+                          SILType T, bool isOutlined) const override;
 
   /// Consume a bunch of values which have exploded at one explosion
   /// level and produce them at another.

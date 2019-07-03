@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -19,6 +19,7 @@
 
 namespace llvm {
   class Triple;
+  class VersionTuple;
 }
 
 namespace swift {
@@ -58,6 +59,11 @@ namespace swift {
   /// Returns the platform Kind for Darwin triples.
   DarwinPlatformKind getDarwinPlatformKind(const llvm::Triple &triple);
 
+  /// Maps an arbitrary platform to its non-simulator equivalent.
+  ///
+  /// If \p platform is not a simulator platform, it will be returned as is.
+  DarwinPlatformKind getNonSimulatorPlatform(DarwinPlatformKind platform);
+
   /// Returns the architecture component of the path for a given target triple.
   ///
   /// Typically this is used for mapping the architecture component of the
@@ -69,6 +75,23 @@ namespace swift {
   ///
   /// This is a stop-gap until full Triple support (ala Clang) exists within swiftc.
   StringRef getMajorArchitectureName(const llvm::Triple &triple);
+
+  /// Computes the normalized target triple used as the most preferred name for
+  /// module loading.
+  ///
+  /// For platforms with fat binaries, this canonicalizes architecture,
+  /// vendor, and OS names, strips OS versions, and makes inferred environments
+  /// explicit. For other platforms, it returns the unmodified triple.
+  ///
+  /// The input triple should already be "normalized" in the sense that
+  /// llvm::Triple::normalize() would not affect it.
+  llvm::Triple getTargetSpecificModuleTriple(const llvm::Triple &triple);
+  
+  
+  /// Get the Swift runtime version to deploy back to, given a deployment target expressed as an
+  /// LLVM target triple.
+  Optional<llvm::VersionTuple>
+  getSwiftRuntimeCompatibilityVersionForTarget(const llvm::Triple &Triple);
 } // end namespace swift
 
 #endif // SWIFT_BASIC_PLATFORM_H

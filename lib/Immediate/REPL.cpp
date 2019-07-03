@@ -2,23 +2,25 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
 #include "swift/Immediate/Immediate.h"
 #include "ImmediateImpl.h"
 
+#include "swift/Config.h"
 #include "swift/Subsystems.h"
 #include "swift/AST/ASTContext.h"
 #include "swift/AST/DiagnosticsFrontend.h"
 #include "swift/AST/IRGenOptions.h"
 #include "swift/AST/Module.h"
 #include "swift/AST/NameLookup.h"
+#include "swift/Basic/LLVMContext.h"
 #include "swift/Frontend/Frontend.h"
 #include "swift/IDE/REPLCodeCompletion.h"
 #include "swift/IDE/Utils.h"
@@ -27,36 +29,22 @@
 #include "swift/SILOptimizer/PassManager/Passes.h"
 #include "llvm/ExecutionEngine/MCJIT.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/Process.h"
 
-#if defined(__APPLE__) || defined(__FreeBSD__)
-// FIXME: Support REPL on non-Apple platforms. Ubuntu 14.10's editline does not
-// include the wide character entry points needed by the REPL yet.
+#if HAVE_UNICODE_LIBEDIT
 #include <histedit.h>
-#endif // __APPLE__
+#include <wchar.h>
+#endif
 
 using namespace swift;
 using namespace swift::immediate;
 
 namespace {
-
-class REPLContext {
-public:
-  /// The SourceMgr buffer ID of the REPL input.
-  unsigned CurBufferID;
-  
-  /// The index into the source file's Decls at which to start
-  /// typechecking the next REPL input.
-  unsigned CurElem;
-
-  /// The index into the source file's Decls at which to start
-  /// irgenning the next REPL input.
-  unsigned CurIRGenElem;
-};
 
 enum class REPLInputKind : int {
   /// The REPL got a "quit" signal.
@@ -75,62 +63,64 @@ class ConvertForWcharSize;
 template<>
 class ConvertForWcharSize<2> {
 public:
-  static ConversionResult ConvertFromUTF8(const char** sourceStart,
-                                          const char* sourceEnd,
-                                          wchar_t** targetStart,
-                                          wchar_t* targetEnd,
-                                          ConversionFlags flags) {
-    return ConvertUTF8toUTF16(reinterpret_cast<const UTF8**>(sourceStart),
-                              reinterpret_cast<const UTF8*>(sourceEnd),
-                              reinterpret_cast<UTF16**>(targetStart),
-                              reinterpret_cast<UTF16*>(targetEnd),
+  static llvm::ConversionResult ConvertFromUTF8(const char** sourceStart,
+                                                const char* sourceEnd,
+                                                wchar_t** targetStart,
+                                                wchar_t* targetEnd,
+                                                llvm::ConversionFlags flags) {
+    return ConvertUTF8toUTF16(reinterpret_cast<const llvm::UTF8**>(sourceStart),
+                              reinterpret_cast<const llvm::UTF8*>(sourceEnd),
+                              reinterpret_cast<llvm::UTF16**>(targetStart),
+                              reinterpret_cast<llvm::UTF16*>(targetEnd),
                               flags);
   }
   
-  static ConversionResult ConvertToUTF8(const wchar_t** sourceStart,
-                                        const wchar_t* sourceEnd,
-                                        char** targetStart,
-                                        char* targetEnd,
-                                        ConversionFlags flags) {
-    return ConvertUTF16toUTF8(reinterpret_cast<const UTF16**>(sourceStart),
-                              reinterpret_cast<const UTF16*>(sourceEnd),
-                              reinterpret_cast<UTF8**>(targetStart),
-                              reinterpret_cast<UTF8*>(targetEnd),
-                              flags);
+  static llvm::ConversionResult ConvertToUTF8(const wchar_t** sourceStart,
+                                              const wchar_t* sourceEnd,
+                                              char** targetStart,
+                                              char* targetEnd,
+                                              llvm::ConversionFlags flags) {
+    return ConvertUTF16toUTF8(
+                             reinterpret_cast<const llvm::UTF16**>(sourceStart),
+                             reinterpret_cast<const llvm::UTF16*>(sourceEnd),
+                             reinterpret_cast<llvm::UTF8**>(targetStart),
+                             reinterpret_cast<llvm::UTF8*>(targetEnd),
+                             flags);
   }
 };
 
 template<>
 class ConvertForWcharSize<4> {
 public:
-  static ConversionResult ConvertFromUTF8(const char** sourceStart,
-                                          const char* sourceEnd,
-                                          wchar_t** targetStart,
-                                          wchar_t* targetEnd,
-                                          ConversionFlags flags) {
-    return ConvertUTF8toUTF32(reinterpret_cast<const UTF8**>(sourceStart),
-                              reinterpret_cast<const UTF8*>(sourceEnd),
-                              reinterpret_cast<UTF32**>(targetStart),
-                              reinterpret_cast<UTF32*>(targetEnd),
+  static llvm::ConversionResult ConvertFromUTF8(const char** sourceStart,
+                                                const char* sourceEnd,
+                                                wchar_t** targetStart,
+                                                wchar_t* targetEnd,
+                                                llvm::ConversionFlags flags) {
+    return ConvertUTF8toUTF32(reinterpret_cast<const llvm::UTF8**>(sourceStart),
+                              reinterpret_cast<const llvm::UTF8*>(sourceEnd),
+                              reinterpret_cast<llvm::UTF32**>(targetStart),
+                              reinterpret_cast<llvm::UTF32*>(targetEnd),
                               flags);
   }
   
-  static ConversionResult ConvertToUTF8(const wchar_t** sourceStart,
-                                        const wchar_t* sourceEnd,
-                                        char** targetStart,
-                                        char* targetEnd,
-                                        ConversionFlags flags) {
-    return ConvertUTF32toUTF8(reinterpret_cast<const UTF32**>(sourceStart),
-                              reinterpret_cast<const UTF32*>(sourceEnd),
-                              reinterpret_cast<UTF8**>(targetStart),
-                              reinterpret_cast<UTF8*>(targetEnd),
-                              flags);
+  static llvm::ConversionResult ConvertToUTF8(const wchar_t** sourceStart,
+                                              const wchar_t* sourceEnd,
+                                              char** targetStart,
+                                              char* targetEnd,
+                                              llvm::ConversionFlags flags) {
+    return ConvertUTF32toUTF8(
+                             reinterpret_cast<const llvm::UTF32**>(sourceStart),
+                             reinterpret_cast<const llvm::UTF32*>(sourceEnd),
+                             reinterpret_cast<llvm::UTF8**>(targetStart),
+                             reinterpret_cast<llvm::UTF8*>(targetEnd),
+                             flags);
   }
 };
 
 using Convert = ConvertForWcharSize<sizeof(wchar_t)>;
   
-#if defined(__APPLE__) || defined(__FreeBSD__)
+#if HAVE_UNICODE_LIBEDIT
 static void convertFromUTF8(llvm::StringRef utf8,
                             llvm::SmallVectorImpl<wchar_t> &out) {
   size_t reserve = out.size() + utf8.size();
@@ -139,8 +129,8 @@ static void convertFromUTF8(llvm::StringRef utf8,
   wchar_t *wide_begin = out.end();
   auto res = Convert::ConvertFromUTF8(&utf8_begin, utf8.end(),
                                       &wide_begin, out.data() + reserve,
-                                      lenientConversion);
-  assert(res == conversionOK && "utf8-to-wide conversion failed!");
+                                      llvm::lenientConversion);
+  assert(res == llvm::conversionOK && "utf8-to-wide conversion failed!");
   (void)res;
   out.set_size(wide_begin - out.begin());
 }
@@ -153,8 +143,8 @@ static void convertToUTF8(llvm::ArrayRef<wchar_t> wide,
   char *utf8_begin = out.end();
   auto res = Convert::ConvertToUTF8(&wide_begin, wide.end(),
                                     &utf8_begin, out.data() + reserve,
-                                    lenientConversion);
-  assert(res == conversionOK && "wide-to-utf8 conversion failed!");
+                                    llvm::lenientConversion);
+  assert(res == llvm::conversionOK && "wide-to-utf8 conversion failed!");
   (void)res;
   out.set_size(utf8_begin - out.begin());
 }
@@ -162,29 +152,50 @@ static void convertToUTF8(llvm::ArrayRef<wchar_t> wide,
 
 } // end anonymous namespace
 
-#if defined(__APPLE__) || defined(__FreeBSD__)
+#if HAVE_UNICODE_LIBEDIT
 
-static bool appendToREPLFile(SourceFile &SF,
-                             PersistentParserState &PersistentState,
-                             REPLContext &RC,
-                             std::unique_ptr<llvm::MemoryBuffer> Buffer) {
-  assert(SF.Kind == SourceFileKind::REPL && "Can't append to a non-REPL file");
+static ModuleDecl *
+typeCheckREPLInput(ModuleDecl *MostRecentModule, StringRef Name,
+                   PersistentParserState &PersistentState,
+                   std::unique_ptr<llvm::MemoryBuffer> Buffer) {
+  using ImplicitModuleImportKind = SourceFile::ImplicitModuleImportKind;
+  assert(MostRecentModule);
+  ASTContext &Ctx = MostRecentModule->getASTContext();
 
-  SourceManager &SrcMgr = SF.getParentModule()->getASTContext().SourceMgr;
-  RC.CurBufferID = SrcMgr.addNewSourceBuffer(std::move(Buffer));
+  auto REPLModule = ModuleDecl::create(Ctx.getIdentifier(Name), Ctx);
+  auto BufferID = Ctx.SourceMgr.addNewSourceBuffer(std::move(Buffer));
+  auto ImportKind = ImplicitModuleImportKind::None;
+  auto &REPLInputFile = *new (Ctx) SourceFile(*REPLModule, SourceFileKind::REPL,
+                                              BufferID, ImportKind);
+  REPLModule->addFile(REPLInputFile);
+
+  ModuleDecl::ImportedModule ImportOfMostRecentModule{
+      /*AccessPath*/{}, MostRecentModule};
+  REPLInputFile.addImports(SourceFile::ImportedModuleDesc(
+      ImportOfMostRecentModule, SourceFile::ImportOptions()));
+
+  SmallVector<ModuleDecl::ImportedModule, 8> Imports;
+  MostRecentModule->getImportedModules(Imports,
+                                       ModuleDecl::ImportFilterKind::Private);
+  if (!Imports.empty()) {
+    SmallVector<SourceFile::ImportedModuleDesc, 8> ImportsWithOptions;
+    for (auto Import : Imports) {
+      ImportsWithOptions.emplace_back(SourceFile::ImportedModuleDesc(
+          Import, SourceFile::ImportFlags::Exported));
+    }
+    REPLInputFile.addImports(ImportsWithOptions);
+  }
 
   bool FoundAnySideEffects = false;
-  unsigned CurElem = RC.CurElem;
   bool Done;
   do {
     FoundAnySideEffects |=
-        parseIntoSourceFile(SF, RC.CurBufferID, &Done, nullptr,
+        parseIntoSourceFile(REPLInputFile, BufferID, &Done, nullptr,
                             &PersistentState);
-    performTypeChecking(SF, PersistentState.getTopLevelContext(), None,
-                        CurElem);
-    CurElem = SF.Decls.size();
   } while (!Done);
-  return FoundAnySideEffects;
+  performTypeChecking(REPLInputFile, PersistentState.getTopLevelContext(),
+                      /*Options*/None);
+  return REPLModule;
 }
 
 /// An arbitrary, otherwise-unused char value that editline interprets as
@@ -221,7 +232,7 @@ public:
   
   void print(llvm::raw_ostream &out) const override;
 };
-}
+} // end anonymous namespace
 
 /// EditLine wrapper that implements the user interface behavior for reading
 /// user input to the REPL. All of its methods must be usable from a separate
@@ -323,8 +334,6 @@ public:
     fflush(stdout);
     el_end(e);
   }
-  
-  SourceFile &getREPLInputFile();
 
   REPLInputKind getREPLInput(SmallVectorImpl<char> &Result) {
     ide::SourceCompleteResult SCR;
@@ -359,10 +368,11 @@ public:
         CurrentLines.append(indent, ' ');
       }
       
-      convertToUTF8(llvm::makeArrayRef(WLine, WLine + wcslen(WLine)),
+      size_t WLineLength = wcslen(WLine);
+      convertToUTF8(llvm::makeArrayRef(WLine, WLine + WLineLength),
                     CurrentLines);
 
-      wcslcat(TotalLine, WLine, sizeof(TotalLine) / sizeof(*TotalLine));
+      wcsncat(TotalLine, WLine, WLineLength);
 
       ++CurChunkLines;
 
@@ -397,7 +407,7 @@ public:
         return REPLInputKind::REPLDirective;
       }
 
-      SCR = ide::isSourceInputComplete(CurrentLines.str());
+      SCR = ide::isSourceInputComplete(CurrentLines.str(), SourceFileKind::REPL);
       // Keep reading if input is unfinished.
     } while (!SCR.IsComplete);
 
@@ -662,6 +672,8 @@ private:
     if (trimmed > 0)
       llvm::outs() << "  (and " << trimmed << " more)\n";
   }
+
+  SourceFile &getFileForCodeCompletion();
   
   unsigned char onComplete(int ch) {
     const LineInfoW *line = el_wline(e);
@@ -672,7 +684,7 @@ private:
     
     if (!completions) {
       // If we aren't currently working with a completion set, generate one.
-      completions.populate(getREPLInputFile(), Prefix);
+      completions.populate(getFileForCodeCompletion(), Prefix);
       // Display the common root of the found completions and beep unless we
       // found a unique one.
       insertStringRef(completions.getRoot());
@@ -731,13 +743,9 @@ static void printOrDumpDecl(Decl *d, PrintOrDump which) {
 /// The compiler and execution environment for the REPL.
 class REPLEnvironment {
   CompilerInstance &CI;
-
-public:
-  SourceFile &REPLInputFile;
-
-private:
+  ModuleDecl *MostRecentModule;
   ProcessCmdLine CmdLine;
-  llvm::SmallPtrSet<swift::Module *, 8> ImportedModules;
+  llvm::SmallPtrSet<swift::ModuleDecl *, 8> ImportedModules;
   SmallVector<llvm::Function*, 8> InitFns;
   bool RanGlobalInitializers;
   llvm::LLVMContext &LLVMContext;
@@ -752,8 +760,8 @@ private:
   const SILOptions SILOpts;
 
   REPLInput Input;
-  REPLContext RC;
   PersistentParserState PersistentState;
+  unsigned NextLineNumber = 0;
 
 private:
 
@@ -771,18 +779,53 @@ private:
     for (auto &global : M.globals()) {
       if (!global.hasName())
         continue;
-      if (global.hasUnnamedAddr())
+      if (global.hasGlobalUnnamedAddr())
         continue;
 
       global.setVisibility(llvm::GlobalValue::DefaultVisibility);
       if (!global.hasAvailableExternallyLinkage() &&
           !global.hasAppendingLinkage() &&
           !global.hasCommonLinkage()) {
-        global.setLinkage(llvm::GlobalValue::ExternalLinkage);
-        if (GlobalsAlreadyEmitted.count(global.getName()))
-          global.setInitializer(nullptr);
-        else
+        if (GlobalsAlreadyEmitted.count(global.getName())) {
+          // Some targets don't support relative references to undefined
+          // symbols. Keep the local copy of an ODR symbol if it's used in
+          // a relative reference expression.
+          bool usedInRelativeReference = false;
+          if (global.hasLinkOnceODRLinkage()) {
+            
+            for (auto user : global.users()) {
+              // A relative reference will look like sub (ptrtoint @Global, _)
+              auto expr = dyn_cast<llvm::ConstantExpr>(user);
+              if (!expr)
+                continue;
+              
+              if (expr->getOpcode() != llvm::Instruction::PtrToInt)
+                continue;
+              
+              for (auto exprUser : expr->users()) {
+                auto exprExpr = dyn_cast<llvm::ConstantExpr>(exprUser);
+                if (!exprExpr)
+                  continue;
+                
+                if (exprExpr->getOpcode() != llvm::Instruction::Sub)
+                  continue;
+                
+                if (exprExpr->getOperand(0) != expr)
+                  continue;
+                
+                usedInRelativeReference = true;
+                goto done;
+              }
+              
+            }
+          }
+        done:
+          if (!usedInRelativeReference)
+            global.setInitializer(nullptr);
+        } else
           GlobalsAlreadyEmitted.insert(global.getName());
+
+        global.setLinkage(llvm::GlobalValue::ExternalLinkage);
       }
     }
 
@@ -818,19 +861,23 @@ private:
 
   bool executeSwiftSource(llvm::StringRef Line, const ProcessCmdLine &CmdLine) {
     // Parse the current line(s).
-    auto InputBuf = std::unique_ptr<llvm::MemoryBuffer>(
-        llvm::MemoryBuffer::getMemBufferCopy(Line, "<REPL Input>"));
-    bool ShouldRun = appendToREPLFile(REPLInputFile, PersistentState, RC,
-                                      std::move(InputBuf));
+    auto InputBuf = llvm::MemoryBuffer::getMemBufferCopy(Line, "<REPL Input>");
+    SmallString<8> Name{"REPL_"};
+    llvm::raw_svector_ostream(Name) << NextLineNumber;
+    ++NextLineNumber;
+    ModuleDecl *M = typeCheckREPLInput(MostRecentModule, Name, PersistentState,
+                                       std::move(InputBuf));
     
     // SILGen the module and produce SIL diagnostics.
     std::unique_ptr<SILModule> sil;
     
     if (!CI.getASTContext().hadError()) {
-      sil = performSILGeneration(REPLInputFile, CI.getSILOptions(),
-                                 RC.CurIRGenElem);
-      performSILLinking(sil.get());
+      // We don't want anything to get stripped, so pretend we're doing a
+      // non-whole-module generation.
+      sil = performSILGeneration(*M->getFiles().front(), CI.getSILOptions());
       runSILDiagnosticPasses(*sil);
+      runSILOwnershipEliminatorPass(*sil);
+      runSILLoweringPasses(*sil);
     }
 
     if (CI.getASTContext().hadError()) {
@@ -838,44 +885,35 @@ private:
         return false;
 
       CI.getASTContext().Diags.resetHadAnyError();
-      while (REPLInputFile.Decls.size() > RC.CurElem)
-        REPLInputFile.Decls.pop_back();
-      
+
       // FIXME: Handling of "import" declarations?  Is there any other
       // state which needs to be reset?
       
       return true;
     }
-    
-    RC.CurElem = REPLInputFile.Decls.size();
-    
+    MostRecentModule = M;
+
     DumpSource += Line;
-    
-    // If we didn't see an expression, statement, or decl which might have
-    // side-effects, keep reading.
-    if (!ShouldRun)
-      return true;
 
     // IRGen the current line(s).
     // FIXME: We shouldn't need to use the global context here, but
     // something is persisting across calls to performIRGeneration.
-    auto LineModule = performIRGeneration(IRGenOpts, REPLInputFile, sil.get(),
-                                          "REPLLine", llvm::getGlobalContext(),
-                                          RC.CurIRGenElem);
-    RC.CurIRGenElem = RC.CurElem;
-    
+    auto LineModule = performIRGeneration(
+        IRGenOpts, M, std::move(sil), "REPLLine", PrimarySpecificPaths(),
+        getGlobalLLVMContext(), /*parallelOutputFilenames*/{});
+
     if (CI.getASTContext().hadError())
       return false;
 
     // LineModule will get destroy by the following link process.
     // Make a copy of it to be able to correct produce DumpModule.
-    std::unique_ptr<llvm::Module> SaveLineModule(CloneModule(LineModule.get()));
+    std::unique_ptr<llvm::Module> SaveLineModule(CloneModule(*LineModule));
     
     if (!linkLLVMModules(Module, std::move(LineModule))) {
       return false;
     }
 
-    std::unique_ptr<llvm::Module> NewModule(CloneModule(Module));
+    std::unique_ptr<llvm::Module> NewModule(CloneModule(*Module));
 
     Module->getFunction("main")->eraseFromParent();
 
@@ -887,8 +925,7 @@ private:
     llvm::Function *DumpModuleMain = DumpModule.getFunction("main");
     DumpModuleMain->setName("repl.line");
     
-    if (IRGenImportedModules(CI, *NewModule, ImportedModules, InitFns,
-                             IRGenOpts, SILOpts))
+    if (autolinkImportedModules(M, IRGenOpts))
       return false;
     
     llvm::Module *TempModule = NewModule.get();
@@ -897,7 +934,7 @@ private:
     EE->finalizeObject();
 
     for (auto InitFn : InitFns)
-      EE->runFunctionAsMain(InitFn, CmdLine, 0);
+      EE->runFunctionAsMain(InitFn, CmdLine, nullptr);
     InitFns.clear();
     
     // FIXME: The way we do this is really ugly... we should be able to
@@ -907,8 +944,8 @@ private:
       RanGlobalInitializers = true;
     }
     llvm::Function *EntryFn = TempModule->getFunction("main");
-    EE->runFunctionAsMain(EntryFn, CmdLine, 0);
-    
+    EE->runFunctionAsMain(EntryFn, CmdLine, nullptr);
+
     return true;
   }
 
@@ -918,8 +955,7 @@ public:
                   llvm::LLVMContext &LLVMCtx,
                   bool ParseStdlib)
     : CI(CI),
-      REPLInputFile(CI.getMainModule()->
-                      getMainSourceFile(SourceFileKind::REPL)),
+      MostRecentModule(CI.getMainModule()),
       CmdLine(CmdLine),
       RanGlobalInitializers(false),
       LLVMContext(LLVMCtx),
@@ -928,26 +964,27 @@ public:
       IRGenOpts(),
       SILOpts(),
       Input(*this),
-      RC{
-        /*BufferID*/ 0U,
-        /*CurElem*/ 0,
-        /*CurIRGenElem*/ 0
-      }
+      PersistentState(CI.getASTContext())
   {
     ASTContext &Ctx = CI.getASTContext();
-    if (!loadSwiftRuntime(Ctx.SearchPathOpts.RuntimeLibraryPath)) {
-      CI.getDiags().diagnose(SourceLoc(),
-                             diag::error_immediate_mode_missing_stdlib);
-      return;
+    Ctx.LangOpts.EnableAccessControl = false;
+    if (!ParseStdlib) {
+      if (!loadSwiftRuntime(Ctx.SearchPathOpts.RuntimeLibraryPaths)) {
+        CI.getDiags().diagnose(SourceLoc(),
+                               diag::error_immediate_mode_missing_stdlib);
+        return;
+      }
+      tryLoadLibraries(CI.getLinkLibraries(), Ctx.SearchPathOpts,
+                       CI.getDiags());
     }
-    tryLoadLibraries(CI.getLinkLibraries(), Ctx.SearchPathOpts, CI.getDiags());
 
     llvm::EngineBuilder builder{std::unique_ptr<llvm::Module>{Module}};
     std::string ErrorMsg;
     llvm::TargetOptions TargetOpt;
     std::string CPU;
+    std::string Triple;
     std::vector<std::string> Features;
-    std::tie(TargetOpt, CPU, Features)
+    std::tie(TargetOpt, CPU, Features, Triple)
       = getIRTargetOptions(IRGenOpts, CI.getASTContext());
     
     builder.setRelocationModel(llvm::Reloc::PIC_);
@@ -958,11 +995,16 @@ public:
     builder.setEngineKind(llvm::EngineKind::JIT);
     EE = builder.create();
 
-    IRGenOpts.OutputFilenames.clear();
-    IRGenOpts.Optimize = false;
+    IRGenOpts.OptMode = OptimizationMode::NoOptimization;
     IRGenOpts.OutputKind = IRGenOutputKind::Module;
     IRGenOpts.UseJIT = true;
-    IRGenOpts.DebugInfoKind = IRGenDebugInfoKind::None;
+    IRGenOpts.IntegratedREPL = true;
+    IRGenOpts.DebugInfoLevel = IRGenDebugInfoLevel::None;
+    IRGenOpts.DebugInfoFormat = IRGenDebugInfoFormat::None;
+
+    // The very first module is a dummy.
+    CI.getMainModule()->getMainSourceFile(SourceFileKind::REPL).ASTStage =
+        SourceFile::TypeChecked;
 
     if (!ParseStdlib) {
       // Force standard library to be loaded immediately.  This forces any
@@ -973,14 +1015,13 @@ public:
       auto Buffer =
           llvm::MemoryBuffer::getMemBufferCopy(WarmUpStmt,
                                                "<REPL Initialization>");
-      appendToREPLFile(REPLInputFile, PersistentState, RC, std::move(Buffer));
+      (void)typeCheckREPLInput(MostRecentModule, "__Warmup", PersistentState,
+                               std::move(Buffer));
 
       if (Ctx.hadError())
         return;
     }
-    
-    RC.CurElem = RC.CurIRGenElem = REPLInputFile.Decls.size();
-    
+
     if (llvm::sys::Process::StandardInIsUserInput())
       llvm::outs() <<
           "***  You are running Swift's integrated REPL,  ***\n"
@@ -990,13 +1031,14 @@ public:
           "***  Type ':help' for assistance.              ***\n";
   }
   
-  swift::Module *getMainModule() const {
-    return REPLInputFile.getParentModule();
-  }
   StringRef getDumpSource() const { return DumpSource; }
   
   /// Get the REPLInput object owned by the REPL instance.
   REPLInput &getInput() { return Input; }
+
+  SourceFile &getFileForCodeCompletion() {
+    return MostRecentModule->getMainSourceFile(SourceFileKind::REPL);
+  }
   
   /// Responds to a REPL input. Returns true if the repl should continue,
   /// false if it should quit.
@@ -1012,7 +1054,7 @@ public:
         unsigned BufferID =
             CI.getSourceMgr().addMemBufferCopy(Line, "<REPL Input>");
         Lexer L(CI.getASTContext().LangOpts,
-                CI.getSourceMgr(), BufferID, nullptr, false /*not SIL*/);
+                CI.getSourceMgr(), BufferID, nullptr, LexerMode::Swift);
         Token Tok;
         L.lex(Tok);
         assert(Tok.is(tok::colon));
@@ -1026,8 +1068,6 @@ public:
                "  :constraints debug (on|off) - turn on/off the debug "
                    "output for the constraint-based type checker\n"
                "  :dump_ir - dump the LLVM IR generated by the REPL\n"
-               "  :dump_ast - dump the AST representation of"
-                   " the REPL input\n"
                "  :dump_decl <name> - dump the AST representation of the "
                    "named declarations\n"
                "  :dump_source - dump the user input (ignoring"
@@ -1041,9 +1081,7 @@ public:
                    L.peekNextToken().getText() == "exit") {
           return false;
         } else if (L.peekNextToken().getText() == "dump_ir") {
-          DumpModule.dump();
-        } else if (L.peekNextToken().getText() == "dump_ast") {
-          REPLInputFile.dump();
+          DumpModule.print(llvm::dbgs(), nullptr, false, true);
         } else if (L.peekNextToken().getText() == "dump_decl" ||
                    L.peekNextToken().getText() == "print_decl") {
           PrintOrDump doPrint = (L.peekNextToken().getText() == "print_decl")
@@ -1051,14 +1089,18 @@ public:
           L.lex(Tok);
           L.lex(Tok);
           ASTContext &ctx = CI.getASTContext();
-          UnqualifiedLookup lookup(ctx.getIdentifier(Tok.getText()),
-                                   &REPLInputFile, nullptr);
+          SourceFile &SF =
+              MostRecentModule->getMainSourceFile(SourceFileKind::REPL);
+          UnqualifiedLookup lookup(ctx.getIdentifier(Tok.getText()), &SF,
+                                   nullptr);
           for (auto result : lookup.Results) {
             printOrDumpDecl(result.getValueDecl(), doPrint);
               
             if (auto typeDecl = dyn_cast<TypeDecl>(result.getValueDecl())) {
               if (auto typeAliasDecl = dyn_cast<TypeAliasDecl>(typeDecl)) {
-                TypeDecl *origTypeDecl = typeAliasDecl->getUnderlyingType()
+                TypeDecl *origTypeDecl = typeAliasDecl
+                  ->getDeclaredInterfaceType()
+                  ->getDesugaredType()
                   ->getNominalOrBoundGenericNominal();
                 if (origTypeDecl) {
                   printOrDumpDecl(origTypeDecl, doPrint);
@@ -1155,7 +1197,9 @@ public:
   }
 };
 
-inline SourceFile &REPLInput::getREPLInputFile() { return Env.REPLInputFile; }
+inline SourceFile &REPLInput::getFileForCodeCompletion() {
+  return Env.getFileForCodeCompletion();
+}
 
 void PrettyStackTraceREPL::print(llvm::raw_ostream &out) const {
   out << "while processing REPL source:\n";
@@ -1166,7 +1210,7 @@ void PrettyStackTraceREPL::print(llvm::raw_ostream &out) const {
 
 void swift::runREPL(CompilerInstance &CI, const ProcessCmdLine &CmdLine,
                     bool ParseStdlib) {
-  REPLEnvironment env(CI, CmdLine, llvm::getGlobalContext(), ParseStdlib);
+  REPLEnvironment env(CI, CmdLine, getGlobalLLVMContext(), ParseStdlib);
   if (CI.getASTContext().hadError())
     return;
   
@@ -1177,7 +1221,7 @@ void swift::runREPL(CompilerInstance &CI, const ProcessCmdLine &CmdLine,
   } while (env.handleREPLInput(inputKind, Line));
 }
 
-#else // __APPLE__
+#else
 
 void swift::runREPL(CompilerInstance &CI, const ProcessCmdLine &CmdLine,
                     bool ParseStdlib) {

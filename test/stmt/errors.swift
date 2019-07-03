@@ -1,9 +1,9 @@
-// RUN: %target-swift-frontend -parse -verify %s
-enum MSV : ErrorProtocol {
+// RUN: %target-typecheck-verify-swift
+enum MSV : Error {
   case Foo, Bar, Baz
 
-  var domain: String { return "" }
-  var code: Int { return 0 }
+  var _domain: String { return "" }
+  var _code: Int { return 0 }
 }
 
 func a() {}
@@ -13,7 +13,7 @@ func d() {}
 func e() {}
 func thrower() throws {}
 
-func opaque_error() -> ErrorProtocol { return MSV.Foo }
+func opaque_error() -> Error { return MSV.Foo }
 
 func one() {
   throw MSV.Foo // expected-error {{error is not handled because the enclosing function is not declared 'throws'}}
@@ -104,7 +104,7 @@ protocol ThrowingProto {
 
 func testExistential(_ p : ThrowingProto) throws {
   try p.foo()
-  try p.dynamicType.bar()
+  try type(of: p).bar()
 }
 func testGeneric<P : ThrowingProto>(p : P) throws {
   try p.foo()
@@ -112,7 +112,7 @@ func testGeneric<P : ThrowingProto>(p : P) throws {
 }
 
 // Don't warn about the "useless" try in these cases.
-func nine_helper(_ x: Int, y: Int) throws {}
+func nine_helper(_ x: Int, y: Int) throws {} // expected-note {{'nine_helper(_:y:)' declared here}}
 func nine() throws {
   try nine_helper(y: 0) // expected-error {{missing argument for parameter #1 in call}}
 }
@@ -129,7 +129,7 @@ func eleven_one() {
     do {
       try thrower()
     // FIXME: suppress the double-emission of the 'always true' warning
-    } catch let e as ErrorProtocol { // expected-warning {{immutable value 'e' was never used}} {{17-18=_}} expected-warning 2 {{'as' test is always true}}
+    } catch let e as Error { // expected-warning {{immutable value 'e' was never used}} {{17-18=_}} expected-warning 2 {{'as' test is always true}}
     }
   }
 }
@@ -153,7 +153,7 @@ func twelve() {
   }
 }
 
-struct Thirteen : ErrorProtocol, Equatable {}
+struct Thirteen : Error, Equatable {}
 func ==(a: Thirteen, b: Thirteen) -> Bool { return true }
 
 func thirteen_helper(_ fn: (Thirteen) -> ()) {}
@@ -163,5 +163,63 @@ func thirteen() {
       try thrower()
     } catch a {
     }
+  }
+}
+
+// SR 6400
+
+enum SR_6400_E: Error {
+  case castError
+}
+
+struct SR_6400_S_1 {}
+struct SR_6400_S_2: Error {}
+
+protocol SR_6400_FakeApplicationDelegate: AnyObject {}
+class SR_6400_FakeViewController {}
+
+func sr_6400() throws {
+  do {
+    throw SR_6400_E.castError
+  } catch is SR_6400_S_1 { // expected-warning {{cast from 'Error' to unrelated type 'SR_6400_S_1' always fails}}
+    print("Caught error")
+  }
+  
+  do {
+    throw SR_6400_E.castError
+  } catch is SR_6400_S_2 {
+    print("Caught error") // Ok
+  }
+}
+
+func sr_6400_1<T>(error: Error, as type: T.Type) -> Bool {
+  return (error as? T) != nil // Ok
+}
+
+func sr_6400_2(error: Error) {
+  _ = error as? (SR_6400_FakeViewController & Error) // Ok
+}
+func sr_6400_3(error: Error) {
+  _ = error as? (Error & SR_6400_FakeApplicationDelegate) // Ok
+}
+
+class SR_6400_A {}
+class SR_6400_B: SR_6400_FakeApplicationDelegate & Error {}
+
+func sr_6400_4() {
+  do {
+    throw SR_6400_E.castError
+  } catch let error as SR_6400_A { // expected-warning {{cast from 'Error' to unrelated type 'SR_6400_A' always fails}} // expected-warning {{immutable value 'error' was never used; consider replacing with '_' or removing it}}
+    print("Foo")
+  } catch {
+    print("Bar")
+  }
+  
+  do {
+    throw SR_6400_E.castError
+  } catch let error as SR_6400_B { // expected-warning {{immutable value 'error' was never used; consider replacing with '_' or removing it}}
+    print("Foo")
+  } catch {
+    print("Bar")
   }
 }

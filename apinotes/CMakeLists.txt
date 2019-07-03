@@ -1,37 +1,31 @@
-set(SWIFT_API_NOTES_INPUTS
-  AppKit
-  AVFoundation
-  CoreData
-  CoreGraphics
-  CoreLocation
-  Dispatch
-  Foundation
-  GameKit
-  HomeKit
-  NotificationCenter
-  ObjectiveC
-  SpriteKit
-  TVMLKit
-  TVServices
-  UIKit
-  WatchKit
-  WebKit)
+set(sources
+  Dispatch.apinotes
+  os.apinotes
+)
 
-if(NOT DEFINED SWIFT_API_NOTES_PATH)
-  message(FATAL_ERROR "Define SWIFT_API_NOTES_PATH before including this file")
-endif()
+set(output_dir "${SWIFTLIB_DIR}/apinotes")
 
-foreach(module ${SWIFT_API_NOTES_INPUTS})
-  if(NOT EXISTS "${SWIFT_API_NOTES_PATH}/${module}.apinotes")
-    message(SEND_ERROR "Missing apinotes for ${module}")
-  endif()
+set(inputs)
+set(outputs)
+foreach(input ${sources})
+  list(APPEND inputs "${CMAKE_CURRENT_SOURCE_DIR}/${input}")
+  list(APPEND outputs "${output_dir}/${input}")
 endforeach()
 
-file(GLOB SWIFT_API_NOTES_INPUT_FILES "${SWIFT_API_NOTES_PATH}/*.apinotes")
-foreach(file ${SWIFT_API_NOTES_INPUT_FILES})
-  get_filename_component(name "${file}" NAME_WE)
-  list(FIND SWIFT_API_NOTES_INPUTS "${name}" name_index)
-  if(name_index EQUAL -1)
-    message(WARNING "Found apinotes for ${name}; please add to CMakeLists.txt")
-  endif()
-endforeach()
+add_custom_command(
+    OUTPUT "${output_dir}"
+    COMMAND ${CMAKE_COMMAND} "-E" "make_directory" "${output_dir}")
+add_custom_command(
+    OUTPUT ${outputs}
+    DEPENDS ${inputs} "${output_dir}"
+    COMMAND
+      "${CMAKE_COMMAND}" "-E" "copy_if_different" ${inputs} "${output_dir}/")
+
+add_custom_target("copy_apinotes" ALL
+    DEPENDS "${outputs}" "${output_dir}"
+    COMMENT "Copying API notes to ${output_dir}"
+    SOURCES "${sources}")
+
+swift_install_in_component(DIRECTORY "${output_dir}"
+                           DESTINATION "lib/swift/"
+                           COMPONENT compiler)

@@ -2,21 +2,26 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 // RUN: %target-run-stdlib-swift
 // REQUIRES: executable_test
 
+// FIXME: This test runs very slowly on watchOS.
+// UNSUPPORTED: OS=watchos
+
+import SwiftPrivate
+
 public enum ApproximateCount {
   case Unknown
-  case Precise(IntMax)
-  case Underestimate(IntMax)
-  case Overestimate(IntMax)
+  case Precise(Int64)
+  case Underestimate(Int64)
+  case Overestimate(Int64)
 }
 
 public protocol ApproximateCountableSequence : Sequence {
@@ -57,11 +62,11 @@ internal func _splitRandomAccessIndexRange<
 ) -> [Range<C.Index>] {
   let startIndex = range.lowerBound
   let endIndex = range.upperBound
-  let length = elements.distance(from: startIndex, to: endIndex).toIntMax()
+  let length = elements.distance(from: startIndex, to: endIndex)
   if length < 2 {
     return [range]
   }
-  let middle = elements.index(startIndex, offsetBy: C.IndexDistance(length / 2))
+  let middle = elements.index(startIndex, offsetBy: length / 2)
   return [startIndex ..< middle, middle ..< endIndex]
 }
 
@@ -72,7 +77,7 @@ internal func _splitRandomAccessIndexRange<
 public protocol CollectionBuilder {
   associatedtype Destination : Collection
     
-  typealias Element = Destination.Iterator.Element
+  associatedtype Element = Destination.Iterator.Element
 
   init()
 
@@ -96,9 +101,9 @@ public protocol CollectionBuilder {
   /// Complexity: amortized O(n), where `n` is equal to `count(elements)`.
   mutating func append<
     C : Collection
-    where
-    C.Iterator.Element == Element
-  >(contentsOf elements: C)
+  >(contentsOf elements: C)    
+  where C.Iterator.Element == Element
+
 
   /// Append elements from `otherBuilder` to `self`, emptying `otherBuilder`.
   ///
@@ -152,9 +157,8 @@ public struct ArrayBuilder<T> : CollectionBuilder {
 
   public mutating func append<
     C : Collection
-    where
-    C.Iterator.Element == T
-  >(contentsOf elements: C) {
+  >(contentsOf elements: C)
+  where C.Iterator.Element == T {
     _resultTail.append(contentsOf: elements)
   }
 
@@ -173,7 +177,7 @@ public struct ArrayBuilder<T> : CollectionBuilder {
     _resultParts.append(_resultTail)
     _resultTail = []
     // FIXME: optimize.  parallelize.
-    return Array(_resultParts.flatten())
+    return Array(_resultParts.joined())
   }
 }
 
@@ -196,14 +200,14 @@ import Darwin
 import Dispatch
 
 // FIXME: port to Linux.
-// XFAIL: linux
+// XFAIL: linux, windows
 
 // A wrapper for pthread_t with platform-independent interface.
 public struct _stdlib_pthread_t : Equatable, Hashable {
   internal let _value: pthread_t
 
-  public var hashValue: Int {
-    return _value.hashValue
+  public func hash(into hasher: inout Hasher) {
+    hasher.combine(_value)
   }
 }
 
@@ -219,7 +223,7 @@ struct _ForkJoinMutex {
   var _mutex: UnsafeMutablePointer<pthread_mutex_t>
 
   init() {
-    _mutex = UnsafeMutablePointer(allocatingCapacity: 1)
+    _mutex = UnsafeMutablePointer.allocate(capacity: 1)
     if pthread_mutex_init(_mutex, nil) != 0 {
       fatalError("pthread_mutex_init")
     }
@@ -229,11 +233,11 @@ struct _ForkJoinMutex {
     if pthread_mutex_destroy(_mutex) != 0 {
       fatalError("pthread_mutex_init")
     }
-    _mutex.deinitialize()
-    _mutex.deallocateCapacity(1)
+    _mutex.deinitialize(count: 1)
+    _mutex.deallocate()
   }
 
-  func withLock<Result>(_ body: @noescape () -> Result) -> Result {
+  func withLock<Result>(_ body: () -> Result) -> Result {
     if pthread_mutex_lock(_mutex) != 0 {
       fatalError("pthread_mutex_lock")
     }
@@ -249,7 +253,7 @@ struct _ForkJoinCond {
   var _cond: UnsafeMutablePointer<pthread_cond_t>
 
   init() {
-    _cond = UnsafeMutablePointer(allocatingCapacity: 1)
+    _cond = UnsafeMutablePointer.allocate(capacity: 1)
     if pthread_cond_init(_cond, nil) != 0 {
       fatalError("pthread_cond_init")
     }
@@ -259,8 +263,8 @@ struct _ForkJoinCond {
     if pthread_cond_destroy(_cond) != 0 {
       fatalError("pthread_cond_destroy")
     }
-    _cond.deinitialize()
-    _cond.deallocateCapacity(1)
+    _cond.deinitialize(count: 1)
+    _cond.deallocate()
   }
 
   func signal() {
@@ -390,8 +394,8 @@ final class _ForkJoinWorkDeque<T> {
 
   func tryReplace(
     _ value: T,
-    makeReplacement: () -> T,
-    isEquivalent: (T, T) -> Bool
+    makeReplacement: @escaping () -> T,
+    isEquivalent: @escaping (T, T) -> Bool
   ) -> Bool {
     return _dequeMutex.withLock {
       for i in _deque.indices {
@@ -423,13 +427,13 @@ final class _ForkJoinWorkerThread {
   }
 
   internal func startAsync() {
-    var queue: dispatch_queue_t? = nil
+    var queue: DispatchQueue?
     if #available(OSX 10.10, iOS 8.0, *) {
-      queue = dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0)
+      queue = DispatchQueue.global(qos: .background)
     } else {
-      queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0)
+      queue = DispatchQueue.global(priority: .background)
     }
-    dispatch_async(queue!) {
+    queue!.async {
       self._thread()
     }
   }
@@ -474,7 +478,7 @@ final class _ForkJoinWorkerThread {
     }
     assert(_workDeque.isEmpty)
     assert(_submissionQueue.isEmpty)
-    _pool._totalThreads.fetchAndAdd(-1)
+    _ = _pool._totalThreads.fetchAndAdd(-1)
     print("_ForkJoinWorkerThread end")
   }
 
@@ -536,7 +540,7 @@ internal protocol _Future {
 }
 
 public class ForkJoinTaskBase {
-  final internal var _pool: ForkJoinPool? = nil
+  final internal var _pool: ForkJoinPool?
 
   // FIXME(performance): there is no need to create heavy-weight
   // synchronization primitives every time.  We could start with a lightweight
@@ -579,9 +583,9 @@ public class ForkJoinTaskBase {
 
 final public class ForkJoinTask<Result> : ForkJoinTaskBase, _Future {
   internal let _task: () -> Result
-  internal var _result: Result? = nil
+  internal var _result: Result?
 
-  public init(_task: () -> Result) {
+  public init(_task: @escaping () -> Result) {
     self._task = _task
   }
 
@@ -637,7 +641,7 @@ final public class ForkJoinPool {
   internal let _maxThreads: Int
   /// Total number of threads: number of running threads plus the number of
   /// threads that are preparing to start).
-  internal let _totalThreads: _stdlib_AtomicInt = _stdlib_AtomicInt(0)
+  internal let _totalThreads = _stdlib_AtomicInt(0)
 
   internal var _runningThreads: [_ForkJoinWorkerThread] = []
   internal var _runningThreadsMutex: _ForkJoinMutex = _ForkJoinMutex()
@@ -678,7 +682,7 @@ final public class ForkJoinPool {
       _runningThreadsMutex.withLock {
         _submissionQueuesMutex.withLock {
           _workDequesMutex.withLock {
-            let i = _runningThreads.index { $0 === thread }!
+            let i = _runningThreads.firstIndex { $0 === thread }!
             ForkJoinPool._threadRegistry[thread._tid!] = nil
             _runningThreads.remove(at: i)
             _submissionQueues.remove(at: i)
@@ -689,7 +693,7 @@ final public class ForkJoinPool {
     }
   }
 
-  internal func _compensateForBlockedWorkerThread(_ blockingBody: () -> ()) {
+  internal func _compensateForBlockedWorkerThread(_ blockingBody: @escaping () -> ()) {
     // FIXME: limit the number of compensating threads.
     let submissionQueue = _ForkJoinWorkDeque<ForkJoinTaskBase>()
     let workDeque = _ForkJoinWorkDeque<ForkJoinTaskBase>()
@@ -697,11 +701,11 @@ final public class ForkJoinPool {
       _pool: self, submissionQueue: submissionQueue, workDeque: workDeque)
     thread.startAsync()
     blockingBody()
-    _totalThreads.fetchAndAdd(1)
+    _ = _totalThreads.fetchAndAdd(1)
   }
 
   internal func _tryCreateThread(
-    _ makeTask: @noescape () -> ForkJoinTaskBase?
+    _ makeTask: () -> ForkJoinTaskBase?
   ) -> Bool {
     var success = false
     var oldNumThreads = _totalThreads.load()
@@ -720,14 +724,14 @@ final public class ForkJoinPool {
         _pool: self, submissionQueue: submissionQueue, workDeque: workDeque)
       thread.startAsync()
     } else {
-      _totalThreads.fetchAndAdd(-1)
+      _ = _totalThreads.fetchAndAdd(-1)
     }
     return true
   }
 
   internal func _stealTask() -> ForkJoinTaskBase? {
     return _workDequesMutex.withLock {
-      let randomOffset = pickRandom(_workDeques.indices)
+      let randomOffset = _workDeques.indices.randomElement()!
       let count = _workDeques.count
       for i in _workDeques.indices {
         let index = (i + randomOffset) % count
@@ -757,16 +761,15 @@ final public class ForkJoinPool {
 
   internal func _submitTasksToRandomWorkers<
     C : Collection
-    where
-    C.Iterator.Element == ForkJoinTaskBase
-  >(_ tasks: C) {
+  >(_ tasks: C)
+  where C.Iterator.Element == ForkJoinTaskBase {
     if tasks.isEmpty {
       return
     }
     _submissionQueuesMutex.withLock {
       precondition(!_submissionQueues.isEmpty)
       for task in tasks {
-        pickRandom(_submissionQueues).append(task)
+        _submissionQueues.randomElement()!.append(task)
       }
     }
   }
@@ -783,7 +786,7 @@ final public class ForkJoinPool {
       let done = _submissionQueuesMutex.withLock {
         () -> Bool in
         if !_submissionQueues.isEmpty {
-          pickRandom(_submissionQueues).append(task)
+          _submissionQueues.randomElement()!.append(task)
           return true
         }
         return false
@@ -795,7 +798,7 @@ final public class ForkJoinPool {
   }
 
   // FIXME: return a Future instead?
-  public func forkTask<Result>(task: () -> Result) -> ForkJoinTask<Result> {
+  public func forkTask<Result>(task: @escaping () -> Result) -> ForkJoinTask<Result> {
     let forkJoinTask = ForkJoinTask(_task: task)
     forkTask(forkJoinTask)
     return forkJoinTask
@@ -837,14 +840,14 @@ internal protocol _CollectionTransformerStepProtocol /*: class*/ {
   func transform<
     InputCollection : Collection,
     Collector : _ElementCollector
-    where
-    InputCollection.Iterator.Element == PipelineInputElement,
-    Collector.Element == OutputElement
   >(
     _ c: InputCollection,
     _ range: Range<InputCollection.Index>,
     _ collector: inout Collector
   )
+  where
+  InputCollection.Iterator.Element == PipelineInputElement,
+  Collector.Element == OutputElement
 }
 
 internal class _CollectionTransformerStep<PipelineInputElement_, OutputElement_>
@@ -853,19 +856,19 @@ internal class _CollectionTransformerStep<PipelineInputElement_, OutputElement_>
   typealias PipelineInputElement = PipelineInputElement_
   typealias OutputElement = OutputElement_
 
-  func map<U>(_ transform: (OutputElement) -> U)
+  func map<U>(_ transform: @escaping (OutputElement) -> U)
     -> _CollectionTransformerStep<PipelineInputElement, U> {
 
     fatalError("abstract method")
   }
 
-  func filter(_ predicate: (OutputElement) -> Bool)
+  func filter(_ isIncluded: @escaping (OutputElement) -> Bool)
     -> _CollectionTransformerStep<PipelineInputElement, OutputElement> {
 
     fatalError("abstract method")
   }
 
-  func reduce<U>(_ initial: U, _ combine: (U, OutputElement) -> U)
+  func reduce<U>(_ initial: U, _ combine: @escaping (U, OutputElement) -> U)
     -> _CollectionTransformerFinalizer<PipelineInputElement, U> {
 
     fatalError("abstract method")
@@ -873,11 +876,11 @@ internal class _CollectionTransformerStep<PipelineInputElement_, OutputElement_>
 
   func collectTo<
     C : BuildableCollectionProtocol
-    where
-    C.Builder.Destination == C,
-    C.Builder.Element == C.Iterator.Element,
-    C.Iterator.Element == OutputElement
-  >(_: C.Type) -> _CollectionTransformerFinalizer<PipelineInputElement, C> {
+  >(_: C.Type) -> _CollectionTransformerFinalizer<PipelineInputElement, C>
+  where
+  C.Builder.Destination == C,
+  C.Builder.Element == C.Iterator.Element,
+  C.Iterator.Element == OutputElement {
 
     fatalError("abstract method")
   }
@@ -885,14 +888,14 @@ internal class _CollectionTransformerStep<PipelineInputElement_, OutputElement_>
   func transform<
     InputCollection : Collection,
     Collector : _ElementCollector
-    where
-    InputCollection.Iterator.Element == PipelineInputElement,
-    Collector.Element == OutputElement
   >(
     _ c: InputCollection,
     _ range: Range<InputCollection.Index>,
     _ collector: inout Collector
-  ) {
+  )
+  where
+  InputCollection.Iterator.Element == PipelineInputElement,
+  Collector.Element == OutputElement {
     fatalError("abstract method")
   }
 }
@@ -903,7 +906,7 @@ final internal class _CollectionTransformerStepCollectionSource<
 
   typealias InputElement = PipelineInputElement
 
-  override func map<U>(_ transform: (InputElement) -> U)
+  override func map<U>(_ transform: @escaping (InputElement) -> U)
     -> _CollectionTransformerStep<PipelineInputElement, U> {
 
     return _CollectionTransformerStepOneToMaybeOne(self) {
@@ -911,15 +914,15 @@ final internal class _CollectionTransformerStepCollectionSource<
     }
   }
 
-  override func filter(_ predicate: (InputElement) -> Bool)
+  override func filter(_ isIncluded: @escaping (InputElement) -> Bool)
     -> _CollectionTransformerStep<PipelineInputElement, InputElement> {
 
     return _CollectionTransformerStepOneToMaybeOne(self) {
-      predicate($0) ? $0 : nil
+      isIncluded($0) ? $0 : nil
     }
   }
 
-  override func reduce<U>(_ initial: U, _ combine: (U, InputElement) -> U)
+  override func reduce<U>(_ initial: U, _ combine: @escaping (U, InputElement) -> U)
     -> _CollectionTransformerFinalizer<PipelineInputElement, U> {
 
     return _CollectionTransformerFinalizerReduce(self, initial, combine)
@@ -927,11 +930,11 @@ final internal class _CollectionTransformerStepCollectionSource<
 
   override func collectTo<
     C : BuildableCollectionProtocol
-    where
-    C.Builder.Destination == C,
-    C.Builder.Element == C.Iterator.Element,
-    C.Iterator.Element == OutputElement
-  >(_ c: C.Type) -> _CollectionTransformerFinalizer<PipelineInputElement, C> {
+  >(_ c: C.Type) -> _CollectionTransformerFinalizer<PipelineInputElement, C>
+  where
+  C.Builder.Destination == C,
+  C.Builder.Element == C.Iterator.Element,
+  C.Iterator.Element == OutputElement {
 
     return _CollectionTransformerFinalizerCollectTo(self, c)
   }
@@ -939,14 +942,14 @@ final internal class _CollectionTransformerStepCollectionSource<
   override func transform<
     InputCollection : Collection,
     Collector : _ElementCollector
-    where
-    InputCollection.Iterator.Element == PipelineInputElement,
-    Collector.Element == OutputElement
   >(
     _ c: InputCollection,
     _ range: Range<InputCollection.Index>,
     _ collector: inout Collector
-  ) {
+  )
+  where
+  InputCollection.Iterator.Element == PipelineInputElement,
+  Collector.Element == OutputElement {
     var i = range.lowerBound
     while i != range.upperBound {
       let e = c[i]
@@ -960,9 +963,8 @@ final internal class _CollectionTransformerStepOneToMaybeOne<
   PipelineInputElement,
   OutputElement,
   InputStep : _CollectionTransformerStepProtocol
-  where
-  InputStep.PipelineInputElement == PipelineInputElement
-> : _CollectionTransformerStep<PipelineInputElement, OutputElement> {
+> : _CollectionTransformerStep<PipelineInputElement, OutputElement>
+where InputStep.PipelineInputElement == PipelineInputElement {
 
   typealias _Self = _CollectionTransformerStepOneToMaybeOne
   typealias InputElement = InputStep.OutputElement
@@ -970,13 +972,13 @@ final internal class _CollectionTransformerStepOneToMaybeOne<
   let _input: InputStep
   let _transform: (InputElement) -> OutputElement?
 
-  init(_ input: InputStep, _ transform: (InputElement) -> OutputElement?) {
+  init(_ input: InputStep, _ transform: @escaping (InputElement) -> OutputElement?) {
     self._input = input
     self._transform = transform
     super.init()
   }
 
-  override func map<U>(_ transform: (OutputElement) -> U)
+  override func map<U>(_ transform: @escaping (OutputElement) -> U)
     -> _CollectionTransformerStep<PipelineInputElement, U> {
 
     // Let the closure below capture only one variable, not the whole `self`.
@@ -990,7 +992,7 @@ final internal class _CollectionTransformerStepOneToMaybeOne<
     }
   }
 
-  override func filter(_ predicate: (OutputElement) -> Bool)
+  override func filter(_ isIncluded: @escaping (OutputElement) -> Bool)
     -> _CollectionTransformerStep<PipelineInputElement, OutputElement> {
 
     // Let the closure below capture only one variable, not the whole `self`.
@@ -998,13 +1000,13 @@ final internal class _CollectionTransformerStepOneToMaybeOne<
     return _CollectionTransformerStepOneToMaybeOne<PipelineInputElement, OutputElement, InputStep>(_input) {
       (input: InputElement) -> OutputElement? in
       if let e = localTransform(input) {
-        return predicate(e) ? e : nil
+        return isIncluded(e) ? e : nil
       }
       return nil
     }
   }
 
-  override func reduce<U>(_ initial: U, _ combine: (U, OutputElement) -> U)
+  override func reduce<U>(_ initial: U, _ combine: @escaping (U, OutputElement) -> U)
     -> _CollectionTransformerFinalizer<PipelineInputElement, U> {
 
     return _CollectionTransformerFinalizerReduce(self, initial, combine)
@@ -1012,11 +1014,11 @@ final internal class _CollectionTransformerStepOneToMaybeOne<
 
   override func collectTo<
     C : BuildableCollectionProtocol
-    where
-    C.Builder.Destination == C,
-    C.Builder.Element == C.Iterator.Element,
-    C.Iterator.Element == OutputElement
-  >(_ c: C.Type) -> _CollectionTransformerFinalizer<PipelineInputElement, C> {
+  >(_ c: C.Type) -> _CollectionTransformerFinalizer<PipelineInputElement, C>
+  where
+  C.Builder.Destination == C,
+  C.Builder.Element == C.Iterator.Element,
+  C.Iterator.Element == OutputElement {
 
     return _CollectionTransformerFinalizerCollectTo(self, c)
   }
@@ -1024,14 +1026,14 @@ final internal class _CollectionTransformerStepOneToMaybeOne<
   override func transform<
     InputCollection : Collection,
     Collector : _ElementCollector
-    where
-    InputCollection.Iterator.Element == PipelineInputElement,
-    Collector.Element == OutputElement
   >(
     _ c: InputCollection,
     _ range: Range<InputCollection.Index>,
     _ collector: inout Collector
-  ) {
+  )
+  where
+  InputCollection.Iterator.Element == PipelineInputElement,
+  Collector.Element == OutputElement {
     var collectorWrapper =
       _ElementCollectorOneToMaybeOne(collector, _transform)
     _input.transform(c, range, &collectorWrapper)
@@ -1050,7 +1052,7 @@ struct _ElementCollectorOneToMaybeOne<
 
   init(
     _ baseCollector: BaseCollector,
-    _ transform: (Element) -> BaseCollector.Element?
+    _ transform: @escaping (Element) -> BaseCollector.Element?
   ) {
     self._baseCollector = baseCollector
     self._transform = transform
@@ -1066,9 +1068,8 @@ struct _ElementCollectorOneToMaybeOne<
 
   mutating func append<
     C : Collection
-    where
-    C.Iterator.Element == Element
-  >(contentsOf elements: C) {
+  >(contentsOf elements: C)
+  where C.Iterator.Element == Element {
     for e in elements {
       append(e)
     }
@@ -1084,17 +1085,15 @@ protocol _ElementCollector {
 
   mutating func append<
     C : Collection
-    where
-    C.Iterator.Element == Element
   >(contentsOf elements: C)
+  where C.Iterator.Element == Element
 }
 
 class _CollectionTransformerFinalizer<PipelineInputElement, Result> {
   func transform<
     InputCollection : Collection
-    where
-    InputCollection.Iterator.Element == PipelineInputElement
-  >(_ c: InputCollection) -> Result {
+  >(_ c: InputCollection) -> Result
+  where InputCollection.Iterator.Element == PipelineInputElement {
     fatalError("implement")
   }
 }
@@ -1104,16 +1103,16 @@ final class _CollectionTransformerFinalizerReduce<
   U,
   InputElementTy,
   InputStep : _CollectionTransformerStepProtocol
-  where
-  InputStep.OutputElement == InputElementTy,
-  InputStep.PipelineInputElement == PipelineInputElement
-> : _CollectionTransformerFinalizer<PipelineInputElement, U> {
+> : _CollectionTransformerFinalizer<PipelineInputElement, U>
+where
+InputStep.OutputElement == InputElementTy,
+InputStep.PipelineInputElement == PipelineInputElement {
 
   var _input: InputStep
   var _initial: U
   var _combine: (U, InputElementTy) -> U
 
-  init(_ input: InputStep, _ initial: U, _ combine: (U, InputElementTy) -> U) {
+  init(_ input: InputStep, _ initial: U, _ combine: @escaping (U, InputElementTy) -> U) {
     self._input = input
     self._initial = initial
     self._combine = combine
@@ -1121,9 +1120,8 @@ final class _CollectionTransformerFinalizerReduce<
 
   override func transform<
     InputCollection : Collection
-    where
-    InputCollection.Iterator.Element == PipelineInputElement
-  >(_ c: InputCollection) -> U {
+  >(_ c: InputCollection) -> U
+  where InputCollection.Iterator.Element == PipelineInputElement {
     var collector = _ElementCollectorReduce(_initial, _combine)
     _input.transform(c, c.startIndex..<c.endIndex, &collector)
     return collector.takeResult()
@@ -1136,7 +1134,7 @@ struct _ElementCollectorReduce<Element_, Result> : _ElementCollector {
   var _current: Result
   var _combine: (Result, Element) -> Result
 
-  init(_ initial: Result, _ combine: (Result, Element) -> Result) {
+  init(_ initial: Result, _ combine: @escaping (Result, Element) -> Result) {
     self._current = initial
     self._combine = combine
   }
@@ -1149,9 +1147,8 @@ struct _ElementCollectorReduce<Element_, Result> : _ElementCollector {
 
   mutating func append<
     C : Collection
-    where
-    C.Iterator.Element == Element
-  >(contentsOf elements: C) {
+  >(contentsOf elements: C)
+  where C.Iterator.Element == Element {
     for e in elements {
       append(e)
     }
@@ -1167,13 +1164,13 @@ final class _CollectionTransformerFinalizerCollectTo<
   U : BuildableCollectionProtocol,
   InputElementTy,
   InputStep : _CollectionTransformerStepProtocol
-  where
-  InputStep.OutputElement == InputElementTy,
-  InputStep.PipelineInputElement == PipelineInputElement,
-  U.Builder.Destination == U,
-  U.Builder.Element == U.Iterator.Element,
-  U.Iterator.Element == InputStep.OutputElement
-> : _CollectionTransformerFinalizer<PipelineInputElement, U> {
+> : _CollectionTransformerFinalizer<PipelineInputElement, U>
+where
+InputStep.OutputElement == InputElementTy,
+InputStep.PipelineInputElement == PipelineInputElement,
+U.Builder.Destination == U,
+U.Builder.Element == U.Iterator.Element,
+U.Iterator.Element == InputStep.OutputElement {
 
   var _input: InputStep
 
@@ -1183,9 +1180,8 @@ final class _CollectionTransformerFinalizerCollectTo<
 
   override func transform<
     InputCollection : Collection
-    where
-    InputCollection.Iterator.Element == PipelineInputElement
-  >(_ c: InputCollection) -> U {
+  >(_ c: InputCollection) -> U
+  where InputCollection.Iterator.Element == PipelineInputElement {
     var collector = _ElementCollectorCollectTo<U>()
     _input.transform(c, c.startIndex..<c.endIndex, &collector)
     return collector.takeResult()
@@ -1194,10 +1190,10 @@ final class _CollectionTransformerFinalizerCollectTo<
 
 struct _ElementCollectorCollectTo<
   BuildableCollection : BuildableCollectionProtocol
-  where
-  BuildableCollection.Builder.Destination == BuildableCollection,
-  BuildableCollection.Builder.Element == BuildableCollection.Iterator.Element
-> : _ElementCollector {
+> : _ElementCollector
+where
+BuildableCollection.Builder.Destination == BuildableCollection,
+BuildableCollection.Builder.Element == BuildableCollection.Iterator.Element {
 
   typealias Element = BuildableCollection.Iterator.Element
 
@@ -1217,9 +1213,8 @@ struct _ElementCollectorCollectTo<
 
   mutating func append<
     C : Collection
-    where
-    C.Iterator.Element == Element
-  >(contentsOf elements: C) {
+  >(contentsOf elements: C)
+  where C.Iterator.Element == Element {
     _builder.append(contentsOf: elements)
   }
 
@@ -1256,7 +1251,7 @@ public struct CollectionTransformerPipeline<
   internal var _input: InputCollection
   internal var _step: _CollectionTransformerStep<InputCollection.Iterator.Element, T>
 
-  public func map<U>(_ transform: (T) -> U)
+  public func map<U>(_ transform: @escaping (T) -> U)
     -> CollectionTransformerPipeline<InputCollection, U> {
 
     return CollectionTransformerPipeline<InputCollection, U>(
@@ -1265,26 +1260,28 @@ public struct CollectionTransformerPipeline<
     )
   }
 
-  public func filter(_ predicate: (T) -> Bool)
+  public func filter(_ isIncluded: @escaping (T) -> Bool)
     -> CollectionTransformerPipeline<InputCollection, T> {
 
     return CollectionTransformerPipeline<InputCollection, T>(
       _input: _input,
-      _step: _step.filter(predicate)
+      _step: _step.filter(isIncluded)
     )
   }
 
-  public func reduce<U>(_ initial: U, _ combine: (U, T) -> U) -> U {
+  public func reduce<U>(
+    _ initial: U, _ combine: @escaping (U, T) -> U
+  ) -> U {
     return _runCollectionTransformer(_input, _step.reduce(initial, combine))
   }
 
   public func collectTo<
     C : BuildableCollectionProtocol
-    where
-    C.Builder.Destination == C,
-    C.Iterator.Element == T,
-    C.Builder.Element == T
-  >(_ c: C.Type) -> C {
+  >(_ c: C.Type) -> C
+  where
+  C.Builder.Destination == C,
+  C.Iterator.Element == T,
+  C.Builder.Element == T {
     return _runCollectionTransformer(_input, _step.collectTo(c))
   }
 
@@ -1388,7 +1385,7 @@ t.test("ForkJoinPool.forkTask/Fibonacci") {
   expectEqual(102334155, t.waitAndGetResult())
 }
 
-func _parallelMap(_ input: [Int], transform: (Int) -> Int, range: Range<Int>)
+func _parallelMap(_ input: [Int], transform: @escaping (Int) -> Int, range: Range<Int>)
   -> Array<Int>.Builder {
 
   var builder = Array<Int>.Builder()
@@ -1410,7 +1407,7 @@ func _parallelMap(_ input: [Int], transform: (Int) -> Int, range: Range<Int>)
   return builder
 }
 
-func parallelMap(_ input: [Int], transform: (Int) -> Int) -> [Int] {
+func parallelMap(_ input: [Int], transform: @escaping (Int) -> Int) -> [Int] {
   let t = ForkJoinPool.commonPool.forkTask {
     _parallelMap(
       input,
@@ -1453,4 +1450,3 @@ http://habrahabr.ru/post/255659/
 */
 
 runAllTests()
-

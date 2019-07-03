@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -24,7 +24,8 @@
 
 using namespace swift;
 
-bool swift::parseASTSection(SerializedModuleLoader *SML, StringRef buf,
+bool swift::parseASTSection(MemoryBufferSerializedModuleLoader &Loader,
+                            StringRef buf,
                             SmallVectorImpl<std::string> &foundModules) {
   if (!serialization::isSerializedAST(buf))
     return false;
@@ -44,13 +45,13 @@ bool swift::parseASTSection(SerializedModuleLoader *SML, StringRef buf,
           llvm::MemoryBuffer::getMemBuffer(moduleData, info.name, false));
 
         // Register the memory buffer.
-        SML->registerMemoryBuffer(info.name, std::move(bitstream));
+        Loader.registerMemoryBuffer(info.name, std::move(bitstream));
         foundModules.push_back(info.name);
       }
     } else {
       llvm::dbgs() << "Unable to load module";
       if (!info.name.empty())
-        llvm::dbgs() << '\'' << info.name << '\'';
+        llvm::dbgs() << " '" << info.name << '\'';
       llvm::dbgs() << ".\n";
     }
 

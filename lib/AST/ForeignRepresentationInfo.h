@@ -2,24 +2,25 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
 #ifndef SWIFT_FOREIGNREPRESENTATIONINFO_H
 #define SWIFT_FOREIGNREPRESENTATIONINFO_H
 
-#include "swift/AST/ProtocolConformance.h"
 #include "swift/AST/Type.h"
 #include "swift/Basic/LLVM.h"
 #include "llvm/ADT/PointerEmbeddedInt.h"
 #include "llvm/ADT/PointerIntPair.h"
 
 namespace swift {
+
+class ProtocolConformance;
 
 class ForeignRepresentationInfo {
   using PayloadTy =
@@ -68,6 +69,14 @@ public:
     return result;
   }
 
+  // Retrieve a cache entry for a trivially representable type that can also
+  // be optional.
+  static ForeignRepresentationInfo forBridgedError() {
+    ForeignRepresentationInfo result;
+    result.Storage = { 0, ForeignRepresentableKind::BridgedError };
+    return result;
+  }
+
   /// Retrieve the foreign representable kind.
   ForeignRepresentableKind getKind() const {
     return Storage.getInt();
@@ -86,6 +95,7 @@ public:
       llvm_unreachable("this type is not representable");
 
     case ForeignRepresentableKind::Trivial:
+    case ForeignRepresentableKind::BridgedError:
       return nullptr;
 
     case ForeignRepresentableKind::Bridged: {
@@ -98,33 +108,12 @@ public:
     case ForeignRepresentableKind::StaticBridged:
       llvm_unreachable("unexpected kind in ForeignRepresentableCacheEntry");
     }
+
+    llvm_unreachable("Unhandled ForeignRepresentableKind in switch.");
   }
 
   /// Returns true if the optional version of this type is also representable.
-  bool isRepresentableAsOptional() const {
-    switch (getKind()) {
-    case ForeignRepresentableKind::None:
-      llvm_unreachable("this type is not representable");
-
-    case ForeignRepresentableKind::Trivial:
-      return Storage.getPointer() != 0;
-
-    case ForeignRepresentableKind::Bridged: {
-      auto KPK_ObjectiveCBridgeable = KnownProtocolKind::ObjectiveCBridgeable;
-      ProtocolDecl *proto = getConformance()->getProtocol();
-      assert(proto->isSpecificProtocol(KPK_ObjectiveCBridgeable) &&
-             "unknown protocol; does it support optional?");
-      (void)proto;
-      (void)KPK_ObjectiveCBridgeable;
-
-      return true;
-    }
-
-    case ForeignRepresentableKind::Object:
-    case ForeignRepresentableKind::StaticBridged:
-      llvm_unreachable("unexpected kind in ForeignRepresentableCacheEntry");
-    }
-  }
+  bool isRepresentableAsOptional() const;
 };
 
 } // end namespace swift

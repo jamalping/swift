@@ -1,11 +1,15 @@
-// RUN: %target-run-simple-swift 2>&1 | FileCheck %s
+// RUN: %target-run-simple-swift 2>&1 | %FileCheck %s
 // REQUIRES: executable_test
 
 import StdlibUnittest
-#if os(Linux) || os(FreeBSD) || os(Android)
-import Glibc
+#if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
+  import Darwin
+#elseif os(Linux) || os(FreeBSD) || os(PS4) || os(Android) || os(Cygwin) || os(Haiku)
+  import Glibc
+#elseif os(Windows)
+  import MSVCRT
 #else
-import Darwin
+#error("Unsupported platform")
 #endif
 
 _setTestSuiteFailedCallback() { print("abort()") }

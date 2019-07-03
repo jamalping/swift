@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -15,7 +15,7 @@
 //  prototype to which we can refer when building the standard library.
 //
 //===----------------------------------------------------------------------===//
-// RUN: %target-run-simple-swift | FileCheck %s
+// RUN: %target-run-simple-swift | %FileCheck %s
 // REQUIRES: executable_test
 
 // CHECK: testing...
@@ -34,7 +34,7 @@ protocol F {
   // refinement of F having a non-default distance implementation need
   // to know about it.  These refinements are expected to be rare
   // (which is why defaulted requirements are a win)
-  func ~> (_: Self, _: (_Distance, (Self))) -> Int
+  static func ~> (_: Self, _: (_Distance, (Self))) -> Int
 }
 
 // Operation tag for distance
@@ -89,7 +89,7 @@ protocol D : R {
 
 // Dispatch to D's distance() requirement
 // Only the author of D needs to see this implementation.
-func ~> <I: D>(x:I, args: (_Distance, (I))) -> Int {
+func ~> <I: D>(x: I, args: (_Distance, (I))) -> Int {
   let other = args.1
   return x.distance(other)
 }

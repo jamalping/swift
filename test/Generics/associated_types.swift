@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 // Deduction of associated types.
 protocol Fooable {
@@ -21,8 +21,7 @@ struct Z : Fooable {
     var a : AssocType // expected-warning {{variable 'a' was never used; consider replacing with '_' or removing it}} {{9-10=_}}
   }
 
-  // FIXME: We should be able to find this.
-  func blarg() -> AssocType {} // expected-error{{use of undeclared type 'AssocType'}}
+  func blarg() -> AssocType {}
 
   func wonka() -> Z.AssocType {}
 }
@@ -47,11 +46,11 @@ struct S1 : P1 {
   func foo() -> X {}
 }
 
-prefix operator % {}
+prefix operator %
 
 protocol P2 {
   associatedtype Assoc2
-  prefix func %(target: Self) -> Assoc2
+  static prefix func %(target: Self) -> Assoc2
 }
 
 prefix func % <P:P1>(target: P) -> P.Assoc1 {
@@ -82,7 +81,7 @@ struct S4<T> : P3, P4 {
 takeP4(S4<Int>())
 
 // <rdar://problem/14680393>
-infix operator ~> { precedence 255 }
+infix operator ~>
 
 protocol P5 { }
 
@@ -94,7 +93,7 @@ protocol P6 {
 
 protocol P7 : P6 {
   associatedtype Assoc : P6
-  func ~> (x: Self, _: S7a) -> Assoc
+  static func ~> (x: Self, _: S7a) -> Assoc
 }
 
 func ~> <T:P6>(x: T, _: S7a) -> S7b { return S7b() }
@@ -160,7 +159,7 @@ protocol A {
 }
 
 protocol B : A {
-  associatedtype e : A = C<Self> // expected-note {{default type 'C<C<a>>' for associated type 'e' (from protocol 'B') does not conform to 'A'}}
+  associatedtype e : A = C<Self>
 }
 
 extension B {
@@ -168,13 +167,61 @@ extension B {
   }
 }
 
-struct C<a : B> : B { // expected-error {{type 'C<a>' does not conform to protocol 'B'}}
+struct C<a : B> : B {
 }
+
+struct CC : B {
+  typealias e = CC
+}
+
+C<CC>().c()
 
 // SR-511
 protocol sr511 {
-  typealias Foo // expected-warning {{use of 'typealias' to declare associated types is deprecated; use 'associatedtype' instead}} 
+  typealias Foo // expected-error {{type alias is missing an assigned type; use 'associatedtype' to define an associated type requirement}}
 }
 
 associatedtype Foo = Int // expected-error {{associated types can only be defined in a protocol; define a type or introduce a 'typealias' to satisfy an associated type requirement}}
+
+// rdar://problem/29207581
+protocol P {
+  associatedtype A
+  static var isP : Bool { get }
+}
+
+protocol M {
+  associatedtype B : P
+}
+
+extension M {
+  func g<C : P>(in c_: C)
+  where Self.B == C.A, C.A.A : P { // *clearly* implies Self.B.A : P
+    _ = B.A.isP
+  }
+}
+
+// SR-6097
+protocol sr6097 {
+  associatedtype A : AnyObject
+  var aProperty: A { get }
+}
+
+class C1 {}
+class C2 : sr6097 {
+  unowned let aProperty: C1 // should deduce A == C1 despite 'unowned'
+  init() { fatalError() }
+}
+
+protocol sr6097_b {
+  associatedtype A : AnyObject
+  var aProperty: A? { get }
+}
+class C3 : sr6097_b {
+  weak var aProperty: C1? // and same here, despite 'weak'
+  init() { fatalError() }
+}
+class G<T> : sr6097_b where T : AnyObject {
+  weak var aProperty: T?
+}
+
 

@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -24,6 +24,7 @@
 
 #include "swift/Subsystems.h"
 #include "swift/Basic/LLVMInitialize.h"
+#include "swift/Basic/LLVMContext.h"
 #include "swift/AST/IRGenOptions.h"
 #include "swift/LLVMPasses/PassesFwd.h"
 #include "swift/LLVMPasses/Passes.h"
@@ -36,7 +37,8 @@
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Bitcode/BitcodeWriterPass.h"
-#include "llvm/CodeGen/CommandFlags.h"
+#include "llvm/CodeGen/CommandFlags.inc"
+#include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/IRPrintingPasses.h"
@@ -132,9 +134,9 @@ getTargetMachine(llvm::Triple TheTriple, StringRef CPUStr,
     return nullptr;
   }
 
-  return TheTarget->createTargetMachine(TheTriple.getTriple(), CPUStr,
-                                        FeaturesStr, Options, RelocModel,
-                                        CMModel, GetCodeGenOptLevel());
+  return TheTarget->createTargetMachine(
+      TheTriple.getTriple(), CPUStr, FeaturesStr, Options,
+      Optional<Reloc::Model>(RelocModel), getCodeModel(), GetCodeGenOptLevel());
 }
 
 static void dumpOutput(llvm::Module &M, llvm::raw_ostream &os) {
@@ -182,11 +184,16 @@ static void runSpecificPasses(StringRef Binary, llvm::Module *M,
   Passes.add(createTargetTransformInfoWrapperPass(TM ? TM->getTargetIRAnalysis()
                                                      : TargetIRAnalysis()));
 
+  if (TM) {
+    // FIXME: We should dyn_cast this when supported.
+    auto &LTM = static_cast<LLVMTargetMachine &>(*TM);
+    Pass *TPC = LTM.createPassConfig(Passes);
+    Passes.add(TPC);
+  }
+
   for (const llvm::PassInfo *PassInfo : PassList) {
     llvm::Pass *P = nullptr;
-    if (PassInfo->getTargetMachineCtor())
-      P = PassInfo->getTargetMachineCtor()(TM);
-    else if (PassInfo->getNormalCtor())
+    if (PassInfo->getNormalCtor())
       P = PassInfo->getNormalCtor()();
     else
       errs() << Binary << ": cannot create pass: " << PassInfo->getPassName()
@@ -205,7 +212,8 @@ static void runSpecificPasses(StringRef Binary, llvm::Module *M,
 //===----------------------------------------------------------------------===//
 
 int main(int argc, char **argv) {
-  INITIALIZE_LLVM(argc, argv);
+  PROGRAM_START(argc, argv);
+  INITIALIZE_LLVM();
 
   // Initialize passes
   PassRegistry &Registry = *PassRegistry::getPassRegistry();
@@ -223,7 +231,7 @@ int main(int argc, char **argv) {
   // supported.
   initializeCodeGenPreparePass(Registry);
   initializeAtomicExpandPass(Registry);
-  initializeRewriteSymbolsPass(Registry);
+  initializeRewriteSymbolsLegacyPassPass(Registry);
   initializeWinEHPreparePass(Registry);
   initializeDwarfEHPreparePass(Registry);
   initializeSjLjEHPreparePass(Registry);
@@ -233,7 +241,6 @@ int main(int argc, char **argv) {
   initializeSwiftRCIdentityPass(Registry);
   initializeSwiftARCOptPass(Registry);
   initializeSwiftARCContractPass(Registry);
-  initializeSwiftStackPromotionPass(Registry);
   initializeInlineTreePrinterPass(Registry);
   initializeSwiftMergeFunctionsPass(Registry);
 
@@ -246,7 +253,7 @@ int main(int argc, char **argv) {
 
   // Load the input module...
   std::unique_ptr<Module> M =
-      parseIRFile(InputFilename, Err, getGlobalContext());
+      parseIRFile(InputFilename, Err, getGlobalLLVMContext());
 
   if (!M) {
     Err.print(argv[0], errs());
@@ -264,14 +271,14 @@ int main(int argc, char **argv) {
     M->setTargetTriple(llvm::Triple::normalize(TargetTriple));
 
   // Figure out what stream we are supposed to write to...
-  std::unique_ptr<llvm::tool_output_file> Out;
+  std::unique_ptr<llvm::ToolOutputFile> Out;
   // Default to standard output.
   if (OutputFilename.empty())
     OutputFilename = "-";
 
   std::error_code EC;
   Out.reset(
-      new llvm::tool_output_file(OutputFilename, EC, llvm::sys::fs::F_None));
+      new llvm::ToolOutputFile(OutputFilename, EC, llvm::sys::fs::F_None));
   if (EC) {
     errs() << EC.message() << '\n';
     return 1;
@@ -296,7 +303,7 @@ int main(int argc, char **argv) {
 
   if (Optimized) {
     IRGenOptions Opts;
-    Opts.Optimize = true;
+    Opts.OptMode = OptimizationMode::ForSpeed;
 
     // Then perform the optimizations.
     performLLVMOptimizations(Opts, M.get(), TM.get());

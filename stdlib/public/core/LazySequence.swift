@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -37,21 +37,21 @@
 ///     extension Sequence {
 ///       /// Returns an array containing the results of
 ///       ///
-///       ///   p.reduce(initial, combine: combine)
+///       ///   p.reduce(initial, nextPartialResult)
 ///       ///
 ///       /// for each prefix `p` of `self`, in order from shortest to
 ///       /// longest.  For example:
 ///       ///
-///       ///     (1..<6).scan(0, combine: +) // [0, 1, 3, 6, 10, 15]
+///       ///     (1..<6).scan(0, +) // [0, 1, 3, 6, 10, 15]
 ///       ///
-///       /// - Complexity: O(N)
+///       /// - Complexity: O(n)
 ///       func scan<ResultElement>(
 ///         _ initial: ResultElement,
-///         combine: @noescape (ResultElement, Iterator.Element) -> ResultElement
+///         _ nextPartialResult: (ResultElement, Element) -> ResultElement
 ///       ) -> [ResultElement] {
 ///         var result = [initial]
 ///         for x in self {
-///           result.append(combine(result.last!, x))
+///           result.append(nextPartialResult(result.last!, x))
 ///         }
 ///         return result
 ///       }
@@ -64,13 +64,13 @@
 ///       : IteratorProtocol {
 ///       mutating func next() -> ResultElement? {
 ///         return nextElement.map { result in
-///           nextElement = base.next().map { combine(result, $0) }
+///           nextElement = base.next().map { nextPartialResult(result, $0) }
 ///           return result
 ///         }
 ///       }
 ///       private var nextElement: ResultElement? // The next result of next().
 ///       private var base: Base                  // The underlying iterator.
-///       private let combine: (ResultElement, Base.Element) -> ResultElement
+///       private let nextPartialResult: (ResultElement, Base.Element) -> ResultElement
 ///     }
 ///     
 ///     struct LazyScanSequence<Base: Sequence, ResultElement>
@@ -78,12 +78,12 @@
 ///     {
 ///       func makeIterator() -> LazyScanIterator<Base.Iterator, ResultElement> {
 ///         return LazyScanIterator(
-///           nextElement: initial, base: base.makeIterator(), combine: combine)
+///           nextElement: initial, base: base.makeIterator(), nextPartialResult)
 ///       }
 ///       private let initial: ResultElement
 ///       private let base: Base
-///       private let combine:
-///         (ResultElement, Base.Iterator.Element) -> ResultElement
+///       private let nextPartialResult:
+///         (ResultElement, Base.Element) -> ResultElement
 ///     }
 ///
 /// and finally, we can give all lazy sequences a lazy `scan` method:
@@ -91,24 +91,24 @@
 ///     extension LazySequenceProtocol {
 ///       /// Returns a sequence containing the results of
 ///       ///
-///       ///   p.reduce(initial, combine: combine)
+///       ///   p.reduce(initial, nextPartialResult)
 ///       ///
 ///       /// for each prefix `p` of `self`, in order from shortest to
 ///       /// longest.  For example:
 ///       ///
-///       ///     Array((1..<6).lazy.scan(0, combine: +)) // [0, 1, 3, 6, 10, 15]
+///       ///     Array((1..<6).lazy.scan(0, +)) // [0, 1, 3, 6, 10, 15]
 ///       ///
 ///       /// - Complexity: O(1)
 ///       func scan<ResultElement>(
 ///         _ initial: ResultElement,
-///         combine: (ResultElement, Iterator.Element) -> ResultElement
+///         _ nextPartialResult: (ResultElement, Element) -> ResultElement
 ///       ) -> LazyScanSequence<Self, ResultElement> {
 ///         return LazyScanSequence(
-///           initial: initial, base: self, combine: combine)
+///           initial: initial, base: self, nextPartialResult)
 ///       }
 ///     }
 ///
-/// - See also: `LazySequence`, `LazyCollectionProtocol`, `LazyCollection`
+/// - See also: `LazySequence`
 ///
 /// - Note: The explicit permission to implement further operations
 ///   lazily applies only in contexts where the sequence is statically
@@ -116,7 +116,7 @@
 ///   as the accumulation of `result` below are never unexpectedly
 ///   dropped or deferred:
 ///
-///       extension Sequence where Iterator.Element == Int {
+///       extension Sequence where Element == Int {
 ///         func sum() -> Int {
 ///           var result = 0
 ///           _ = self.map { result += $0 }
@@ -132,7 +132,7 @@ public protocol LazySequenceProtocol : Sequence {
   /// possibly with a simpler type.
   ///
   /// - See also: `elements`
-  associatedtype Elements : Sequence = Self
+  associatedtype Elements: Sequence = Self where Elements.Element == Element
 
   /// A sequence containing the same elements as this one, possibly with
   /// a simpler type.
@@ -153,7 +153,22 @@ public protocol LazySequenceProtocol : Sequence {
 /// property is provided.
 extension LazySequenceProtocol where Elements == Self {
   /// Identical to `self`.
+  @inlinable // protocol-only
   public var elements: Self { return self }
+}
+
+extension LazySequenceProtocol {
+  @inlinable // protocol-only
+  public var lazy: LazySequence<Elements> {
+    return elements.lazy
+  }
+}
+
+extension LazySequenceProtocol where Elements: LazySequenceProtocol {
+  @inlinable // protocol-only
+  public var lazy: Elements {
+    return elements
+  }
 }
 
 /// A sequence containing the same elements as a `Base` sequence, but
@@ -161,48 +176,67 @@ extension LazySequenceProtocol where Elements == Self {
 /// implemented lazily.
 ///
 /// - See also: `LazySequenceProtocol`
-public struct LazySequence<Base : Sequence>
-  : LazySequenceProtocol, _SequenceWrapper {
+@frozen // lazy-performance
+public struct LazySequence<Base : Sequence> {
+  @usableFromInline
+  internal var _base: Base
 
   /// Creates a sequence that has the same elements as `base`, but on
   /// which some operations such as `map` and `filter` are implemented
   /// lazily.
+  @inlinable // lazy-performance
   internal init(_base: Base) {
     self._base = _base
   }
+}
 
-  public var _base: Base
+extension LazySequence: Sequence {
+  public typealias Element = Base.Element
+  public typealias Iterator = Base.Iterator
+
+  @inlinable
+  public __consuming func makeIterator() -> Iterator {
+    return _base.makeIterator()
+  }
+  
+  @inlinable // lazy-performance
+  public var underestimatedCount: Int {
+    return _base.underestimatedCount
+  }
+
+  @inlinable // lazy-performance
+  @discardableResult
+  public __consuming func _copyContents(
+    initializing buf: UnsafeMutableBufferPointer<Element>
+  ) -> (Iterator, UnsafeMutableBufferPointer<Element>.Index) {
+    return _base._copyContents(initializing: buf)
+  }
+
+  @inlinable // lazy-performance
+  public func _customContainsEquatableElement(_ element: Element) -> Bool? { 
+    return _base._customContainsEquatableElement(element)
+  }
+  
+  @inlinable // generic-performance
+  public __consuming func _copyToContiguousArray() -> ContiguousArray<Element> {
+    return _base._copyToContiguousArray()
+  }
+}
+
+extension LazySequence: LazySequenceProtocol {
+  public typealias Elements = Base
 
   /// The `Base` (presumably non-lazy) sequence from which `self` was created.
-  public var elements: Base { return _base }
+  @inlinable // lazy-performance
+  public var elements: Elements { return _base }
 }
 
 extension Sequence {
   /// A sequence containing the same elements as this sequence,
   /// but on which some operations, such as `map` and `filter`, are
   /// implemented lazily.
-  ///
-  /// - SeeAlso: `LazySequenceProtocol`, `LazySequence`
+  @inlinable // protocol-only
   public var lazy: LazySequence<Self> {
     return LazySequence(_base: self)
-  }
-}
-
-/// Avoid creating multiple layers of `LazySequence` wrapper.
-/// Anything conforming to `LazySequenceProtocol` is already lazy.
-extension LazySequenceProtocol {
-  /// Identical to `self`.
-  public var lazy: Self {
-    return self
-  }
-}
-
-@available(*, unavailable, renamed: "LazyCollectionProtocol")
-public typealias LazySequenceType = LazySequenceProtocol
-
-extension LazySequenceProtocol {
-  @available(*, unavailable, message: "Please use Array initializer instead.")
-  public var array: [Iterator.Element] {
-    Builtin.unreachable()
   }
 }

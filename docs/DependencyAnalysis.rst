@@ -1,7 +1,5 @@
 :orphan:
 
-.. @raise litre.TestsAreMissing
-
 ===================
 Dependency Analysis
 ===================
@@ -20,7 +18,7 @@ to is tantamount to a debug-time miscompile!
 Kinds of Dependency
 ===================
 
-There are four major kinds of dependency between files: 
+There are four major kinds of dependency between files:
 
 - ``top-level``: use of an unqualified name that is looked up at module scope,
   and definition of a name at module scope. This includes free functions,
@@ -91,7 +89,8 @@ External Dependencies
 =====================
 
 External dependencies, including imported Swift module files and Clang headers,
-are tracked using a special ``depends-external`` set. The Swift driver
+are tracked using a special ``depends-external`` set. These dependencies refer
+to files that are external to the module. The Swift driver
 interprets this set specially and decides whether or not the cross-module
 dependencies have changed.
 

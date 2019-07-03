@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -18,13 +18,13 @@
 namespace swift {
 class ModuleDecl;
 class SourceFile;
+class DeclContext;
 
 namespace index {
 
-void indexSourceFile(SourceFile *SF, StringRef hash,
-                     IndexDataConsumer &consumer);
-void indexModule(ModuleDecl *module, StringRef hash,
-                 IndexDataConsumer &consumer);
+void indexDeclContext(DeclContext *DC, IndexDataConsumer &consumer);
+void indexSourceFile(SourceFile *SF, IndexDataConsumer &consumer);
+void indexModule(ModuleDecl *module, IndexDataConsumer &consumer);
 
 } // end namespace index
 } // end namespace swift

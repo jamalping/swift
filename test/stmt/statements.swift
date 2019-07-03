@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 /* block comments */
 /* /* nested too */ */
@@ -30,8 +30,8 @@ func funcdecl5(_ a: Int, y: Int) {
   if (x != 0) {
     if (x != 0 || f3() != 0) {
       // while with and without a space after it.
-      while(true) { 4; 2; 1 } // expected-warning {{result of call to 'init(_builtinIntegerLiteral:)' is unused}} expected-warning {{result of call to 'init(_builtinIntegerLiteral:)' is unused}} expected-warning {{result of call to 'init(_builtinIntegerLiteral:)' is unused}}
-      while (true) { 4; 2; 1 } // expected-warning {{result of call to 'init(_builtinIntegerLiteral:)' is unused}} expected-warning {{result of call to 'init(_builtinIntegerLiteral:)' is unused}} expected-warning {{result of call to 'init(_builtinIntegerLiteral:)' is unused}}
+      while(true) { 4; 2; 1 } // expected-warning 3 {{integer literal is unused}}
+      while (true) { 4; 2; 1 } // expected-warning 3 {{integer literal is unused}}
     }
   }
 
@@ -41,6 +41,11 @@ func funcdecl5(_ a: Int, y: Int) {
 
   1 = x        // expected-error {{cannot assign to a literal value}}
   (1) = x      // expected-error {{cannot assign to a literal value}}
+  "string" = "other"    // expected-error {{cannot assign to a literal value}}
+  [1, 1, 1, 1] = [1, 1] // expected-error {{cannot assign to immutable expression of type '[Int]}}
+  1.0 = x               // expected-error {{cannot assign to a literal value}}
+  nil = 1               // expected-error {{cannot assign to a literal value}}
+
   (x:1).x = 1 // expected-error {{cannot assign to immutable expression of type 'Int'}}
   var tup : (x:Int, y:Int)
   tup.x = 1
@@ -53,8 +58,8 @@ func funcdecl5(_ a: Int, y: Int) {
   } else if (y == 2) {
   }
 
-  // FIXME: This diagnostic is terrible - rdar://12939553
-  if x {}   // expected-error {{type 'Int' does not conform to protocol 'Boolean'}}
+  // This diagnostic is terrible - rdar://12939553
+  if x {}   // expected-error {{'Int' is not convertible to 'Bool'}}
 
   if true {
     if (B) {
@@ -94,7 +99,7 @@ struct infloopbool {
 }
 
 func infloopbooltest() {
-  if (infloopbool()) {} // expected-error {{type 'infloopbool' does not conform to protocol 'Boolean'}}
+  if (infloopbool()) {} // expected-error {{'infloopbool' is not convertible to 'Bool'}}
 }
 
 // test "builder" API style
@@ -159,7 +164,7 @@ func missing_semicolons() {
   var w = 321
   func g() {}
   g() w += 1             // expected-error{{consecutive statements}} {{6-6=;}}
-  var z = w"hello"    // expected-error{{consecutive statements}} {{12-12=;}} expected-warning {{result of call to 'init(_builtinStringLiteral:utf8CodeUnitCount:isASCII:)' is unused}}
+  var z = w"hello"    // expected-error{{consecutive statements}} {{12-12=;}} expected-warning {{string literal is unused}}
   class  C {}class  C2 {} // expected-error{{consecutive statements}} {{14-14=;}}
   struct S {}struct S2 {} // expected-error{{consecutive statements}} {{14-14=;}}
   func j() {}func k() {}  // expected-error{{consecutive statements}} {{14-14=;}}
@@ -172,6 +177,7 @@ return 42 // expected-error {{return invalid outside of a func}}
 return // expected-error {{return invalid outside of a func}}
 
 func NonVoidReturn1() -> Int {
+  _ = 0
   return // expected-error {{non-void function should return a value}}
 }
 
@@ -202,8 +208,15 @@ func IfStmt1() {
 
 func IfStmt2() {
   if 1 > 0 {
-  } else // expected-error {{expected '{' after 'else'}}
+  } else // expected-error {{expected '{' or 'if' after 'else'}}
   _ = 42
+}
+func IfStmt3() {
+  if 1 > 0 {
+  } else 1 < 0 { // expected-error {{expected '{' or 'if' after 'else'; did you mean to write 'if'?}} {{9-9= if}}
+    _ = 42
+  } else {
+  }
 }
 
 //===--- While statement.
@@ -247,7 +260,7 @@ func RepeatWhileStmt4() {
 
 func brokenSwitch(_ x: Int) -> Int {
   switch x {
-  case .Blah(var rep): // expected-error{{enum case 'Blah' not found in type 'Int'}}
+  case .Blah(var rep): // expected-error{{pattern cannot match values of type 'Int'}}
     return rep
   }
 }
@@ -257,6 +270,7 @@ func switchWithVarsNotMatchingTypes(_ x: Int, y: Int, z: String) -> Int {
   case (let a, 0, _), (0, let a, _): // OK
     return a
   case (let a, _, _), (_, _, let a): // expected-error {{pattern variable bound to type 'String', expected type 'Int'}}
+  // expected-warning@-1 {{case is already handled by previous patterns; consider removing it}}
     return a
   }
 }
@@ -266,8 +280,8 @@ func breakContinue(_ x : Int) -> Int {
 Outer:
   for _ in 0...1000 {
 
-  Switch:
-    switch x {
+  Switch: // expected-error {{switch must be exhaustive}} expected-note{{do you want to add a default clause?}}
+  switch x {
     case 42: break Outer
     case 97: continue Outer
     case 102: break Switch
@@ -298,7 +312,8 @@ Loop:  // expected-note {{previously declared here}}
   let x : Int? = 42
   
   // <rdar://problem/16879701> Should be able to pattern match 'nil' against optionals
-  switch x {
+  switch x { // expected-error {{switch must be exhaustive}}
+  // expected-note@-1 {{missing case: '.some(_)'}}
   case .some(42): break
   case nil: break
   
@@ -335,47 +350,98 @@ func test_defer(_ a : Int) {
 
   // Not ok.
   while false { defer { break } }   // expected-error {{'break' cannot transfer control out of a defer statement}}
+  // expected-warning@-1 {{'defer' statement at end of scope always executes immediately}}{{17-22=do}}
   defer { return }  // expected-error {{'return' cannot transfer control out of a defer statement}}
+  // expected-warning@-1 {{'defer' statement at end of scope always executes immediately}}{{3-8=do}}
 }
 
 class SomeTestClass {
   var x = 42
-  
+ 
   func method() {
     defer { x = 97 }  // self. not required here!
+    // expected-warning@-1 {{'defer' statement at end of scope always executes immediately}}{{5-10=do}}
   }
 }
 
+enum DeferThrowError: Error {
+  case someError
+}
 
-func test_require(_ x : Int, y : Int??, cond : Bool) {
+func throwInDefer() {
+  defer { throw DeferThrowError.someError } // expected-error {{'throw' cannot transfer control out of a defer statement}}
+  print("Foo")
+}
+
+func throwingFuncInDefer1() throws {
+  defer { try throwingFunctionCalledInDefer() } // expected-error {{errors cannot be thrown out of a defer body}}
+  print("Bar")
+}
+
+func throwingFuncInDefer2() throws {
+  defer { throwingFunctionCalledInDefer() } // expected-error {{errors cannot be thrown out of a defer body}}
+  print("Bar")
+}
+
+func throwingFuncInDefer3() {
+  defer { try throwingFunctionCalledInDefer() } // expected-error {{errors cannot be thrown out of a defer body}}
+  print("Bar")
+}
+
+func throwingFuncInDefer4() {
+  defer { throwingFunctionCalledInDefer() } // expected-error {{errors cannot be thrown out of a defer body}}
+  print("Bar")
+}
+
+func throwingFunctionCalledInDefer() throws {
+  throw DeferThrowError.someError
+}
+
+class SomeDerivedClass: SomeTestClass {
+  override init() {
+    defer {
+      super.init() // expected-error {{initializer chaining ('super.init') cannot be nested in another expression}}
+    }
+  }
+}
+
+func test_guard(_ x : Int, y : Int??, cond : Bool) {
   
   // These are all ok.
   guard let a = y else {}
   markUsed(a)
-  guard let b = y where cond else {}
-  guard case let c = x where cond else {}
+  guard let b = y, cond else {}
+  guard case let c = x, cond else {}
   guard case let Optional.some(d) = y else {}
   guard x != 4, case _ = x else { }
 
 
-  guard let e where cond else {}    // expected-error {{variable binding in a condition requires an initializer}}
-  guard case let f? : Int? where cond else {}    // expected-error {{variable binding in a condition requires an initializer}}
+  guard let e, cond else {}    // expected-error {{variable binding in a condition requires an initializer}}
+  guard case let f? : Int?, cond else {}    // expected-error {{variable binding in a condition requires an initializer}}
 
   guard let g = y else {
     markUsed(g)  // expected-error {{variable declared in 'guard' condition is not usable in its body}}
   }
 
-  guard let h = y where cond {}  // expected-error {{expected 'else' after 'guard' condition}}
+  guard let h = y, cond {}  // expected-error {{expected 'else' after 'guard' condition}} {{25-25=else }}
 
 
   guard case _ = x else {}  // expected-warning {{'guard' condition is always true, body is unreachable}}
+
+  // SR-7567
+  guard let outer = y else {
+    guard true else {
+      print(outer) // expected-error {{variable declared in 'guard' condition is not usable in its body}}
+    }
+  }
 }
 
 func test_is_as_patterns() {
   switch 4 {
   case is Int: break        // expected-warning {{'is' test is always true}}
   case _ as Int: break  // expected-warning {{'as' test is always true}}
-  case _: break
+  // expected-warning@-1 {{case is already handled by previous patterns; consider removing it}}
+  case _: break // expected-warning {{case is already handled by previous patterns; consider removing it}}
   }
 }
 
@@ -399,7 +465,7 @@ func r18776073(_ a : Int?) {
 
 // <rdar://problem/22491782> unhelpful error message from "throw nil"
 func testThrowNil() throws {
-  throw nil  // expected-error {{cannot infer concrete ErrorProtocol for thrown 'nil' value}}
+  throw nil  // expected-error {{cannot infer concrete Error for thrown 'nil' value}}
 }
 
 
@@ -407,7 +473,8 @@ func testThrowNil() throws {
 // Even if the condition fails to typecheck, save it in the AST anyway; the old
 // condition may have contained a SequenceExpr.
 func r23684220(_ b: Any) {
-  if let _ = b ?? b {} // expected-error {{initializer for conditional binding must have Optional type, not 'Any' (aka 'protocol<>')}}
+  if let _ = b ?? b {} // expected-error {{initializer for conditional binding must have Optional type, not 'Any'}}
+  // expected-warning@-1 {{left side of nil coalescing operator '??' has non-optional type 'Any', so the right side is never used}}
 }
 
 
@@ -427,11 +494,12 @@ func f21080671() {
 // <rdar://problem/24467411> QoI: Using "&& #available" should fixit to comma
 // https://twitter.com/radexp/status/694561060230184960
 func f(_ x : Int, y : Int) {
-  if x == y && #available(iOS 52, *) {}  // expected-error {{expected ',' joining parts of a multi-clause condition}} {{13-15=,}}
-  if #available(iOS 52, *) && x == y {}  // expected-error {{expected ',' joining parts of a multi-clause condition}} {{28-30=,}}
+  if x == y && #available(iOS 52, *) {}  // expected-error {{expected ',' joining parts of a multi-clause condition}} {{12-15=,}}
+  if #available(iOS 52, *) && x == y {}  // expected-error {{expected ',' joining parts of a multi-clause condition}} {{27-30=,}}
 
   // https://twitter.com/radexp/status/694790631881883648
-  if x == y && let _ = Optional(y) {}  // expected-error {{expected ',' joining parts of a multi-clause condition}} {{13-15=,}}
+  if x == y && let _ = Optional(y) {}  // expected-error {{expected ',' joining parts of a multi-clause condition}} {{12-15=,}}
+  if x == y&&let _ = Optional(y) {}  // expected-error {{expected ',' joining parts of a multi-clause condition}} {{12-14=,}}
 }
 
 
@@ -442,7 +510,8 @@ enum Type {
   case Bar
 }
 func r25178926(_ a : Type) {
-  switch a {
+  switch a { // expected-error {{switch must be exhaustive}}
+  // expected-note@-1 {{missing case: '.Bar'}}
   case .Foo, .Bar where 1 != 100:
     // expected-warning @-1 {{'where' only applies to the second pattern match in this case}}
     // expected-note @-2 {{disambiguate by adding a line break between them if this is desired}} {{14-14=\n       }}
@@ -450,24 +519,119 @@ func r25178926(_ a : Type) {
     break
   }
 
-  switch a {
+  switch a { // expected-error {{switch must be exhaustive}}
+  // expected-note@-1 {{missing case: '.Bar'}}
   case .Foo: break
   case .Bar where 1 != 100: break
   }
 
-  switch a {
+  switch a { // expected-error {{switch must be exhaustive}}
+  // expected-note@-1 {{missing case: '.Bar'}}
   case .Foo,  // no warn
        .Bar where 1 != 100:
     break
   }
 
-  switch a {
+  switch a { // expected-error {{switch must be exhaustive}}
+  // expected-note@-1 {{missing case: '.Foo'}}
+  // expected-note@-2 {{missing case: '.Bar'}}
   case .Foo where 1 != 100, .Bar where 1 != 100:
     break
   }
 }
 
+do {
+  guard 1 == 2 else {
+    break // expected-error {{unlabeled 'break' is only allowed inside a loop or switch, a labeled break is required to exit an if or do}}
+  }
+}
 
+func fn(a: Int) {
+  guard a < 1 else {
+    break // expected-error {{'break' is only allowed inside a loop, if, do, or switch}}
+  }
+}
+
+func fn(x: Int) {
+  if x >= 0 {
+    guard x < 1 else {
+      guard x < 2 else {
+        break // expected-error {{unlabeled 'break' is only allowed inside a loop or switch, a labeled break is required to exit an if or do}}
+      }
+      return
+    }
+  }
+}
+
+func bad_if() {
+  if 1 {} // expected-error {{'Int' is not convertible to 'Bool'}}
+  if (x: false) {} // expected-error {{'(x: Bool)' is not convertible to 'Bool'}}
+  if (x: 1) {} // expected-error {{'(x: Int)' is not convertible to 'Bool'}}
+}
+
+// Typo correction for loop labels
+for _ in [1] {
+  break outerloop // expected-error {{use of unresolved label 'outerloop'}}
+  continue outerloop // expected-error {{use of unresolved label 'outerloop'}}
+}
+while true {
+  break outerloop // expected-error {{use of unresolved label 'outerloop'}}
+  continue outerloop // expected-error {{use of unresolved label 'outerloop'}}
+}
+repeat {
+  break outerloop // expected-error {{use of unresolved label 'outerloop'}}
+  continue outerloop // expected-error {{use of unresolved label 'outerloop'}}
+} while true
+
+outerLoop: for _ in [1] { // expected-note {{'outerLoop' declared here}}
+  break outerloop // expected-error {{use of unresolved label 'outerloop'; did you mean 'outerLoop'?}} {{9-18=outerLoop}}
+}
+outerLoop: for _ in [1] { // expected-note {{'outerLoop' declared here}}
+  continue outerloop // expected-error {{use of unresolved label 'outerloop'; did you mean 'outerLoop'?}} {{12-21=outerLoop}}
+}
+outerLoop: while true { // expected-note {{'outerLoop' declared here}}
+  break outerloop // expected-error {{use of unresolved label 'outerloop'; did you mean 'outerLoop'?}} {{9-18=outerLoop}}
+}
+outerLoop: while true { // expected-note {{'outerLoop' declared here}}
+  continue outerloop // expected-error {{use of unresolved label 'outerloop'; did you mean 'outerLoop'?}} {{12-21=outerLoop}}
+}
+outerLoop: repeat { // expected-note {{'outerLoop' declared here}}
+  break outerloop // expected-error {{use of unresolved label 'outerloop'; did you mean 'outerLoop'?}} {{9-18=outerLoop}}
+} while true
+outerLoop: repeat { // expected-note {{'outerLoop' declared here}}
+  continue outerloop // expected-error {{use of unresolved label 'outerloop'; did you mean 'outerLoop'?}} {{12-21=outerLoop}}
+} while true
+
+outerLoop1: for _ in [1] { // expected-note {{did you mean 'outerLoop1'?}} {{11-20=outerLoop1}}
+  outerLoop2: for _ in [1] { // expected-note {{did you mean 'outerLoop2'?}} {{11-20=outerLoop2}}
+    break outerloop // expected-error {{use of unresolved label 'outerloop'}}
+  }
+}
+outerLoop1: for _ in [1] { // expected-note {{did you mean 'outerLoop1'?}} {{14-23=outerLoop1}}
+  outerLoop2: for _ in [1] { // expected-note {{did you mean 'outerLoop2'?}} {{14-23=outerLoop2}}
+    continue outerloop // expected-error {{use of unresolved label 'outerloop'}}
+  }
+}
+outerLoop1: while true { // expected-note {{did you mean 'outerLoop1'?}} {{11-20=outerLoop1}}
+  outerLoop2: while true { // expected-note {{did you mean 'outerLoop2'?}} {{11-20=outerLoop2}}
+    break outerloop // expected-error {{use of unresolved label 'outerloop'}}
+  }
+}
+outerLoop1: while true { // expected-note {{did you mean 'outerLoop1'?}} {{14-23=outerLoop1}}
+  outerLoop2: while true { // expected-note {{did you mean 'outerLoop2'?}} {{14-23=outerLoop2}}
+    continue outerloop // expected-error {{use of unresolved label 'outerloop'}}
+  }
+}
+outerLoop1: repeat { // expected-note {{did you mean 'outerLoop1'?}} {{11-20=outerLoop1}}
+  outerLoop2: repeat { // expected-note {{did you mean 'outerLoop2'?}} {{11-20=outerLoop2}}
+    break outerloop // expected-error {{use of unresolved label 'outerloop'}}
+  } while true
+} while true
+outerLoop1: repeat { // expected-note {{did you mean 'outerLoop1'?}} {{14-23=outerLoop1}}
+  outerLoop2: repeat { // expected-note {{did you mean 'outerLoop2'?}} {{14-23=outerLoop2}}
+    continue outerloop // expected-error {{use of unresolved label 'outerloop'}}
+  } while true
+} while true
 
 // Errors in case syntax
 class

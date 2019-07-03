@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -30,6 +30,7 @@ namespace swift {
 namespace irgen {
   class Address;
   class OwnedAddress;
+  enum class IsaEncoding : unsigned char;
 
 /// A heap layout is the result of laying out a complete structure for
 /// heap-allocation.
@@ -121,7 +122,7 @@ void emitDeallocatePartialClassInstance(IRGenFunction &IGF,
 OwnedAddress
 emitAllocateBox(IRGenFunction &IGF,
                 CanSILBoxType boxType,
-                CanSILBoxType boxInterfaceType,
+                GenericEnvironment *env,
                 const llvm::Twine &name);
 
 /// Deallocate a box whose value is uninitialized.
@@ -131,6 +132,53 @@ void emitDeallocateBox(IRGenFunction &IGF, llvm::Value *box,
 /// Project the address of the value inside a box.
 Address emitProjectBox(IRGenFunction &IGF, llvm::Value *box,
                        CanSILBoxType boxType);
+
+/// Allocate a boxed value based on the boxed type. Returns the address of the
+/// storage for the value.
+Address
+emitAllocateExistentialBoxInBuffer(IRGenFunction &IGF, SILType boxedType,
+                                   Address destBuffer, GenericEnvironment *env,
+                                   const llvm::Twine &name, bool isOutlined);
+
+/// Given an opaque class instance pointer, produce the type
+/// metadata reference as a %type*.
+llvm::Value *emitDynamicTypeOfOpaqueHeapObject(IRGenFunction &IGF,
+                                               llvm::Value *object,
+                                               MetatypeRepresentation rep);
+
+/// Given a heap-object instance, with some heap-object type,
+/// produce a reference to its type metadata.
+llvm::Value *emitDynamicTypeOfHeapObject(IRGenFunction &IGF,
+                                         llvm::Value *object,
+                                         MetatypeRepresentation rep,
+                                         SILType objectType,
+                                         bool allowArtificialSubclasses = false);
+
+/// Given a non-tagged object pointer, load a pointer to its class object.
+llvm::Value *emitLoadOfObjCHeapMetadataRef(IRGenFunction &IGF,
+                                           llvm::Value *object);
+
+/// Given a heap-object instance, with some heap-object type, produce a
+/// reference to its heap metadata by dynamically asking the runtime for it.
+llvm::Value *emitHeapMetadataRefForUnknownHeapObject(IRGenFunction &IGF,
+                                                     llvm::Value *object);
+
+/// Given a heap-object instance, with some heap-object type,
+/// produce a reference to its heap metadata.
+llvm::Value *emitHeapMetadataRefForHeapObject(IRGenFunction &IGF,
+                                              llvm::Value *object,
+                                              CanType objectType,
+                                              bool suppressCast = false);
+
+/// Given a heap-object instance, with some heap-object type,
+/// produce a reference to its heap metadata.
+llvm::Value *emitHeapMetadataRefForHeapObject(IRGenFunction &IGF,
+                                              llvm::Value *object,
+                                              SILType objectType,
+                                              bool suppressCast = false);
+
+/// What isa-encoding mechanism does a type use?
+IsaEncoding getIsaEncodingForType(IRGenModule &IGM, CanType type);
 
 } // end namespace irgen
 } // end namespace swift

@@ -1,5 +1,5 @@
-// RUN: %target-swift-frontend -Xllvm -sil-full-demangle %s -emit-ir -g -o - | FileCheck %s
-// RUN: %target-swift-frontend -Xllvm -sil-full-demangle %s -emit-sil -emit-verbose-sil -g -o - | FileCheck -check-prefix=CHECK-SIL %s
+// RUN: %target-swift-frontend -Xllvm -sil-full-demangle %s -emit-ir -g -o - | %FileCheck %s
+// RUN: %target-swift-frontend -Xllvm -sil-full-demangle %s -emit-sil -emit-verbose-sil -g -o - | %FileCheck -check-prefix=CHECK-SIL %s
 import StdlibUnittest
 
 class Obj {}
@@ -8,7 +8,7 @@ func foo (_ a : Int64) throws -> Void {
   _blackHole(a)
 }
 
-// CHECK-SIL: // main.testDoStmt () throws -> ()
+// CHECK-SIL: // main.testDoStmt() throws -> ()
 func testDoStmt() throws -> Void {
   _blackHole(23)
 
@@ -26,7 +26,7 @@ func testDoStmt() throws -> Void {
 
 try testDoStmt()
 
-// CHECK-SIL: // main.testDoWhileStmt () -> ()
+// CHECK-SIL: // main.testDoWhileStmt() -> ()
 func testDoWhileStmt() -> Void {
   // CHECK-NOT: !DILocation(line: [[@LINE+1]]
   do {

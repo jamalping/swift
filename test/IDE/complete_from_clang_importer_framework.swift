@@ -1,11 +1,11 @@
 // RUN: %target-swift-ide-test(mock-sdk: %clang-importer-sdk) -code-completion -source-filename %s -code-completion-token=CLANG_UNQUAL_1 > %t.compl.txt
-// RUN: FileCheck %s -check-prefix=CLANG_CTYPES < %t.compl.txt
-// RUN: FileCheck %s -check-prefix=CLANG_MACROS < %t.compl.txt
-// RUN: FileCheck %s -check-prefix=CLANG_DARWIN < %t.compl.txt
-// RUN: FileCheck %s -check-prefix=CLANG_DARWIN_NEG < %t.compl.txt
+// RUN: %FileCheck %s -check-prefix=CLANG_CTYPES < %t.compl.txt
+// RUN: %FileCheck %s -check-prefix=CLANG_MACROS < %t.compl.txt
+// RUN: %FileCheck %s -check-prefix=CLANG_DARWIN < %t.compl.txt
+// RUN: %FileCheck %s -check-prefix=CLANG_DARWIN_NEG < %t.compl.txt
 
 // RUN: %target-swift-ide-test(mock-sdk: %clang-importer-sdk) -code-completion -source-filename %s -code-completion-token=CLANG_MEMBER1 > %t.compl.txt
-// RUN: FileCheck %s -check-prefix=CLANG_MEMBERS1 < %t.compl.txt
+// RUN: %FileCheck %s -check-prefix=CLANG_MEMBERS1 < %t.compl.txt
 
 import macros
 import ctypes
@@ -59,7 +59,8 @@ func testCompleteModuleQualifiedMacros1() {
 func testClangMember1() {
 	var FS = FooStruct1()
 	FS.#^CLANG_MEMBER1^#
-// CLANG_MEMBERS1: Begin completions, 2 items
+// CLANG_MEMBERS1: Begin completions, 3 items
 // CLANG_MEMBERS1-DAG: Decl[InstanceVar]/CurrNominal/keyword[x, Struct1]/recommended[y]: x[#Int32#]{{; name=.+$}}
 // CLANG_MEMBERS1-DAG: Decl[InstanceVar]/CurrNominal/keyword[y, Struct1]/recommendedover[x]: y[#Double#]{{; name=.+$}}
+// CLANG_MEMBERS1-DAG: Keyword[self]/CurrNominal: self[#FooStruct1#]; name=self
 }

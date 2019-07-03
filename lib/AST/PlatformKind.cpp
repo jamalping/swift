@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -51,36 +51,46 @@ Optional<PlatformKind> swift::platformFromString(StringRef Name) {
   return llvm::StringSwitch<Optional<PlatformKind>>(Name)
 #define AVAILABILITY_PLATFORM(X, PrettyName) .Case(#X, PlatformKind::X)
 #include "swift/AST/PlatformKinds.def"
+      .Case("macOS", PlatformKind::OSX)
+      .Case("macOSApplicationExtension", PlatformKind::OSXApplicationExtension)
       .Default(Optional<PlatformKind>());
 }
 
-bool swift::isPlatformActive(PlatformKind Platform, LangOptions &LangOpts) {
+static bool isPlatformActiveForTarget(PlatformKind Platform,
+                                      const llvm::Triple &Target,
+                                      bool EnableAppExtensionRestrictions) {
   if (Platform == PlatformKind::none)
     return true;
   
   if (Platform == PlatformKind::OSXApplicationExtension ||
       Platform == PlatformKind::iOSApplicationExtension)
-    if (!LangOpts.EnableAppExtensionRestrictions)
+    if (!EnableAppExtensionRestrictions)
       return false;
   
   // FIXME: This is an awful way to get the current OS.
   switch (Platform) {
     case PlatformKind::OSX:
     case PlatformKind::OSXApplicationExtension:
-      return LangOpts.Target.isMacOSX();
+      return Target.isMacOSX();
     case PlatformKind::iOS:
     case PlatformKind::iOSApplicationExtension:
-      return LangOpts.Target.isiOS() && !LangOpts.Target.isTvOS();
+      return Target.isiOS() && !Target.isTvOS();
     case PlatformKind::tvOS:
     case PlatformKind::tvOSApplicationExtension:
-      return LangOpts.Target.isTvOS();
+      return Target.isTvOS();
     case PlatformKind::watchOS:
     case PlatformKind::watchOSApplicationExtension:
-      return LangOpts.Target.isWatchOS();
+      return Target.isWatchOS();
     case PlatformKind::none:
       llvm_unreachable("handled above");
   }
   llvm_unreachable("bad PlatformKind");
+}
+
+bool swift::isPlatformActive(PlatformKind Platform, LangOptions &LangOpts) {
+  llvm::Triple TT = LangOpts.Target;
+  return isPlatformActiveForTarget(Platform, TT,
+                                   LangOpts.EnableAppExtensionRestrictions);
 }
 
 PlatformKind swift::targetPlatform(LangOptions &LangOpts) {

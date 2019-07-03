@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -15,13 +15,18 @@ import TestsUtils
 // A micro-benchmark for recursive divide and conquer problems.
 // The program performs integration via Gaussian Quadrature
 
+public let IntegrateTest = BenchmarkInfo(
+  name: "Integrate",
+  runFunction: run_Integrate,
+  tags: [.validation, .algorithm])
+
 class Integrate {
-  static let epsilon = 1.0e-9;
+  static let epsilon = 1.0e-9
 
-  let fun: (Double) -> Double;
+  let fun: (Double) -> Double
 
-  init (f: (Double) -> Double) {
-    fun = f;
+  init (f: @escaping (Double) -> Double) {
+    fun = f
   }
     
   private func recEval(_ l: Double, fl: Double, r: Double, fr: Double, a: Double) -> Double {
@@ -50,7 +55,7 @@ class Integrate {
 
 @inline(never)
 public func run_Integrate(_ N: Int) {
-  let obj = Integrate(f: { x in (x*x + 1.0) * x});
+  let obj = Integrate(f: { x in (x*x + 1.0) * x})
   let left = 0.0
   let right = 10.0
   let ref_result = 2550.0
@@ -63,6 +68,5 @@ public func run_Integrate(_ N: Int) {
     }
   }
 
-  CheckResults(abs(result - ref_result) < bound,
-               "Incorrect results in Integrate: abs(\(result) - \(ref_result)) > \(bound)")
+  CheckResults(abs(result - ref_result) < bound)
 }

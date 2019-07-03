@@ -2,22 +2,31 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 #ifndef SWIFT_RUNTIME_CONCURRENTUTILS_H
 #define SWIFT_RUNTIME_CONCURRENTUTILS_H
 #include <iterator>
+#include <algorithm>
 #include <atomic>
+#include <functional>
 #include <stdint.h>
+#include <vector>
+#include "llvm/Support/Allocator.h"
+#include "Atomic.h"
+#include "Debug.h"
+#include "Mutex.h"
 
-#if defined(__FreeBSD__)
+#if defined(__FreeBSD__) || defined(__CYGWIN__) || defined(__HAIKU__)
 #include <stdio.h>
 #endif
+
+namespace swift {
 
 /// This is a node in a concurrent linked list.
 template <class ElemTy> struct ConcurrentListNode {
@@ -123,24 +132,29 @@ template <class ElemTy> struct ConcurrentList {
   std::atomic<ConcurrentListNode<ElemTy> *> First;
 };
 
-/// A concurrent map that is implemented using a binary tree. It supports
-/// concurrent insertions but does not support removals or rebalancing of
-/// the tree.
-///
-/// The entry type must provide the following operations:
-///
-///   /// For debugging purposes only. Summarize this key as an integer value.
-///   long getKeyIntValueForDump() const;
-///
-///   /// A ternary comparison.  KeyTy is the type of the key provided
-///   /// to find or getOrInsert.
-///   int compareWithKey(KeyTy key) const;
-///
-///   /// Return the amount of extra trailing space required by an entry,
-///   /// where KeyTy is the type of the first argument to getOrInsert and
-///   /// ArgTys is the type of the remaining arguments.
-///   static size_t getExtraAllocationSize(KeyTy key, ArgTys...)
-template <class EntryTy> class ConcurrentMap {
+/// A utility function for ordering two integers, which is useful
+/// for implementing compareWithKey.
+template <class T>
+static inline int compareIntegers(T left, T right) {
+  return (left == right ? 0 : left < right ? -1 : 1);
+}
+
+/// A utility function for ordering two pointers, which is useful
+/// for implementing compareWithKey.
+template <class T>
+static inline int comparePointers(const T *left, const T *right) {
+  return (left == right ? 0 : std::less<const T *>()(left, right) ? -1 : 1);
+}
+
+template <class EntryTy, bool ProvideDestructor, class Allocator>
+class ConcurrentMapBase;
+
+/// The partial specialization of ConcurrentMapBase whose destructor is
+/// trivial.  The other implementation inherits from this, so this is a
+/// base for all ConcurrentMaps.
+template <class EntryTy, class Allocator>
+class ConcurrentMapBase<EntryTy, false, Allocator> : protected Allocator {
+protected:
   struct Node {
     std::atomic<Node*> Left;
     std::atomic<Node*> Right;
@@ -153,15 +167,7 @@ template <class EntryTy> class ConcurrentMap {
     Node(const Node &) = delete;
     Node &operator=(const Node &) = delete;
 
-    ~Node() {
-      // These can be relaxed accesses because there is no safe way for
-      // another thread to race an access to this node with our destruction
-      // of it.
-      ::delete Left.load(std::memory_order_relaxed);
-      ::delete Right.load(std::memory_order_relaxed);
-    }
-
-#ifndef NDEBUG
+  #ifndef NDEBUG
     void dump() const {
       auto L = Left.load(std::memory_order_acquire);
       auto R = Right.load(std::memory_order_acquire);
@@ -178,11 +184,98 @@ template <class EntryTy> class ConcurrentMap {
         printf("\"%p\":f2 -> \"%p\":f0;\n", this, R);
       }
     }
-#endif
+  #endif
   };
 
-  /// The root of the tree.
   std::atomic<Node*> Root;
+
+  constexpr ConcurrentMapBase() : Root(nullptr) {}
+
+  // Implicitly trivial destructor.
+  ~ConcurrentMapBase() = default;
+
+  void destroyNode(Node *node) {
+    assert(node && "destroying null node");
+    auto allocSize = sizeof(Node) + node->Payload.getExtraAllocationSize();
+
+    // Destroy the node's payload.
+    node->~Node();
+
+    // Deallocate the node.  The static_cast here is required
+    // because LLVM's allocator API is insane.
+    this->Deallocate(static_cast<void*>(node), allocSize);
+  }
+};
+
+/// The partial specialization of ConcurrentMapBase which provides a
+/// non-trivial destructor.
+template <class EntryTy, class Allocator>
+class ConcurrentMapBase<EntryTy, true, Allocator>
+    : protected ConcurrentMapBase<EntryTy, false, Allocator> {
+protected:
+  using super = ConcurrentMapBase<EntryTy, false, Allocator>;
+  using Node = typename super::Node;
+
+  constexpr ConcurrentMapBase() {}
+
+  ~ConcurrentMapBase() {
+    destroyTree(this->Root);
+  }
+
+private:
+  void destroyTree(const std::atomic<Node*> &edge) {
+    // This can be a relaxed load because destruction is not allowed to race
+    // with other operations.
+    auto node = edge.load(std::memory_order_relaxed);
+    if (!node) return;
+
+    // Destroy the node's children.
+    destroyTree(node->Left);
+    destroyTree(node->Right);
+
+    // Destroy the node itself.
+    this->destroyNode(node);
+  }
+};
+
+/// A concurrent map that is implemented using a binary tree. It supports
+/// concurrent insertions but does not support removals or rebalancing of
+/// the tree.
+///
+/// The entry type must provide the following operations:
+///
+///   /// For debugging purposes only. Summarize this key as an integer value.
+///   intptr_t getKeyIntValueForDump() const;
+///
+///   /// A ternary comparison.  KeyTy is the type of the key provided
+///   /// to find or getOrInsert.
+///   int compareWithKey(KeyTy key) const;
+///
+///   /// Return the amount of extra trailing space required by an entry,
+///   /// where KeyTy is the type of the first argument to getOrInsert and
+///   /// ArgTys is the type of the remaining arguments.
+///   static size_t getExtraAllocationSize(KeyTy key, ArgTys...)
+///
+///   /// Return the amount of extra trailing space that was requested for
+///   /// this entry.  This method is only used to compute the size of the
+///   /// object during node deallocation; it does not need to return a
+///   /// correct value so long as the allocator's Deallocate implementation
+///   /// ignores this argument.
+///   size_t getExtraAllocationSize() const;
+///
+/// If ProvideDestructor is false, the destructor will be trivial.  This
+/// can be appropriate when the object is declared at global scope.
+template <class EntryTy, bool ProvideDestructor = true,
+          class Allocator = llvm::MallocAllocator>
+class ConcurrentMap
+      : private ConcurrentMapBase<EntryTy, ProvideDestructor, Allocator> {
+  using super = ConcurrentMapBase<EntryTy, ProvideDestructor, Allocator>;
+
+  using Node = typename super::Node;
+
+  /// Inherited from base class:
+  ///   std::atomic<Node*> Root;
+  using super::Root;
 
   /// This member stores the address of the last node that was found by the
   /// search procedure. We cache the last search to accelerate code that
@@ -190,13 +283,18 @@ template <class EntryTy> class ConcurrentMap {
   std::atomic<Node*> LastSearch;
 
 public:
-  constexpr ConcurrentMap() : Root(nullptr), LastSearch(nullptr) {}
+  constexpr ConcurrentMap() : LastSearch(nullptr) {}
 
   ConcurrentMap(const ConcurrentMap &) = delete;
   ConcurrentMap &operator=(const ConcurrentMap &) = delete;
 
-  ~ConcurrentMap() {
-    ::delete Root.load(std::memory_order_relaxed);
+  // ConcurrentMap<T, false> must have a trivial destructor.
+  ~ConcurrentMap() = default;
+
+public:
+
+  Allocator &getAllocator() {
+    return *this;
   }
 
 #ifndef NDEBUG
@@ -275,7 +373,7 @@ public:
         // If it's equal, we can use this node.
         if (comparisonResult == 0) {
           // Destroy the node we allocated before if we're carrying one around.
-          ::delete newNode;
+          if (newNode) this->destroyNode(newNode);
 
           // Cache and report that we found an existing node.
           LastSearch.store(node, std::memory_order_release);
@@ -291,7 +389,7 @@ public:
       if (!newNode) {
         size_t allocSize =
           sizeof(Node) + EntryTy::getExtraAllocationSize(key, args...);
-        void *memory = ::operator new(allocSize);
+        void *memory = this->Allocate(allocSize, alignof(Node));
         newNode = ::new (memory) Node(key, std::forward<ArgTys>(args)...);
       }
 
@@ -312,5 +410,137 @@ public:
     }
   }
 };
+
+
+/// An append-only array that can be read without taking locks. Writes
+/// are still locked and serialized, but only with respect to other
+/// writes.
+template <class ElemTy> struct ConcurrentReadableArray {
+private:
+  /// The struct used for the array's storage. The `Elem` member is
+  /// considered to be the first element of a variable-length array,
+  /// whose size is determined by the allocation. The `Capacity` member
+  /// from `ConcurrentReadableArray` indicates how large it can be.
+  struct Storage {
+    std::atomic<size_t> Count;
+    typename std::aligned_storage<sizeof(ElemTy), alignof(ElemTy)>::type Elem;
+
+    static Storage *allocate(size_t capacity) {
+      auto size = sizeof(Storage) + (capacity - 1) * sizeof(Storage().Elem);
+      auto *ptr = reinterpret_cast<Storage *>(malloc(size));
+      if (!ptr) swift::crash("Could not allocate memory.");
+      ptr->Count.store(0, std::memory_order_relaxed);
+      return ptr;
+    }
+
+    void deallocate() {
+      for (size_t i = 0; i < Count; i++) {
+        data()[i].~ElemTy();
+      }
+      free(this);
+    }
+
+    ElemTy *data() {
+      return reinterpret_cast<ElemTy *>(&Elem);
+    }
+  };
+  
+  size_t Capacity;
+  std::atomic<size_t> ReaderCount;
+  std::atomic<Storage *> Elements;
+  Mutex WriterLock;
+  std::vector<Storage *> FreeList;
+  
+  void incrementReaders() {
+    ReaderCount.fetch_add(1, std::memory_order_acquire);
+  }
+  
+  void decrementReaders() {
+    ReaderCount.fetch_sub(1, std::memory_order_release);
+  }
+  
+  void deallocateFreeList() {
+    for (Storage *storage : FreeList)
+      storage->deallocate();
+    FreeList.clear();
+    FreeList.shrink_to_fit();
+  }
+  
+public:
+  struct Snapshot {
+    ConcurrentReadableArray *Array;
+    const ElemTy *Start;
+    size_t Count;
+    
+    Snapshot(ConcurrentReadableArray *array, const ElemTy *start, size_t count)
+      : Array(array), Start(start), Count(count) {}
+    
+    Snapshot(const Snapshot &other)
+      : Array(other.Array), Start(other.Start), Count(other.Count) {
+      Array->incrementReaders();
+    }
+    
+    ~Snapshot() {
+      Array->decrementReaders();
+    }
+    
+    const ElemTy *begin() { return Start; }
+    const ElemTy *end() { return Start + Count; }
+    size_t count() { return Count; }
+  };
+  
+  // This type cannot be safely copied, moved, or deleted.
+  ConcurrentReadableArray(const ConcurrentReadableArray &) = delete;
+  ConcurrentReadableArray(ConcurrentReadableArray &&) = delete;
+  ConcurrentReadableArray &operator=(const ConcurrentReadableArray &) = delete;
+  
+  ConcurrentReadableArray() : Capacity(0), ReaderCount(0), Elements(nullptr) {}
+  
+  ~ConcurrentReadableArray() {
+    assert(ReaderCount.load(std::memory_order_acquire) == 0 &&
+           "deallocating ConcurrentReadableArray with outstanding snapshots");
+    deallocateFreeList();
+  }
+  
+  void push_back(const ElemTy &elem) {
+    ScopedLock guard(WriterLock);
+    
+    auto *storage = Elements.load(std::memory_order_relaxed);
+    auto count = storage ? storage->Count.load(std::memory_order_relaxed) : 0;
+    if (count >= Capacity) {
+      auto newCapacity = std::max((size_t)16, count * 2);
+      auto *newStorage = Storage::allocate(newCapacity);
+      if (storage) {
+        std::copy(storage->data(), storage->data() + count, newStorage->data());
+        newStorage->Count.store(count, std::memory_order_relaxed);
+        FreeList.push_back(storage);
+      }
+      
+      storage = newStorage;
+      Capacity = newCapacity;
+      Elements.store(storage, std::memory_order_release);
+    }
+    
+    new(&storage->data()[count]) ElemTy(elem);
+    storage->Count.store(count + 1, std::memory_order_release);
+    
+    if (ReaderCount.load(std::memory_order_acquire) == 0)
+      deallocateFreeList();
+  }
+  
+  Snapshot snapshot() {
+    incrementReaders();
+    auto *storage = Elements.load(SWIFT_MEMORY_ORDER_CONSUME);
+    if (storage == nullptr) {
+      return Snapshot(this, nullptr, 0);
+    }
+    
+    auto count = storage->Count.load(std::memory_order_acquire);
+    const auto *ptr = storage->data();
+    return Snapshot(this, ptr, count);
+  }
+};
+
+} // end namespace swift
 
 #endif // SWIFT_RUNTIME_CONCURRENTUTILS_H

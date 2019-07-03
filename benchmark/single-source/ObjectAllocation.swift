@@ -2,16 +2,25 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
-// This test checks the performance of allocations.
 import TestsUtils
+
+// This test checks the performance of allocations.
+// 53% _swift_release_dealloc
+// 30% _swift_alloc_object
+// 10% retain/release
+public var ObjectAllocation = BenchmarkInfo(
+  name: "ObjectAllocation",
+  runFunction: run_ObjectAllocation,
+  tags: [.runtime, .cpubench]
+)
 
 final class XX {
   var xx: Int
@@ -123,13 +132,8 @@ public func run_ObjectAllocation(_ N: Int) {
     ArrayResult = testArray()
   }
 
-  CheckResults(SingleObjectResult == 499500,
-               "Incorrect results in testSingleObject")
-  CheckResults(TreeResult == 90000,
-               "Incorrect results in testTree")
-  CheckResults(ListResult == 48375,
-               "Incorrect results in testList")
-  CheckResults(ArrayResult == 3000,
-               "Incorrect results in testArray")
+  CheckResults(SingleObjectResult == 499500)
+  CheckResults(TreeResult == 90000)
+  CheckResults(ListResult == 48375)
+  CheckResults(ArrayResult == 3000)
 }
-

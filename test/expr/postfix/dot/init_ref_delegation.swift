@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 // Tests for initializer delegation via self.init(...).
 
@@ -68,7 +68,7 @@ class Z0 {
     // expected-note @+2 {{delegation occurs here}}
 
     self.init(5, 5) // expected-error{{cannot invoke 'Z0.init' with an argument list of type '(Int, Int)'}}
-    // expected-note @-1 {{overloads for 'Z0.init' exist with these partially matching parameter lists: (), (value: Int), (value: Double)}}
+    // expected-note @-1 {{overloads for 'Z0.init' exist with these partially matching parameter lists: (), (value: Double), (value: Int)}}
   }
 
   init(value: Int) { /* ... */ }
@@ -78,7 +78,7 @@ class Z0 {
 struct Z1 {
   init() {
     self.init(5, 5) // expected-error{{cannot invoke 'Z1.init' with an argument list of type '(Int, Int)'}}
-  // expected-note @-1 {{overloads for 'Z1.init' exist with these partially matching parameter lists: (), (value: Int), (value: Double)}}
+  // expected-note @-1 {{overloads for 'Z1.init' exist with these partially matching parameter lists: (), (value: Double), (value: Int)}}
   }
 
   init(value: Int) { /* ... */ }
@@ -91,7 +91,7 @@ enum Z2 {
 
   init() {
     self.init(5, 5) // expected-error{{cannot invoke 'Z2.init' with an argument list of type '(Int, Int)'}}
-    // expected-note @-1 {{overloads for 'Z2.init' exist with these partially matching parameter lists: (), (value: Int), (value: Double)}}
+    // expected-note @-1 {{overloads for 'Z2.init' exist with these partially matching parameter lists: (), (value: Double), (value: Int)}}
   }
 
   init(value: Int) { /* ... */ }
@@ -101,7 +101,7 @@ enum Z2 {
 // Ill-formed initialization: wrong context.
 class Z3 {
   func f() {
-    self.init() // expected-error{{'init' is a member of the type; insert '.dynamicType' to initialize a new object of the same dynamic type}} {{9-9=.dynamicType}}
+    self.init() // expected-error{{'init' is a member of the type; use 'type(of: ...)' to initialize a new object of the same dynamic type}} {{5-5=type(of: }} {{9-9=)}}
   }
 
   init() { }
@@ -112,8 +112,8 @@ class Z4 {
   init() {} // expected-note{{selected non-required initializer}}
 
   convenience init(other: Z4) {
-    other.init() // expected-error{{'init' is a member of the type; insert '.dynamicType' to initialize a new object of the same dynamic type}} {{10-10=.dynamicType}}
-    other.dynamicType.init() // expected-error{{must use a 'required' initializer}} expected-warning{{unused}}
+    other.init() // expected-error{{'init' is a member of the type; use 'type(of: ...)' to initialize a new object of the same dynamic type}} {{5-5=type(of: }} {{10-10=)}}
+    type(of: other).init() // expected-error{{must use a 'required' initializer}}
   }
 }
 
@@ -121,7 +121,7 @@ class Z5 : Z4 {
   override init() { }
 
   convenience init(other: Z5) {
-    other.init() // expected-error{{'init' is a member of the type; insert '.dynamicType' to initialize a new object of the same dynamic type}} {{10-10=.dynamicType}}
+    other.init() // expected-error{{'init' is a member of the type; use 'type(of: ...)' to initialize a new object of the same dynamic type}} {{5-5=type(of: }} {{10-10=)}}
   }
 }
 
@@ -150,8 +150,8 @@ struct RDar16603812 {
    var i = 42
    init() {}
    func foo() {
-      self.init() // expected-error {{'init' is a member of the type; insert '.dynamicType' to initialize a new object of the same dynamic type}} {{11-11=.dynamicType}}
-      self.dynamicType.init() // expected-warning{{result of 'RDar16603812' initializer is unused}}
+      self.init() // expected-error {{'init' is a member of the type; use 'type(of: ...)' to initialize a new object of the same dynamic type}} {{7-7=type(of: }} {{11-11=)}}
+      type(of: self).init() // expected-warning{{result of 'RDar16603812' initializer is unused}}
    }
 }
 
@@ -199,7 +199,7 @@ class D: C {
   }
 
   func foo() {
-    self.init(x: 0) // expected-error{{'init' is a member of the type; insert '.dynamicType' to initialize a new object of the same dynamic type}} {{9-9=.dynamicType}}
+    self.init(x: 0) // expected-error{{'init' is a member of the type; use 'type(of: ...)' to initialize a new object of the same dynamic type}} {{5-5=type(of: }} {{9-9=)}}
   }
   func bar() {
     super.init(x: 0) // expected-error{{'super.init' cannot be called outside of an initializer}}
@@ -254,31 +254,42 @@ protocol P {
   init(proto: String)
 }
 
-func foo<T: C where T: P>(_ x: T, y: T.Type) {
-  var c1 = x.dynamicType.init(required: 0)
-  var c2 = x.dynamicType.init(x: 0) // expected-error{{'required' initializer}}
-  var c3 = x.dynamicType.init() // expected-error{{'required' initializer}}
-  var c4 = x.dynamicType.init(proto: "")
+func foo<T: C>(_ x: T, y: T.Type) where T: P {
+  var c1 = type(of: x).init(required: 0)
+  var c2 = type(of: x).init(x: 0) // expected-error{{'required' initializer}}
+  var c3 = type(of: x).init() // expected-error{{'required' initializer}}
+  var c4 = type(of: x).init(proto: "")
 
-  var cf1: (Double) -> T = x.dynamicType.init
-  var cf2: (Int) -> T    = x.dynamicType.init // expected-error{{'required' initializer}}
-  var cf3: () -> T       = x.dynamicType.init // expected-error{{'required' initializer}}
-  var cf4: (String) -> T = x.dynamicType.init
+  var cf1: (Double) -> T = type(of: x).init
+  var cf2: (Int) -> T    = type(of: x).init // expected-error{{'required' initializer}}
+  var cf3: () -> T       = type(of: x).init // expected-error{{'required' initializer}}
+  var cf4: (String) -> T = type(of: x).init
 
-  var c1a = x.dynamicType.init(required: 0)
-  var c2a = x.dynamicType.init(x: 0) // expected-error{{'required' initializer}}
-  var c3a = x.dynamicType.init() // expected-error{{'required' initializer}}
-  var c4a = x.dynamicType.init(proto: "")
+  var c1a = type(of: x).init(required: 0)
+  var c2a = type(of: x).init(x: 0) // expected-error{{'required' initializer}}
+  var c3a = type(of: x).init() // expected-error{{'required' initializer}}
+  var c4a = type(of: x).init(proto: "")
 
-  var ci1 = x.init(required: 0) // expected-error{{'init' is a member of the type; insert '.dynamicType' to initialize a new object of the same dynamic type}} {{14-14=.dynamicType}}
-  var ci2 = x.init(x: 0) // expected-error{{'init' is a member of the type; insert '.dynamicType' to initialize a new object of the same dynamic type}} {{14-14=.dynamicType}}
-  var ci3 = x.init() // expected-error{{'init' is a member of the type; insert '.dynamicType' to initialize a new object of the same dynamic type}} {{14-14=.dynamicType}}
-  var ci4 = x.init(proto: "") // expected-error{{'init' is a member of the type; insert '.dynamicType' to initialize a new object of the same dynamic type}} {{14-14=.dynamicType}}
-
-  var ci1a = x(required: 0) // expected-error{{cannot call value of non-function type 'T'}}
-  var ci2a = x(x: 0) // expected-error{{cannot call value of non-function type 'T'}}
-  var ci3a = x() // expected-error{{cannot call value of non-function type 'T'}}
-  var ci4a = x(proto: "") // expected-error{{cannot call value of non-function type 'T'}}
+  var ci1 = x.init(required: 0) // expected-error{{'init' is a member of the type; use 'type(of: ...)' to initialize a new object of the same dynamic type}} {{13-13=type(of: }} {{14-14=)}}
+  var ci2 = x.init(x: 0) // expected-error{{'init' is a member of the type; use 'type(of: ...)' to initialize a new object of the same dynamic type}} {{13-13=type(of: }} {{14-14=)}}
+  var ci3 = x.init() // expected-error{{'init' is a member of the type; use 'type(of: ...)' to initialize a new object of the same dynamic type}} {{13-13=type(of: }} {{14-14=)}}
+  var ci4 = x.init(proto: "") // expected-error{{'init' is a member of the type; use 'type(of: ...)' to initialize a new object of the same dynamic type}} {{13-13=type(of: }} {{14-14=)}}
+  
+  var z = x
+  z.init(required: 0) // expected-error {{'init' is a member of the type; use assignment to initalize the value instead}} {{4-4= = }}
+  z.init(x: 0) // expected-error {{'init' is a member of the type; use assignment to initalize the value instead}} {{4-4= = }}
+  z.init() // expected-error {{'init' is a member of the type; use assignment to initalize the value instead}} {{4-4= = }}
+  z.init(proto: "") // expected-error {{'init' is a member of the type; use assignment to initalize the value instead}} {{4-4= = }}
+  
+  var ci1a = z.init(required: 0) // expected-error {{'init' is a member of the type; use 'type(of: ...)' to initialize a new object of the same dynamic type}} {{14-14=type(of: }} {{15-15=)}}
+  var ci2a = z.init(x: 0) // expected-error {{'init' is a member of the type; use 'type(of: ...)' to initialize a new object of the same dynamic type}} {{14-14=type(of: }} {{15-15=)}}
+  var ci3a = z.init() // expected-error {{'init' is a member of the type; use 'type(of: ...)' to initialize a new object of the same dynamic type}} {{14-14=type(of: }} {{15-15=)}}
+  var ci4a = z.init(proto: "") // expected-error {{'init' is a member of the type; use 'type(of: ...)' to initialize a new object of the same dynamic type}} {{14-14=type(of: }} {{15-15=)}}
+  
+  var ci1b = x(required: 0) // expected-error{{cannot call value of non-function type 'T'}}
+  var ci2b = x(x: 0) // expected-error{{cannot call value of non-function type 'T'}}
+  var ci3b = x() // expected-error{{cannot call value of non-function type 'T'}}{{15-17=}}
+  var ci4b = x(proto: "") // expected-error{{cannot call value of non-function type 'T'}}
 
   var cm1 = y.init(required: 0)
   var cm2 = y.init(x: 0) // expected-error{{'required' initializer}}
@@ -294,8 +305,7 @@ func foo<T: C where T: P>(_ x: T, y: T.Type) {
   var cs2 = T.init(x: 0) // expected-error{{'required' initializer}}
   var cs3 = T.init() // expected-error{{'required' initializer}}
   var cs4 = T.init(proto: "")
-  var cs5 = T.init(notfound: "") // expected-error{{argument labels '(notfound:)' do not match any available overloads}}
-  // expected-note @-1 {{overloads for 'T.Type.init' exist with these partially matching parameter lists: (x: Int), (required: Double), (proto: String)}}
+  var cs5 = T.init(notfound: "") // expected-error{{incorrect argument label in call (have 'notfound:', expected 'proto:')}}
 
   var csf1: (Double) -> T = T.init
   var csf2: (Int) -> T    = T.init // expected-error{{'required' initializer}}
@@ -315,12 +325,12 @@ func foo<T: C where T: P>(_ x: T, y: T.Type) {
 class TestOverloadSets {
   convenience init() {
     self.init(5, 5) // expected-error{{cannot invoke 'TestOverloadSets.init' with an argument list of type '(Int, Int)'}}
-    // expected-note @-1 {{overloads for 'TestOverloadSets.init' exist with these partially matching parameter lists: (), (a: Z0), (value: Int), (value: Double)}}
+    // expected-note @-1 {{overloads for 'TestOverloadSets.init' exist with these partially matching parameter lists: (), (a: Z0), (value: Double), (value: Int)}}
   }
   
   convenience init(a : Z0) {
     self.init(42 as Int8) // expected-error{{argument labels '(_:)' do not match any available overloads}}
-    // expected-note @-1 {{overloads for 'TestOverloadSets.init' exist with these partially matching parameter lists: (a: Z0), (value: Int), (value: Double)}}
+    // expected-note @-1 {{overloads for 'TestOverloadSets.init' exist with these partially matching parameter lists: (a: Z0), (value: Double), (value: Int)}}
   }
   
   init(value: Int) { /* ... */ }
@@ -334,7 +344,7 @@ class TestNestedExpr {
 
   convenience init(a: Int) {
     let x: () = self.init() // expected-error {{initializer delegation ('self.init') cannot be nested in another statement}}
-    // expected-warning@-1 {{initialization of immutable value 'x' was never used; consider replacing with assignment to '_' or removing it}}
+    // expected-warning@-1 {{immutable value 'x' was never used; consider replacing with '_' or removing it}}
   }
 
   convenience init(b: Int) {
@@ -348,7 +358,7 @@ class TestNestedExpr {
 
   convenience init(d: Int) {
     let x: () = self.init(fail: true)! // expected-error {{initializer delegation ('self.init') cannot be nested in another statement}}
-    // expected-warning@-1 {{initialization of immutable value 'x' was never used; consider replacing with assignment to '_' or removing it}}
+    // expected-warning@-1 {{immutable value 'x' was never used; consider replacing with '_' or removing it}}
   }
 
   convenience init(e: Int) {
@@ -362,7 +372,7 @@ class TestNestedExpr {
 
   convenience init(g: Int) {
     let x: () = try! self.init(error: true) // expected-error {{initializer delegation ('self.init') cannot be nested in another statement}}
-    // expected-warning@-1 {{initialization of immutable value 'x' was never used; consider replacing with assignment to '_' or removing it}}
+    // expected-warning@-1 {{immutable value 'x' was never used; consider replacing with '_' or removing it}}
   }
 
   convenience init(h: Int) {
@@ -373,12 +383,41 @@ class TestNestedExpr {
   convenience init(i: Int) {
     _ = ((), try! self.init(error: true)) // expected-error {{initializer delegation ('self.init') cannot be nested in another expression}}
   }
+
+  convenience init(j: Int) throws {
+    _ = {
+      try self.init(error: true)
+      // expected-error@-1 {{initializer delegation ('self.init') cannot be nested in another expression}}
+    }
+
+    _ = {
+      do {
+        try self.init(error: true)
+        // expected-error@-1 {{initializer delegation ('self.init') cannot be nested in another expression}}
+      }
+    }
+
+    defer {
+      try! self.init(error: true)
+      // expected-error@-1 {{initializer delegation ('self.init') cannot be nested in another expression}}
+    }
+
+    func local() throws {
+      try self.init(error: true)
+      // expected-error@-1 {{initializer delegation ('self.init') cannot be nested in another expression}}
+    }
+  }
+
+  convenience init(k: Int) {
+    func use(_ x: Any...) {}
+    use(self.init()) // expected-error {{initializer delegation ('self.init') cannot be nested in another expression}}
+  }
 }
 
 class TestNestedExprSub : TestNestedExpr {
   init(a: Int) {
     let x: () = super.init() // expected-error {{initializer chaining ('super.init') cannot be nested in another statement}}
-    // expected-warning@-1 {{initialization of immutable value 'x' was never used; consider replacing with assignment to '_' or removing it}}
+    // expected-warning@-1 {{immutable value 'x' was never used; consider replacing with '_' or removing it}}
   }
 
   init(b: Int) {
@@ -392,7 +431,7 @@ class TestNestedExprSub : TestNestedExpr {
 
   init(d: Int) {
     let x: () = super.init(fail: true)! // expected-error {{initializer chaining ('super.init') cannot be nested in another statement}}
-    // expected-warning@-1 {{initialization of immutable value 'x' was never used; consider replacing with assignment to '_' or removing it}}
+    // expected-warning@-1 {{immutable value 'x' was never used; consider replacing with '_' or removing it}}
   }
 
   init(e: Int) {
@@ -406,7 +445,7 @@ class TestNestedExprSub : TestNestedExpr {
 
   init(g: Int) {
     let x: () = try! super.init(error: true) // expected-error {{initializer chaining ('super.init') cannot be nested in another statement}}
-    // expected-warning@-1 {{initialization of immutable value 'x' was never used; consider replacing with assignment to '_' or removing it}}
+    // expected-warning@-1 {{immutable value 'x' was never used; consider replacing with '_' or removing it}}
   }
 
   init(h: Int) {
@@ -416,6 +455,11 @@ class TestNestedExprSub : TestNestedExpr {
 
   init(i: Int) {
     _ = ((), try! super.init(error: true)) // expected-error {{initializer chaining ('super.init') cannot be nested in another expression}}
+  }
+
+  init(j: Int) {
+    func use(_ x: Any...) {}
+    use(super.init()) // expected-error {{initializer chaining ('super.init') cannot be nested in another expression}}
   }
 }
 
@@ -465,4 +509,51 @@ class TestOptionalTrySub : TestOptionalTry {
     try? super.init() // expected-error {{a non-failable initializer cannot use 'try?' to chain to another initializer}}
     // expected-note@-1 {{force potentially-failing result with 'try!'}} {{5-9=try!}}
   }
+}
+
+struct X { init() {} }
+
+func +(lhs: X, rhs: X) -> X { return lhs }
+func testInsideOperator(x: X) {
+  x.init() + x // expected-error {{'init' is a member of the type; use 'type(of: ...)' to initialize a new object of the same dynamic type}} {{3-3=type(of: }} {{4-4=)}}
+  x + x.init() // expected-error {{'init' is a member of the type; use 'type(of: ...)' to initialize a new object of the same dynamic type}} {{7-7=type(of: }} {{8-8=)}}
+  x.init() + x.init() // expected-error {{'init' is a member of the type; use 'type(of: ...)' to initialize a new object of the same dynamic type}} {{3-3=type(of: }} {{4-4=)}}
+  // expected-error@-1 {{'init' is a member of the type; use 'type(of: ...)' to initialize a new object of the same dynamic type}} {{14-14=type(of: }} {{15-15=)}}
+}
+
+struct Y {
+  var x: X
+  let x2: X
+  
+  init() {
+    x.init() // expected-error {{'init' is a member of the type; use assignment to initalize the value instead}} {{6-6= = }}
+    foo(x.init()) // expected-error {{'init' is a member of the type; use 'type(of: ...)' to initialize a new object of the same dynamic type}} {{9-9=type(of: }} {{10-10=)}}
+  }
+  
+  func foo(_: X) {}
+  func asFunctionReturn() -> X {
+    var a = X()
+    return a.init() // expected-error {{'init' is a member of the type; use 'type(of: ...)' to initialize a new object of the same dynamic type}} {{12-12=type(of: }} {{13-13=)}}
+  }
+}
+
+struct MultipleMemberAccesses {
+  var y: Y
+  let y2: Y
+  init() {
+    y = Y()
+    y2 = Y()
+    y.x.init() // expected-error {{'init' is a member of the type; use assignment to initalize the value instead}} {{8-8= = }}
+    y2.x2.init() // expected-error {{'init' is a member of the type; use 'type(of: ...)' to initialize a new object of the same dynamic type}} {{5-5=type(of: }} {{10-10=)}}
+  }
+}
+
+func sr10670() {
+  struct S {
+    init(_ x: inout String) {}
+    init(_ x: inout [Int]) {}
+  }
+  var a = 0
+  S.init(&a) // expected-error {{cannot invoke 'S.Type.init' with an argument list of type '(inout Int)'}}
+  // expected-note@-1 {{overloads for 'S.Type.init' exist with these partially matching parameter lists: (inout String), (inout [Int])}}
 }

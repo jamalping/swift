@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -18,7 +18,9 @@
 #ifndef SWIFT_TYPECHECKING_CODESYNTHESIS_H
 #define SWIFT_TYPECHECKING_CODESYNTHESIS_H
 
+#include "TypeCheckObjC.h"
 #include "swift/AST/ForeignErrorConvention.h"
+#include "swift/Basic/ExternalUnion.h"
 #include "swift/Basic/LLVM.h"
 #include "llvm/ADT/Optional.h"
 
@@ -38,50 +40,29 @@ class VarDecl;
 
 class TypeChecker;
 
-enum class ObjCReason;
+class ObjCReason;
 
-// These are implemented in TypeCheckDecl.cpp.
-void makeFinal(ASTContext &ctx, ValueDecl *D);
-void makeDynamic(ASTContext &ctx, ValueDecl *D);
-void markAsObjC(TypeChecker &TC, ValueDecl *D,
-                Optional<ObjCReason> isObjC,
-                Optional<ForeignErrorConvention> errorConvention = None);
-Type configureImplicitSelf(TypeChecker &tc,
-                           AbstractFunctionDecl *func);
-void configureConstructorType(ConstructorDecl *ctor,
-                              Type selfType,
-                              Type argType);
-bool checkOverrides(TypeChecker &TC, ValueDecl *decl);
+// Implemented in TypeCheckerOverride.cpp
+bool checkOverrides(ValueDecl *decl);
 
 // These are implemented in CodeSynthesis.cpp.
-void convertStoredVarInProtocolToComputed(VarDecl *VD, TypeChecker &TC);
-void synthesizeObservingAccessors(VarDecl *VD, TypeChecker &TC);
-void synthesizeSetterForMutableAddressedStorage(AbstractStorageDecl *storage,
-                                                TypeChecker &TC);
-void synthesizeMaterializeForSet(FuncDecl *materializeForSet,
-                                 AbstractStorageDecl *storage,
-                                 TypeChecker &TC);
-void maybeAddMaterializeForSet(AbstractStorageDecl *storage,
-                               TypeChecker &TC);
+void maybeAddAccessorsToStorage(AbstractStorageDecl *storage);
 
-void addTrivialAccessorsToStorage(AbstractStorageDecl *storage,
-                                  TypeChecker &TC);
+void triggerAccessorSynthesis(TypeChecker &TC, AbstractStorageDecl *storage);
 
-void maybeAddAccessorsToVariable(VarDecl *var, TypeChecker &TC);
-
-/// \brief Describes the kind of implicit constructor that will be
+/// Describes the kind of implicit constructor that will be
 /// generated.
 enum class ImplicitConstructorKind {
-  /// \brief The default constructor, which default-initializes each
+  /// The default constructor, which default-initializes each
   /// of the instance variables.
   Default,
-  /// \brief The memberwise constructor, which initializes each of
+  /// The memberwise constructor, which initializes each of
   /// the instance variables from a parameter of the same type and
   /// name.
   Memberwise
 };
 
-/// \brief Create an implicit struct or class constructor.
+/// Create an implicit struct or class constructor.
 ///
 /// \param decl The struct or class for which a constructor will be created.
 /// \param ICK The kind of implicit constructor to create.

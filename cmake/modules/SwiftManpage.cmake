@@ -30,7 +30,7 @@ function(manpage)
       unused_var
       COMMAND
         "${POD2MAN}" "--section" "${MP_MAN_SECTION}"
-        "--center" "${MP_PAGE_HEADER}" "--release"
+        "--center" "${MP_PAGE_HEADER}" "--release=\"swift ${SWIFT_VERSION}\""
         "--name" "${MP_MAN_FILE_BASENAME}"
         "--stderr"
         "${MP_SOURCE}" > "${output_file_name}"
@@ -38,8 +38,8 @@ function(manpage)
       DEPENDS "${MP_SOURCE}"
       ALL)
 
-  swift_install_in_component("${MP_INSTALL_IN_COMPONENT}"
-      FILES "${output_file_name}"
-      DESTINATION "share/man/man${MP_MAN_SECTION}")
+  swift_install_in_component(FILES "${output_file_name}"
+                             DESTINATION "share/man/man${MP_MAN_SECTION}"
+                             COMPONENT "${MP_INSTALL_IN_COMPONENT}")
 endfunction()
 

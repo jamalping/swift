@@ -8,7 +8,7 @@ public func == (lhs: CGPoint, rhs: CGPoint) -> Bool {
 public struct CGFloat {
 #if arch(i386) || arch(arm)
   public typealias UnderlyingType = Float
-#elseif arch(x86_64) || arch(arm64)
+#elseif arch(x86_64) || arch(arm64) || arch(powerpc64le) || arch(s390x)
   public typealias UnderlyingType = Double
 #endif
 
@@ -35,7 +35,7 @@ public func ==(lhs: CGFloat, rhs: CGFloat) -> Bool {
   return lhs.value == rhs.value
 }
 
-extension CGFloat : IntegerLiteralConvertible, FloatLiteralConvertible, Equatable {
+extension CGFloat : ExpressibleByIntegerLiteral, ExpressibleByFloatLiteral, Equatable {
   public init(integerLiteral value: UnderlyingType) {
     self.value = value
   }

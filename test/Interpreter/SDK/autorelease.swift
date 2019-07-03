@@ -1,4 +1,4 @@
-// RUN: %target-run-simple-swift foo | FileCheck %s
+// RUN: %target-run-simple-swift | %FileCheck %s
 // REQUIRES: executable_test
 
 // REQUIRES: objc_interop
@@ -11,7 +11,7 @@ import Foundation
 
 class PrintOnDeinit: NSObject {
   // Result should get autoreleased.
-  dynamic class func create() -> PrintOnDeinit {
+  @objc dynamic class func create() -> PrintOnDeinit {
     return PrintOnDeinit()
   }
 
@@ -38,7 +38,7 @@ print("autorelease test end")
 // Using an @objc class to check that errors are retained across the pool
 // boundaries. A classic crash is an error created inside a pool and then
 // zombied before handling it outside the pool.
-@objc class Error : NSObject, ErrorProtocol {
+@objc class MyError : NSObject, Error {
   let message: String
   init(message: String) {
     self.message = message
@@ -48,7 +48,7 @@ print("autorelease test end")
 // Check that rethrow works.
 func requireString(string: String?) throws -> String {
   guard let string = string else {
-    throw Error(message: "no string")
+    throw MyError(message: "no string")
   }
   print("returning \"\(string)\"")
   return string
@@ -58,7 +58,7 @@ do {
     try requireString(string: "ok")
     try requireString(string: nil)
   }
-} catch let err as Error {
+} catch let err as MyError {
   print("caught \"\(err.message)\"")
 }
 // CHECK-NEXT:      returning "ok"

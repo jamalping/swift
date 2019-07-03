@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -14,13 +14,14 @@
 #define SWIFT_PARSER_PARSER_RESULT_H
 
 #include "llvm/ADT/PointerIntPair.h"
+#include "swift/AST/ParameterList.h"
 #include <type_traits>
 
 namespace swift {
 
 class ParserStatus;
 
-/// \brief A wrapper for a parser AST node result (Decl, Stmt, Expr, Pattern,
+/// A wrapper for a parser AST node result (Decl, Stmt, Expr, Pattern,
 /// etc.)
 ///
 /// Contains the pointer to the AST node itself (or null) and additional bits
@@ -122,7 +123,7 @@ static inline ParserResult<T> makeParserCodeCompletionResult(T *Result =
   return PR;
 }
 
-/// \brief Same as \c ParserResult, but just the status bits without the AST
+/// Same as \c ParserResult, but just the status bits without the AST
 /// node.
 ///
 /// Useful when the AST node is returned by some other means (for example, in
@@ -216,74 +217,6 @@ template <typename T> ParserResult<T>::ParserResult(ParserStatus Status) {
   if (Status.hasCodeCompletion())
     setHasCodeCompletion();
 }
-
-enum class ConditionalCompilationExprKind {
-  Unknown,
-  Error,
-  OS,
-  Arch,
-  LanguageVersion,
-  CompilerVersion,
-  Binary,
-  Paren,
-  DeclRef,
-  Boolean,
-  Integer
-};
-
-class ConditionalCompilationExprState {
-
-  uint8_t ConditionActive : 1;
-  uint8_t Kind : 7;
-public:
-  ConditionalCompilationExprState() : ConditionActive(false) {
-    setKind(ConditionalCompilationExprKind::Unknown);
-  }
-
-  ConditionalCompilationExprState(bool ConditionActive,
-                                  ConditionalCompilationExprKind Kind)
-    : ConditionActive(ConditionActive) {
-    setKind(Kind);
-  }
-
-  bool isConditionActive() const {
-    return ConditionActive;
-  }
-
-  void setConditionActive(bool A) {
-    ConditionActive = A;
-  }
-
-  ConditionalCompilationExprKind getKind() const {
-    return static_cast<ConditionalCompilationExprKind>(Kind);
-  }
-
-  void setKind(ConditionalCompilationExprKind K) {
-    Kind = static_cast<uint8_t>(K);
-    assert(getKind() == K);
-  }
-
-  bool shouldParse() const {
-    if (getKind() == ConditionalCompilationExprKind::Error)
-      return true;
-    return ConditionActive ||
-      (getKind() != ConditionalCompilationExprKind::CompilerVersion &&
-       getKind() != ConditionalCompilationExprKind::LanguageVersion);
-  }
-
-  static ConditionalCompilationExprState error() {
-    return {false, ConditionalCompilationExprKind::Error};
-  }
-};
-
-ConditionalCompilationExprState
-operator&&(const ConditionalCompilationExprState lhs,
-           const ConditionalCompilationExprState rhs);
-ConditionalCompilationExprState
-operator||(const ConditionalCompilationExprState lhs,
-           const ConditionalCompilationExprState rhs);
-ConditionalCompilationExprState
-operator!(const ConditionalCompilationExprState Result);
 
 } // namespace swift
 

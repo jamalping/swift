@@ -2,23 +2,28 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
 import TestsUtils
+
+public let Dictionary3 = [
+  BenchmarkInfo(name: "Dictionary3", runFunction: run_Dictionary3, tags: [.validation, .api, .Dictionary]),
+  BenchmarkInfo(name: "Dictionary3OfObjects", runFunction: run_Dictionary3OfObjects, tags: [.validation, .api, .Dictionary]),
+]
 
 @inline(never)
 public func run_Dictionary3(_ N: Int) {
   let size1 = 100
   let reps = 20
   let ref_result = "1 99 20 1980"
-  var hash1 = [String:Int]()
-  var hash2 = [String:Int]()
+  var hash1 = [String: Int]()
+  var hash2 = [String: Int]()
   var res = ""
 
   for _ in 1...N {
@@ -41,26 +46,23 @@ public func run_Dictionary3(_ N: Int) {
       break
     }
   }
-  CheckResults(res == ref_result, "Incorrect results in Dictionary3: \(res) != \(ref_result)")
+  CheckResults(res == ref_result)
 }
 
-class Box<T : Hashable where T : Equatable> : Hashable {
+class Box<T : Hashable> : Hashable {
   var value: T
 
   init(_ v: T) {
     value = v
   }
 
-  var hashValue : Int {
-    return value.hashValue
+  func hash(into hasher: inout Hasher) {
+    hasher.combine(value)
   }
-}
 
-extension Box : Equatable {
-}
-
-func ==<T: Equatable>(lhs: Box<T>, rhs: Box<T>) -> Bool {
-  return lhs.value == rhs.value
+  static func ==(lhs: Box, rhs: Box) -> Bool {
+    return lhs.value == rhs.value
+  }
 }
 
 @inline(never)
@@ -92,5 +94,5 @@ public func run_Dictionary3OfObjects(_ N: Int) {
       break
     }
   }
-  CheckResults(res == ref_result, "Incorrect results in Dictionary3OfObject: \(res) != \(ref_result)")
+  CheckResults(res == ref_result)
 }

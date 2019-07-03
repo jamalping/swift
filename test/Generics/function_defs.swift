@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 //===----------------------------------------------------------------------===//
 // Type-check function definitions
@@ -46,7 +46,7 @@ protocol OtherEqualComparable {
 }
 
 func otherExistential<T : EqualComparable>(_ t1: T) {
-  var otherEqComp : OtherEqualComparable = t1 // expected-error{{value of type 'T' does not conform to specified type 'OtherEqualComparable'}} expected-error{{protocol 'OtherEqualComparable' can only be used as a generic constraint}}
+  var otherEqComp : OtherEqualComparable = t1 // expected-error{{value of type 'T' does not conform to specified type 'OtherEqualComparable'}}
   otherEqComp = t1 // expected-error{{value of type 'T' does not conform to 'OtherEqualComparable' in assignment}}
   _ = otherEqComp
   
@@ -54,7 +54,7 @@ func otherExistential<T : EqualComparable>(_ t1: T) {
   otherEqComp2 = t1 // expected-error{{value of type 'T' does not conform to 'OtherEqualComparable' in assignment}}
   _ = otherEqComp2
 
-  _ = t1 as protocol<EqualComparable, OtherEqualComparable> // expected-error{{'T' is not convertible to 'protocol<EqualComparable, OtherEqualComparable>'; did you mean to use 'as!' to force downcast?}} {{10-12=as!}} expected-error{{protocol 'OtherEqualComparable' can only be used as a generic constraint}} expected-error{{protocol 'EqualComparable' can only be used as a generic constraint}}
+  _ = t1 as EqualComparable & OtherEqualComparable // expected-error{{'T' is not convertible to 'EqualComparable & OtherEqualComparable'; did you mean to use 'as!' to force downcast?}} {{10-12=as!}} expected-error{{protocol 'OtherEqualComparable' can only be used as a generic constraint}} expected-error{{protocol 'EqualComparable' can only be used as a generic constraint}}
 }
 
 protocol Runcible {
@@ -144,7 +144,7 @@ protocol IntSubscriptable {
   subscript (index : Int) -> ElementType { get  }
 }
 
-func subscripting<T : protocol<Subscriptable, IntSubscriptable>>(_ t: T) {
+func subscripting<T : Subscriptable & IntSubscriptable>(_ t: T) {
   var index = t.getIndex()
   var value = t.getValue()
   var element = t.getElement()
@@ -166,7 +166,7 @@ protocol StaticEq {
 }
 
 func staticEqCheck<T : StaticEq, U : StaticEq>(_ t: T, u: U) {
-  if t.isEqual(t, t) { return } // expected-error{{static member 'isEqual' cannot be used on instance of type 'T'}}
+  if t.isEqual(t, t) { return } // expected-error{{static member 'isEqual' cannot be used on instance of type 'T'}} // expected-error {{missing argument label 'y:' in call}}
 
   if T.isEqual(t, y: t) { return }
   if U.isEqual(u, y: u) { return }
@@ -178,7 +178,7 @@ func staticEqCheck<T : StaticEq, U : StaticEq>(_ t: T, u: U) {
 // Operators
 //===----------------------------------------------------------------------===//
 protocol Ordered {
-  func <(lhs: Self, rhs: Self) -> Bool
+  static func <(lhs: Self, rhs: Self) -> Bool
 }
 
 func testOrdered<T : Ordered>(_ x: T, y: Int) {
@@ -244,7 +244,7 @@ protocol GeneratesMetaAssoc2 {
 
 func recursiveSameType
        <T : GeneratesMetaAssoc1, U : GeneratesMetaAssoc2, V : GeneratesAssoc1>
-       (_ t: T, u: U)
+       (_ t: T, u: U, v: V)
   where T.MetaAssoc1 == V.Assoc1, V.Assoc1 == U.MetaAssoc2
 {
   t.get().accept(t.get().makeIterator())
@@ -270,13 +270,9 @@ where E0.Element == E1.Element,
 {
 }
 
-func beginsWith3<
-     S0: P2, S1: P2
-     where 
-       S0.AssocP1.Element == S1.AssocP1.Element, 
-       S1.AssocP1.Element : EqualComparable
-     >(_ seq1: S0, _ seq2: S1) -> Bool
-{
+func beginsWith3<S0: P2, S1: P2>(_ seq1: S0, _ seq2: S1) -> Bool
+  where S0.AssocP1.Element == S1.AssocP1.Element,
+        S1.AssocP1.Element : EqualComparable {
   return beginsWith2(seq1.getAssocP1(), seq2.getAssocP1())
 }
 
@@ -287,18 +283,35 @@ func beginsWith3<
 //===----------------------------------------------------------------------===//
 // Bogus requirements
 //===----------------------------------------------------------------------===//
-func nonTypeReq<T where T : Wibble>(_: T) {} // expected-error{{use of undeclared type 'Wibble'}}
-func badProtocolReq<T where T : Int>(_: T) {} // expected-error{{type 'T' constrained to non-protocol type 'Int'}}
+func nonTypeReq<T>(_: T) where T : Wibble {} // expected-error{{use of undeclared type 'Wibble'}}
+func badProtocolReq<T>(_: T) where T : Int {} // expected-error{{type 'T' constrained to non-protocol, non-class type 'Int'}}
 
-func nonTypeSameType<T where T == Wibble>(_: T) {} // expected-error{{use of undeclared type 'Wibble'}}
-func nonTypeSameType2<T where Wibble == T>(_: T) {} // expected-error{{use of undeclared type 'Wibble'}}
-func sameTypeEq<T where T = T>(_: T) {} // expected-error{{use '==' for same-type requirements rather than '='}} {{27-28===}}
+func nonTypeSameType<T>(_: T) where T == Wibble {} // expected-error{{use of undeclared type 'Wibble'}}
+func nonTypeSameType2<T>(_: T) where Wibble == T {} // expected-error{{use of undeclared type 'Wibble'}}
+func sameTypeEq<T>(_: T) where T = T {} // expected-error{{use '==' for same-type requirements rather than '='}} {{34-35===}}
+// expected-warning@-1{{redundant same-type constraint 'T' == 'T'}}
 
-func badTypeConformance1<T where Int : EqualComparable>(_: T) {} // expected-error{{type 'Int' in conformance requirement does not refer to a generic parameter or associated type}}
+func badTypeConformance1<T>(_: T) where Int : EqualComparable {} // expected-error{{type 'Int' in conformance requirement does not refer to a generic parameter or associated type}}
 
-func badTypeConformance2<T where T.Blarg : EqualComparable>(_: T) { } // expected-error{{'Blarg' is not a member type of 'T'}}
+func badTypeConformance2<T>(_: T) where T.Blarg : EqualComparable { } // expected-error{{'Blarg' is not a member type of 'T'}}
 
-func badSameType<T, U : GeneratesAnElement, V // expected-error{{generic parameter 'V' is not used in function signature}}
-                 where T == U.Element, 
-                          U.Element == V // expected-error{{same-type requirement makes generic parameters 'T' and 'V' equivalent}}
-                 >(_: T) {} 
+func badTypeConformance3<T>(_: T) where (T) -> () : EqualComparable { }
+// expected-error@-1{{type '(T) -> ()' in conformance requirement does not refer to a generic parameter or associated type}}
+
+func badTypeConformance4<T>(_: T) where @escaping (inout T) throws -> () : EqualComparable { }
+// expected-error@-1{{type '(inout T) throws -> ()' in conformance requirement does not refer to a generic parameter or associated type}}
+// expected-error@-2 2 {{@escaping attribute may only be used in function parameter position}}
+
+// FIXME: Error emitted twice.
+func badTypeConformance5<T>(_: T) where T & Sequence : EqualComparable { }
+// expected-error@-1 2 {{non-protocol, non-class type 'T' cannot be used within a protocol-constrained type}}
+// expected-error@-2{{type 'Sequence' in conformance requirement does not refer to a generic parameter or associated type}}
+
+func badTypeConformance6<T>(_: T) where [T] : Collection { }
+// expected-error@-1{{type '[T]' in conformance requirement does not refer to a generic parameter or associated type}}
+
+func badTypeConformance7<T, U>(_: T, _: U) where T? : U { }
+// expected-error@-1{{type 'T?' constrained to non-protocol, non-class type 'U'}}
+
+func badSameType<T, U : GeneratesAnElement, V>(_ : T, _ : U)
+  where T == U.Element, U.Element == V {} // expected-error{{same-type requirement makes generic parameters 'T' and 'V' equivalent}}

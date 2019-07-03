@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -59,7 +59,7 @@ extension TypeIndexed where Value : Strideable {
     showFrame: Bool = true,
     stackTrace: SourceLocStack = SourceLocStack(),  
     file: String = #file, line: UInt = #line,
-    body: () -> R
+    invoking body: () -> R
   ) -> R {
     let expected = self[t].advanced(by: 1)
     let r = body()
@@ -77,7 +77,7 @@ extension TypeIndexed where Value : Equatable {
     showFrame: Bool = true,
     stackTrace: SourceLocStack = SourceLocStack(),  
     file: String = #file, line: UInt = #line,
-    body: () -> R
+    invoking body: () -> R
   ) -> R {
     let expected = self[t]
     let r = body()
@@ -98,7 +98,7 @@ public func <=> <T: Comparable>(
 }
 
 public func expectEqual<V: Comparable>(
-  _ expected: DictionaryLiteral<Any.Type, V>, _ actual: TypeIndexed<V>,
+  _ expected: KeyValuePairs<Any.Type, V>, _ actual: TypeIndexed<V>,
   _ message: @autoclosure () -> String = "",
   showFrame: Bool = true,
   stackTrace: SourceLocStack = SourceLocStack(),  

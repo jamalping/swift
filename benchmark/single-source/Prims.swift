@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -22,9 +22,15 @@
 // update the heap fast when we add a new node to the tree.
 import TestsUtils
 
+public let Prims = BenchmarkInfo(
+  name: "Prims",
+  runFunction: run_Prims,
+  tags: [.validation, .algorithm],
+  legacyFactor: 5)
+
 class PriorityQueue {
-  final var heap : Array<EdgeCost>
-  final var graphIndexToHeapIndexMap : Array<Int?>
+  final var heap: Array<EdgeCost>
+  final var graphIndexToHeapIndexMap: Array<Int?>
 
   // Create heap for graph with NUM nodes.
   init(Num: Int) {
@@ -132,9 +138,9 @@ class PriorityQueue {
   func dump() {
     print("QUEUE")
     for nodeCost in heap {
-      let to : Int = nodeCost.to
-      let from : Int = nodeCost.from
-      let cost : Double = nodeCost.cost
+      let to: Int = nodeCost.to
+      let from: Int = nodeCost.from
+      let cost: Double = nodeCost.cost
       print("(\(from)->\(to), \(cost))")
     }
   }
@@ -151,8 +157,8 @@ class PriorityQueue {
 }
 
 struct GraphNode {
-  var id : Int
-  var adjList : Array<Int>
+  var id: Int
+  var adjList: Array<Int>
 
   init(i : Int) {
     id = i
@@ -161,14 +167,14 @@ struct GraphNode {
 }
 
 struct EdgeCost {
-  var to : Int
-  var cost : Double
+  var to: Int
+  var cost: Double
   var from: Int
 }
 
 struct Edge : Equatable {
-  var start : Int
-  var end : Int
+  var start: Int
+  var end: Int
 }
 
 func ==(lhs: Edge, rhs: Edge) -> Bool {
@@ -176,10 +182,9 @@ func ==(lhs: Edge, rhs: Edge) -> Bool {
 }
 
 extension Edge : Hashable {
-  var hashValue: Int {
-    get {
-      return start.hashValue ^ end.hashValue
-    }
+  func hash(into hasher: inout Hasher) {
+    hasher.combine(start)
+    hasher.combine(end)
   }
 }
 
@@ -191,7 +196,7 @@ func Prims(_ graph : Array<GraphNode>, _ fun : (Int, Int) -> Double) -> Array<In
   queue.insert(EdgeCost(to: 0, cost: 0.0, from: 0))
 
   // Take an element with the smallest cost from the queue and add its
-  // neighbours to the queue if their cost was updated
+  // neighbors to the queue if their cost was updated
   while !queue.isEmpty() {
     // Add an edge with minimum cost to the spanning tree
     let e = queue.pop()!
@@ -215,7 +220,7 @@ func Prims(_ graph : Array<GraphNode>, _ fun : (Int, Int) -> Double) -> Array<In
 
 @inline(never)
 public func run_Prims(_ N: Int) {
-  for _ in 1...5*N {
+  for _ in 1...N {
     let nodes : [Int] = [ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
       13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
       29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
@@ -751,7 +756,6 @@ public func run_Prims(_ N: Int) {
     for i in 1..<treeEdges.count {
       if let n = treeEdges[i] { cost += map[Edge(start: n, end: i)]! }
     }
-    CheckResults(Int(cost) == 49324,
-                 "Incorrect results in Prims: \(Int(cost)) != 49324.")
+    CheckResults(Int(cost) == 49324)
   }
 }

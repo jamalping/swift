@@ -1,3 +1,5 @@
+// XFAIL: broken_std_regex
+
 struct A {}
 struct B {
   let a: A
@@ -5,13 +7,13 @@ struct B {
   let c: A
 }
 
-// RUN: %complete-test -tok=TOP_LEVEL_0 %s | FileCheck -check-prefix=TOP_LEVEL_0_ALL %s
-// RUN: %complete-test -tok=TOP_LEVEL_0 %s -limit=0 | FileCheck -check-prefix=TOP_LEVEL_0_ALL %s
-// RUN: %complete-test -tok=TOP_LEVEL_0 %s -limit=3 | FileCheck -check-prefix=TOP_LEVEL_0_3 %s
-// RUN: %complete-test -tok=TOP_LEVEL_0 %s -limit=1 | FileCheck -check-prefix=TOP_LEVEL_0_1 %s
-// RUN: %complete-test -tok=TOP_LEVEL_0 %s -start=1 -limit=1 | FileCheck -check-prefix=TOP_LEVEL_0_11 %s
-// RUN: %complete-test -tok=TOP_LEVEL_0 %s -start=2 -limit=1 | FileCheck -check-prefix=TOP_LEVEL_0_12 %s
-// RUN: %complete-test -tok=TOP_LEVEL_0 %s -raw -start=100000 -limit=1 | FileCheck -check-prefix=TOP_LEVEL_0_NONE %s
+// RUN: %complete-test -tok=TOP_LEVEL_0 %s | %FileCheck -check-prefix=TOP_LEVEL_0_ALL %s
+// RUN: %complete-test -tok=TOP_LEVEL_0 %s -limit=0 | %FileCheck -check-prefix=TOP_LEVEL_0_ALL %s
+// RUN: %complete-test -tok=TOP_LEVEL_0 %s -limit=3 | %FileCheck -check-prefix=TOP_LEVEL_0_3 %s
+// RUN: %complete-test -tok=TOP_LEVEL_0 %s -limit=1 | %FileCheck -check-prefix=TOP_LEVEL_0_1 %s
+// RUN: %complete-test -tok=TOP_LEVEL_0 %s -start=1 -limit=1 | %FileCheck -check-prefix=TOP_LEVEL_0_11 %s
+// RUN: %complete-test -tok=TOP_LEVEL_0 %s -start=2 -limit=1 | %FileCheck -check-prefix=TOP_LEVEL_0_12 %s
+// RUN: %complete-test -tok=TOP_LEVEL_0 %s -raw -start=100000 -limit=1 | %FileCheck -check-prefix=TOP_LEVEL_0_NONE %s
 func test001() {
   let x: B
   let y: B
@@ -53,14 +55,15 @@ func test001() {
 // TOP_LEVEL_0_NONE: ]
 }
 
-// RUN: %complete-test -tok=B_INSTANCE_0 %s | FileCheck -check-prefix=B_INSTANCE_0_ALL %s
-// RUN: %complete-test -tok=B_INSTANCE_0 %s -limit=1 | FileCheck -check-prefix=B_INSTANCE_0_1 %s
+// RUN: %complete-test -tok=B_INSTANCE_0 %s | %FileCheck -check-prefix=B_INSTANCE_0_ALL %s
+// RUN: %complete-test -tok=B_INSTANCE_0 %s -limit=1 | %FileCheck -check-prefix=B_INSTANCE_0_1 %s
 func test002(x: B) {
   x.#^B_INSTANCE_0^#
 
 // B_INSTANCE_0_ALL: a
 // B_INSTANCE_0_ALL-NEXT: b
 // B_INSTANCE_0_ALL-NEXT: c
+// B_INSTANCE_0_ALL-NEXT: self
 
 // B_INSTANCE_0_1: a
 // B_INSTANCE_0_1-NOT: b
@@ -75,8 +78,8 @@ struct C {
   let abc: A
 }
 
-// RUN: %complete-test -tok=C_INSTANCE_0 %s | FileCheck -check-prefix=C_INSTANCE_0_ALL %s
-// RUN: %complete-test -tok=C_INSTANCE_0 %s -limit=1 | FileCheck -check-prefix=C_INSTANCE_0_1 %s
+// RUN: %complete-test -tok=C_INSTANCE_0 %s | %FileCheck -check-prefix=C_INSTANCE_0_ALL %s
+// RUN: %complete-test -tok=C_INSTANCE_0 %s -limit=1 | %FileCheck -check-prefix=C_INSTANCE_0_1 %s
 func test003(x: C) {
   x.#^C_INSTANCE_0,aa^#
 
@@ -95,9 +98,9 @@ struct D {
   func aab() {}
 }
 
-// RUN: %complete-test -group=overloads -tok=D_INSTANCE_0 %s | FileCheck -check-prefix=OVERLOADS_ALL %s
-// RUN: %complete-test -group=overloads -tok=D_INSTANCE_0 %s -limit=1 | FileCheck -check-prefix=OVERLOADS_1 %s
-// RUN: %complete-test -group=overloads -tok=D_INSTANCE_0 %s -start=1 -limit=1 | FileCheck -check-prefix=OVERLOADS_11 %s
+// RUN: %complete-test -group=overloads -tok=D_INSTANCE_0 %s | %FileCheck -check-prefix=OVERLOADS_ALL %s
+// RUN: %complete-test -group=overloads -tok=D_INSTANCE_0 %s -limit=1 | %FileCheck -check-prefix=OVERLOADS_1 %s
+// RUN: %complete-test -group=overloads -tok=D_INSTANCE_0 %s -start=1 -limit=1 | %FileCheck -check-prefix=OVERLOADS_11 %s
 func test003(x: D) {
   x.#^D_INSTANCE_0^#
 
@@ -105,6 +108,7 @@ func test003(x: D) {
 // OVERLOADS_ALL-NEXT:   aaa(x: A)
 // OVERLOADS_ALL-NEXT:   aaa(x: B)
 // OVERLOADS_ALL-NEXT: aab()
+// OVERLOADS_ALL-NEXT: self
 
 // limit applies to top-level, not to subgroups
 // OVERLOADS_1: aaa:
@@ -117,14 +121,14 @@ func test003(x: D) {
 }
 
 // If we return all the results, nextrequeststart == 0
-// RUN: %complete-test -group=overloads -tok=D_INSTANCE_0 %s -raw | FileCheck -check-prefix=NEXT-END %s
-// RUN: %complete-test -group=overloads -tok=D_INSTANCE_0 %s -raw -limit=5 | FileCheck -check-prefix=NEXT-END %s
-// RUN: %complete-test -group=overloads -tok=D_INSTANCE_0 %s -raw -limit=2 | FileCheck -check-prefix=NEXT-END %s
+// RUN: %complete-test -group=overloads -tok=D_INSTANCE_0 %s -raw | %FileCheck -check-prefix=NEXT-END %s
+// RUN: %complete-test -group=overloads -tok=D_INSTANCE_0 %s -raw -limit=5 | %FileCheck -check-prefix=NEXT-END %s
+// RUN: %complete-test -group=overloads -tok=D_INSTANCE_0 %s -raw -limit=3 | %FileCheck -check-prefix=NEXT-END %s
 // NEXT-END: key.nextrequeststart: 0
 
 // If we return the last result, nextrequeststart == 0
-// RUN: %complete-test -group=overloads -tok=D_INSTANCE_0 %s -raw -start=1 -limit=1 | FileCheck -check-prefix=NEXT-END %s
+// RUN: %complete-test -group=overloads -tok=D_INSTANCE_0 %s -raw -start=2 -limit=1 | %FileCheck -check-prefix=NEXT-END %s
 
 // Otherwise, it's the next result
-// RUN: %complete-test -group=overloads -tok=D_INSTANCE_0 %s -raw -limit=1 | FileCheck -check-prefix=NEXT1 %s
+// RUN: %complete-test -group=overloads -tok=D_INSTANCE_0 %s -raw -limit=1 | %FileCheck -check-prefix=NEXT1 %s
 // NEXT1: key.nextrequeststart: 1

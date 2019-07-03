@@ -1,12 +1,17 @@
-add_swift_library(swiftSILGen
+add_swift_host_library(swiftSILGen STATIC
   ArgumentSource.cpp
   Cleanup.cpp
   Condition.cpp
+  FormalEvaluation.cpp
   ManagedValue.cpp
+  ResultPlan.cpp
   RValue.cpp
+  Scope.cpp
+  SwitchEnumBuilder.cpp
   SILGen.cpp
   SILGenApply.cpp
   SILGenBridging.cpp
+  SILGenBuilder.cpp
   SILGenBuiltin.cpp
   SILGenConstructor.cpp
   SILGenConvert.cpp
@@ -18,12 +23,13 @@ add_swift_library(swiftSILGen
   SILGenForeignError.cpp
   SILGenFunction.cpp
   SILGenGlobalVariable.cpp
+  SILGenLazyConformance.cpp
   SILGenLValue.cpp
-  SILGenMaterializeForSet.cpp
   SILGenPattern.cpp
   SILGenPoly.cpp
-  SILGenProfiling.cpp
   SILGenProlog.cpp
   SILGenStmt.cpp
-  SILGenType.cpp
-  LINK_LIBRARIES swiftSIL)
+  SILGenThunk.cpp
+  SILGenType.cpp)
+target_link_libraries(swiftSILGen PRIVATE
+  swiftSIL)

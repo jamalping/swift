@@ -37,31 +37,34 @@ function(handle_gyb_source_single dependency_out_var_name)
       GYB_SINGLE # prefix
       "${options}" "${single_value_args}" "${multi_value_args}" ${ARGN})
 
-  set(gyb_flags
-      "--test" # Run gyb's self-tests whenever we use it.  They're cheap
-               # enough and it keeps us honest.
-      ${SWIFT_GYB_FLAGS}
-      ${GYB_SINGLE_FLAGS})
-
   set(gyb_tool "${SWIFT_SOURCE_DIR}/utils/gyb")
   set(gyb_tool_source "${gyb_tool}" "${gyb_tool}.py")
 
   get_filename_component(dir "${GYB_SINGLE_OUTPUT}" DIRECTORY)
   get_filename_component(basename "${GYB_SINGLE_OUTPUT}" NAME)
+
+  # Handle foo.gyb in pattern ``gyb.expand('foo.gyb'`` as a dependency
+  set(gyb_expand_deps "")
+  file(READ "${GYB_SINGLE_SOURCE}" gyb_file)
+  string(REGEX MATCHALL "\\\$\{[\r\n\t ]*gyb.expand\\\([\r\n\t ]*[\'\"]([^\'\"]*)[\'\"]" gyb_expand_matches "${gyb_file}")
+  foreach(match ${gyb_expand_matches})
+    string(REGEX MATCH "[\'\"]\([^\'\"]*\)[\'\"]" gyb_dep "${match}")
+    list(APPEND gyb_expand_deps "${CMAKE_MATCH_1}")
+  endforeach()
+  list(REMOVE_DUPLICATES gyb_expand_deps)
+
   add_custom_command_target(
       dependency_target
       COMMAND
           "${CMAKE_COMMAND}" -E make_directory "${dir}"
       COMMAND
-          "${gyb_tool}" "${gyb_flags}"
-          -o "${GYB_SINGLE_OUTPUT}.tmp" "${GYB_SINGLE_SOURCE}"
+          "${PYTHON_EXECUTABLE}" "${gyb_tool}" ${SWIFT_GYB_FLAGS} ${GYB_SINGLE_FLAGS} -o "${GYB_SINGLE_OUTPUT}.tmp" "${GYB_SINGLE_SOURCE}"
       COMMAND
-          "${CMAKE_COMMAND}" -E copy_if_different
-          "${GYB_SINGLE_OUTPUT}.tmp" "${GYB_SINGLE_OUTPUT}"
+          "${CMAKE_COMMAND}" -E copy_if_different "${GYB_SINGLE_OUTPUT}.tmp" "${GYB_SINGLE_OUTPUT}"
       COMMAND
           "${CMAKE_COMMAND}" -E remove "${GYB_SINGLE_OUTPUT}.tmp"
       OUTPUT "${GYB_SINGLE_OUTPUT}"
-      DEPENDS "${gyb_tool_source}" "${GYB_SINGLE_DEPENDS}" "${GYB_SINGLE_SOURCE}"
+      DEPENDS "${gyb_tool_source}" "${GYB_SINGLE_DEPENDS}" "${GYB_SINGLE_SOURCE}" "${gyb_expand_deps}"
       COMMENT "Generating ${basename} from ${GYB_SINGLE_SOURCE} ${GYB_SINGLE_COMMENT}"
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
       SOURCES "${GYB_SINGLE_SOURCE}"
@@ -108,29 +111,65 @@ function(handle_gyb_sources dependency_out_var_name sources_var_name arch)
       "${SWIFT_SOURCE_DIR}/utils/UnicodeData/GraphemeBreakProperty.txt"
       "${SWIFT_SOURCE_DIR}/utils/UnicodeData/GraphemeBreakTest.txt"
       "${SWIFT_SOURCE_DIR}/utils/gyb_stdlib_support.py"
-      "${SWIFT_SOURCE_DIR}/utils/gyb_stdlib_unittest_support.py"
-  )
+      "${SWIFT_SOURCE_DIR}/utils/gyb_syntax_support/__init__.py"
+      "${SWIFT_SOURCE_DIR}/utils/gyb_syntax_support/Child.py"
+      "${SWIFT_SOURCE_DIR}/utils/gyb_syntax_support/kinds.py"
+      "${SWIFT_SOURCE_DIR}/utils/gyb_syntax_support/Node.py"
+      "${SWIFT_SOURCE_DIR}/utils/gyb_syntax_support/AttributeNodes.py"
+      "${SWIFT_SOURCE_DIR}/utils/gyb_syntax_support/AvailabilityNodes.py"
+      "${SWIFT_SOURCE_DIR}/utils/gyb_syntax_support/CommonNodes.py"
+      "${SWIFT_SOURCE_DIR}/utils/gyb_syntax_support/DeclNodes.py"
+      "${SWIFT_SOURCE_DIR}/utils/gyb_syntax_support/ExprNodes.py"
+      "${SWIFT_SOURCE_DIR}/utils/gyb_syntax_support/GenericNodes.py"
+      "${SWIFT_SOURCE_DIR}/utils/gyb_syntax_support/PatternNodes.py"
+      "${SWIFT_SOURCE_DIR}/utils/gyb_syntax_support/StmtNodes.py"
+      "${SWIFT_SOURCE_DIR}/utils/gyb_syntax_support/TypeNodes.py"
+      "${SWIFT_SOURCE_DIR}/utils/gyb_syntax_support/Token.py"
+      "${SWIFT_SOURCE_DIR}/utils/gyb_syntax_support/Trivia.py"
+      "${SWIFT_SOURCE_DIR}/utils/gyb_syntax_support/Traits.py"
+      "${SWIFT_SOURCE_DIR}/utils/gyb_sourcekit_support/__init__.py"
+      "${SWIFT_SOURCE_DIR}/utils/gyb_sourcekit_support/UIDs.py")
+
   foreach (src ${${sources_var_name}})
-    string(REGEX REPLACE "[.]gyb$" "" src_sans_gyb "${src}")
-    if(src STREQUAL src_sans_gyb)
-      list(APPEND de_gybbed_sources "${src}")
+    # On Windows (using Visual Studio), the generated project files assume that the
+    # generated GYB files will be in the source, not binary directory.
+    # We can work around this by modifying the root directory when generating VS projects.
+    if ("${CMAKE_GENERATOR_PLATFORM}" MATCHES "Visual Studio")
+      set(dir_root ${CMAKE_CURRENT_SOURCE_DIR})
     else()
-      if (arch)
-        set(dir "${CMAKE_CURRENT_BINARY_DIR}/${ptr_size}")
-      else()
-        set(dir "${CMAKE_CURRENT_BINARY_DIR}")
-      endif()
-      set(output_file_name "${dir}/${src_sans_gyb}")
-      list(APPEND de_gybbed_sources "${output_file_name}")
-      handle_gyb_source_single(dependency_target
-          SOURCE "${src}"
-          OUTPUT "${output_file_name}"
-          FLAGS ${extra_gyb_flags}
-          DEPENDS "${gyb_extra_sources}"
-          COMMENT "with ptr size = ${ptr_size}")
-      list(APPEND dependency_targets "${dependency_target}")
+      set(dir_root ${CMAKE_CURRENT_BINARY_DIR})
     endif()
+
+    if (arch)
+      set(dir "${dir_root}/${ptr_size}")
+    else()
+      set(dir "${dir_root}")
+    endif()
+    # get_filename_component(src_sans_gyb ${src} NAME_WLE)
+    string(REGEX REPLACE "\.gyb$" "" src_sans_gyb ${src})
+    set(output_file_name "${dir}/${src_sans_gyb}")
+    list(APPEND de_gybbed_sources "${output_file_name}")
+    handle_gyb_source_single(dependency_target
+        SOURCE "${src}"
+        OUTPUT "${output_file_name}"
+        FLAGS ${extra_gyb_flags}
+        DEPENDS "${gyb_extra_sources}"
+        COMMENT "with ptr size = ${ptr_size}")
+    list(APPEND dependency_targets "${dependency_target}")
   endforeach()
   set("${dependency_out_var_name}" "${dependency_targets}" PARENT_SCOPE)
   set("${sources_var_name}" "${de_gybbed_sources}" PARENT_SCOPE)
+endfunction()
+
+function(add_gyb_target target sources)
+  set(options)
+  set(single_value_args ARCH)
+  set(multi_value_args)
+  cmake_parse_arguments(GYB
+    "${options}" "${single_value_args}" "${multi_value_args}" ${ARGN})
+
+  handle_gyb_sources(gyb_sources_depends sources "${GYB_ARCH}")
+
+  add_custom_target(${target}
+    DEPENDS "${gyb_sources_depends}")
 endfunction()

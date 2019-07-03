@@ -2,11 +2,11 @@
 #
 # This source file is part of the Swift.org open source project
 #
-# Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+# Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 # Licensed under Apache License v2.0 with Runtime Library Exception
 #
-# See http://swift.org/LICENSE.txt for license information
-# See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+# See https://swift.org/LICENSE.txt for license information
+# See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 #
 # ----------------------------------------------------------------------------
 """
@@ -43,14 +43,23 @@ def _register(name, *tool):
         return self.find_tool(*tool)
     _getter.__name__ = name
     setattr(Toolchain, name, cache_util.reify(_getter))
-_register("cc", "clang")
-_register("cxx", "clang++")
+
+
+if platform.system() == 'Windows':
+    _register("cc", "clang-cl")
+    _register("cxx", "clang-cl")
+else:
+    _register("cc", "clang")
+    _register("cxx", "clang++")
+
 _register("ninja", "ninja", "ninja-build")
 _register("cmake", "cmake")
 _register("distcc", "distcc")
 _register("distcc_pump", "distcc-pump", "pump")
 _register("llvm_profdata", "llvm-profdata")
 _register("llvm_cov", "llvm-cov")
+_register("lipo", "lipo")
+_register("libtool", "libtool")
 
 
 class Darwin(Toolchain):
@@ -137,17 +146,21 @@ class Linux(GenericUnix):
 
 class FreeBSD(GenericUnix):
     def __init__(self):
+        # For testing toolchain initializer on non-FreeBSD systems
+        sys = platform.system()
+        if sys != 'FreeBSD':
+            suffixes = ['']
         # See: https://github.com/apple/swift/pull/169
         # Building Swift from source requires a recent version of the Clang
         # compiler with C++14 support.
-        if self._release_date and self._release_date >= 1100000:
+        elif self._release_date and self._release_date >= 1100000:
             suffixes = ['']
         else:
             suffixes = ['38', '37', '36', '35']
         super(FreeBSD, self).__init__(suffixes)
 
     @cache_util.reify
-    def _release_date():
+    def _release_date(self):
         """Return the release date for FreeBSD operating system on this host.
         If the release date cannot be ascertained, return None.
         """
@@ -165,6 +178,20 @@ class Cygwin(Linux):
     pass
 
 
+class Windows(Toolchain):
+    def find_tool(self, *names):
+        for name in names:
+            found = which(name)
+            if found is not None:
+                return found
+        return None
+
+
+class Haiku(GenericUnix):
+    def __init__(self):
+        super(Haiku, self)
+
+
 def host_toolchain(**kwargs):
     sys = platform.system()
     if sys == 'Darwin':
@@ -175,6 +202,10 @@ def host_toolchain(**kwargs):
         return FreeBSD()
     elif sys.startswith('CYGWIN'):
         return Cygwin()
+    elif sys == 'Windows':
+        return Windows()
+    elif sys == 'Haiku':
+        return Haiku()
     else:
-        raise NotImplementedError(
-            'toolchain() is not supported in this platform')
+        raise NotImplementedError('The platform "%s" does not have a defined '
+                                  'toolchain.' % sys)

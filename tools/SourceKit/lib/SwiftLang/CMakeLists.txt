@@ -2,41 +2,47 @@ add_sourcekit_library(SourceKitSwiftLang
   CodeCompletionOrganizer.cpp
   SwiftASTManager.cpp
   SwiftCompletion.cpp
+  SwiftConformingMethodList.cpp
   SwiftDocSupport.cpp
   SwiftEditor.cpp
   SwiftEditorInterfaceGen.cpp
   SwiftIndexing.cpp
   SwiftLangSupport.cpp
   SwiftSourceDocInfo.cpp
-  DEPENDS SourceKitCore swiftDriver swiftFrontend swiftClangImporter swiftIndex swiftIDE
-          swiftAST swiftMarkup swiftParse swiftSIL swiftSILGen swiftSILOptimizer
-          swiftSema swiftBasic swiftSerialization
-          swiftOption cmark
+  SwiftTypeContextInfo.cpp
+  LINK_LIBS
+    SourceKitCore swiftDriver swiftFrontend
+    swiftDWARFImporter swiftClangImporter swiftIDE
+    swiftAST swiftMarkup swiftParse swiftParseSIL swiftSIL swiftSILGen
+    swiftSILOptimizer swiftIRGen swiftSema swiftBasic swiftSerialization
+    swiftSyntax swiftOption libcmark_static
     # Clang dependencies.
+      clangIndex
       clangFormat
       clangToolingCore
-      clangIndex
-      clangDriver
       clangFrontendTool
       clangFrontend
+      clangDriver
       clangCodeGen
       clangSerialization
       clangParse
       clangSema
       clangAnalysis
       clangEdit
-      clangRewrite
       clangRewriteFrontend
+      clangRewrite
       clangLex
       clangAST
       clangAPINotes
       clangBasic
-  COMPONENT_DEPENDS ${LLVM_TARGETS_TO_BUILD}
+    LLVM_LINK_COMPONENTS ${LLVM_TARGETS_TO_BUILD}
       bitreader
       bitwriter
+      coverage
       debuginfodwarf
       instrumentation
       ipo
+      lto
       mc
       mcparser
       option

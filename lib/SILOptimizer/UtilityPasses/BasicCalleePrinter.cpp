@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -35,7 +35,7 @@ class BasicCalleePrinterPass : public SILModuleTransform {
 
   void printCallees(FullApplySite FAS) {
     llvm::outs() << "Function call site:\n";
-    if (auto *Callee = dyn_cast<SILInstruction>(FAS.getCallee()))
+    if (auto *Callee = FAS.getCallee()->getDefiningInstruction())
       llvm::outs() << *Callee;
     llvm::outs() << *FAS.getInstruction();
 
@@ -60,7 +60,6 @@ class BasicCalleePrinterPass : public SILModuleTransform {
     }
   }
 
-  StringRef getName() override { return "Basic Callee Printer"; }
 };
 
 } // end anonymous namespace

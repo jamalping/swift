@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2018 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -16,28 +16,70 @@
 
 #include "swift/AST/Types.h"
 #include "ForeignRepresentationInfo.h"
-#include "swift/AST/ArchetypeBuilder.h"
+#include "swift/AST/ASTContext.h"
+#include "swift/AST/ExistentialLayout.h"
+#include "swift/AST/GenericSignatureBuilder.h"
+#include "swift/AST/ReferenceCounting.h"
 #include "swift/AST/TypeVisitor.h"
 #include "swift/AST/TypeWalker.h"
 #include "swift/AST/Decl.h"
-#include "swift/AST/AST.h"
+#include "swift/AST/GenericEnvironment.h"
 #include "swift/AST/LazyResolver.h"
 #include "swift/AST/Module.h"
+#include "swift/AST/ParameterList.h"
+#include "swift/AST/ProtocolConformance.h"
+#include "swift/AST/SubstitutionMap.h"
 #include "swift/AST/TypeLoc.h"
-#include "swift/Basic/Fallthrough.h"
+#include "swift/AST/TypeRepr.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <functional>
 #include <iterator>
 using namespace swift;
 
+#define TYPE(Id, _) \
+  static_assert(IsTriviallyDestructible<Id##Type>::value, \
+                "Types are BumpPtrAllocated; the destructor is never called");
+#include "swift/AST/TypeNodes.def"
+
+Type QueryTypeSubstitutionMap::operator()(SubstitutableType *type) const {
+  auto key = type->getCanonicalType()->castTo<SubstitutableType>();
+  auto known = substitutions.find(key);
+  if (known != substitutions.end() && known->second)
+    return known->second;
+
+  // Not known.
+  return Type();
+}
+
+Type
+QueryTypeSubstitutionMapOrIdentity::operator()(SubstitutableType *type) const {
+  auto key = type->getCanonicalType()->castTo<SubstitutableType>();
+  auto known = substitutions.find(key);
+  if (known != substitutions.end() && known->second)
+    return known->second;
+  
+  return type;
+}
+
+Type QuerySubstitutionMap::operator()(SubstitutableType *type) const {
+  auto key = cast<SubstitutableType>(type->getCanonicalType());
+  return subMap.lookupSubstitution(key);
+}
+
+void TypeLoc::setType(Type Ty) {
+  assert(!Ty || !Ty->hasTypeVariable());
+  this->Ty = Ty;
+}
+
 bool TypeLoc::isError() const {
   assert(wasValidated() && "Type not yet validated");
-  return getType()->is<ErrorType>();
+  return getType()->hasError();
 }
 
 SourceRange TypeLoc::getSourceRange() const {
@@ -46,16 +88,22 @@ SourceRange TypeLoc::getSourceRange() const {
   return SourceRange();
 }
 
+TypeLoc TypeLoc::clone(ASTContext &ctx) const {
+  if (TyR) {
+    return TypeLoc(TyR->clone(ctx), Ty);
+  }
+  return *this;
+}
+
+SourceLoc TypeLoc::getLoc() const {
+  if (TyR) return TyR->getLoc();
+  return SourceLoc();
+}
+
 // Only allow allocation of Types using the allocator in ASTContext.
 void *TypeBase::operator new(size_t bytes, const ASTContext &ctx,
                              AllocationArena arena, unsigned alignment) {
   return ctx.Allocate(bytes, alignment, arena);
-}
-
-bool CanType::isActuallyCanonicalOrNull() const {
-  return getPointer() == 0 || 
-         getPointer() == llvm::DenseMapInfo<TypeBase*>::getTombstoneKey() ||
-         getPointer()->isCanonical();
 }
 
 NominalTypeDecl *CanType::getAnyNominal() const {
@@ -63,17 +111,10 @@ NominalTypeDecl *CanType::getAnyNominal() const {
 }
 
 GenericTypeDecl *CanType::getAnyGeneric() const {
-  if (auto nominalTy = dyn_cast<NominalType>(*this))
-    return (GenericTypeDecl*)nominalTy->getDecl();
-  
-  if (auto boundTy = dyn_cast<BoundGenericType>(*this))
-    return (GenericTypeDecl*)boundTy->getDecl();
-  
-  if (auto unboundTy = dyn_cast<UnboundGenericType>(*this))
-    return unboundTy->getDecl();
+  if (auto Ty = dyn_cast<AnyGenericType>(*this))
+    return Ty->getDecl();
   return nullptr;
 }
-
 
 //===----------------------------------------------------------------------===//
 // Various Type Methods.
@@ -87,6 +128,30 @@ bool TypeBase::isEqual(Type Other) {
 /// hasReferenceSemantics - Does this type have reference semantics?
 bool TypeBase::hasReferenceSemantics() {
   return getCanonicalType().hasReferenceSemantics();
+}
+
+bool TypeBase::isUninhabited() {
+  // Empty enum declarations are uninhabited
+  if (auto nominalDecl = getAnyNominal())
+    if (auto enumDecl = dyn_cast<EnumDecl>(nominalDecl))
+      if (enumDecl->getAllElements().empty())
+        return true;
+  return false;
+}
+
+bool TypeBase::isStructurallyUninhabited() {
+  if (isUninhabited()) return true;
+  
+  // Tuples of uninhabited types are uninhabited
+  if (auto *TTy = getAs<TupleType>())
+    for (auto eltTy : TTy->getElementTypes())
+      if (eltTy->isStructurallyUninhabited())
+        return true;
+  return false;
+}
+
+bool TypeBase::isAny() {
+  return isEqual(getASTContext().TheAnyType);
 }
 
 bool TypeBase::isAnyClassReferenceType() {
@@ -115,7 +180,10 @@ bool CanType::isReferenceTypeImpl(CanType type, bool functionsCount) {
                                functionsCount);
 
   // Archetypes and existentials are only class references if class-bounded.
-  case TypeKind::Archetype:
+  case TypeKind::PrimaryArchetype:
+  case TypeKind::OpenedArchetype:
+  case TypeKind::NestedArchetype:
+  case TypeKind::OpaqueTypeArchetype:
     return cast<ArchetypeType>(type)->requiresClass();
   case TypeKind::Protocol:
     return cast<ProtocolType>(type)->requiresClass();
@@ -127,7 +195,6 @@ bool CanType::isReferenceTypeImpl(CanType type, bool functionsCount) {
 
   // Functions have reference semantics, but are not class references.
   case TypeKind::Function:
-  case TypeKind::PolymorphicFunction:
   case TypeKind::GenericFunction:
   case TypeKind::SILFunction:
     return functionsCount;
@@ -137,6 +204,7 @@ bool CanType::isReferenceTypeImpl(CanType type, bool functionsCount) {
   case TypeKind::Error:
   case TypeKind::Unresolved:
   case TypeKind::BuiltinInteger:
+  case TypeKind::BuiltinIntegerLiteral:
   case TypeKind::BuiltinFloat:
   case TypeKind::BuiltinRawPointer:
   case TypeKind::BuiltinUnsafeValueBuffer:
@@ -152,9 +220,10 @@ bool CanType::isReferenceTypeImpl(CanType type, bool functionsCount) {
   case TypeKind::TypeVariable:
   case TypeKind::BoundGenericEnum:
   case TypeKind::BoundGenericStruct:
-  case TypeKind::UnownedStorage:
-  case TypeKind::UnmanagedStorage:
-  case TypeKind::WeakStorage:
+  case TypeKind::SILToken:
+#define REF_STORAGE(Name, ...) \
+  case TypeKind::Name##Storage:
+#include "swift/AST/ReferenceStorage.def"
     return false;
 
   case TypeKind::GenericTypeParam:
@@ -178,55 +247,86 @@ bool TypeBase::allowsOwnership() {
   return getCanonicalType().isAnyClassReferenceType();
 }
 
-bool TypeBase::isAnyExistentialType(SmallVectorImpl<ProtocolDecl*> &protocols) {
-  return getCanonicalType().isAnyExistentialType(protocols);
+ExistentialLayout::ExistentialLayout(ProtocolType *type) {
+  assert(type->isCanonical());
+
+  auto *protoDecl = type->getDecl();
+
+  hasExplicitAnyObject = false;
+  containsNonObjCProtocol = !protoDecl->isObjC();
+
+  singleProtocol = type;
 }
 
-bool CanType::isAnyExistentialTypeImpl(CanType type,
-                                       SmallVectorImpl<ProtocolDecl*> &protocols) {
-  if (auto metatype = dyn_cast<ExistentialMetatypeType>(type)) {
-    metatype.getInstanceType().getAnyExistentialTypeProtocols(protocols);
-    return true;
+ExistentialLayout::ExistentialLayout(ProtocolCompositionType *type) {
+  assert(type->isCanonical());
+
+  hasExplicitAnyObject = type->hasExplicitAnyObject();
+  containsNonObjCProtocol = false;
+
+  auto members = type->getMembers();
+  if (!members.empty() &&
+      isa<ClassDecl>(members[0]->getAnyNominal())) {
+    explicitSuperclass = members[0];
+    members = members.slice(1);
   }
-  return isExistentialTypeImpl(type, protocols);
+
+  for (auto member : members) {
+    auto *protoDecl = member->castTo<ProtocolType>()->getDecl();
+    containsNonObjCProtocol |= !protoDecl->isObjC();
+  }
+
+  singleProtocol = nullptr;
+  protocols = { members.data(), members.size() };
 }
 
-bool TypeBase::isExistentialType(SmallVectorImpl<ProtocolDecl *> &protocols) {
-  return getCanonicalType().isExistentialType(protocols);
+
+ExistentialLayout TypeBase::getExistentialLayout() {
+  return getCanonicalType().getExistentialLayout();
 }
 
-bool CanType::isExistentialTypeImpl(CanType type,
-                                    SmallVectorImpl<ProtocolDecl*> &protocols) {
-  if (auto proto = dyn_cast<ProtocolType>(type)) {
-    proto.getAnyExistentialTypeProtocols(protocols);
+ExistentialLayout CanType::getExistentialLayout() {
+  if (auto proto = dyn_cast<ProtocolType>(*this))
+    return ExistentialLayout(proto);
+
+  auto comp = cast<ProtocolCompositionType>(*this);
+  return ExistentialLayout(comp);
+}
+
+bool ExistentialLayout::requiresClass() const {
+  if (hasExplicitAnyObject || explicitSuperclass)
     return true;
-  }
-  
-  if (auto comp = dyn_cast<ProtocolCompositionType>(type)) {
-    comp.getAnyExistentialTypeProtocols(protocols);
-    return true;
+
+  for (auto proto : getProtocols()) {
+    if (proto->requiresClass())
+      return true;
   }
 
-  assert(!type.isExistentialType());
   return false;
 }
 
-void TypeBase::getAnyExistentialTypeProtocols(
-                                   SmallVectorImpl<ProtocolDecl*> &protocols) {
-  getCanonicalType().getAnyExistentialTypeProtocols(protocols);
+Type ExistentialLayout::getSuperclass() const {
+  if (explicitSuperclass)
+    return explicitSuperclass;
+
+  for (auto proto : getProtocols()) {
+    // If we have a generic signature, check there, because it
+    // will pick up superclass constraints from protocols that we
+    // refine as well.
+    auto *protoDecl = proto->getDecl();
+    if (auto genericSig = protoDecl->getGenericSignature()) {
+      if (auto superclass = genericSig->getSuperclassBound(
+            protoDecl->getSelfInterfaceType()))
+        return superclass;
+    } else if (auto superclass = protoDecl->getSuperclass())
+      return superclass;
+  }
+
+  return Type();
 }
 
-void CanType::getAnyExistentialTypeProtocolsImpl(CanType type,
-                                   SmallVectorImpl<ProtocolDecl*> &protocols) {
-  if (auto proto = dyn_cast<ProtocolType>(type)) {
-    proto.getAnyExistentialTypeProtocols(protocols);
-  } else if (auto comp = dyn_cast<ProtocolCompositionType>(type)) {
-    comp.getAnyExistentialTypeProtocols(protocols);
-  } else if (auto metatype = dyn_cast<ExistentialMetatypeType>(type)) {
-    metatype.getAnyExistentialTypeProtocols(protocols);
-  } else {
-    llvm_unreachable("type was not any kind of existential type!");
-  }
+bool ExistentialLayout::isAnyObject() const {
+  return (hasExplicitAnyObject && !explicitSuperclass && getProtocols().empty());
 }
 
 bool TypeBase::isObjCExistentialType() {
@@ -234,247 +334,44 @@ bool TypeBase::isObjCExistentialType() {
 }
 
 bool CanType::isObjCExistentialTypeImpl(CanType type) {
-  if (!type.isExistentialType()) return false;
-
-  SmallVector<ProtocolDecl *, 4> protocols;
-  type.getAnyExistentialTypeProtocols(protocols);
-
-  // Must have at least one protocol to be class-bounded.
-  if (protocols.empty())
+  if (!type.isExistentialType())
     return false;
 
-  // Any non-AnyObject, non-@objc protocol makes this no longer ObjC-compatible.
-  for (auto proto : protocols) {
-    if (proto->isSpecificProtocol(KnownProtocolKind::AnyObject))
-      continue;
-    if (proto->isObjC())
-      continue;
-    
-    return false;
-  }
-  return true;
+  return type.getExistentialLayout().isObjC();
 }
 
 bool TypeBase::isSpecialized() {
-  CanType CT = getCanonicalType();
-  if (CT.getPointer() != this)
-    return CT->isSpecialized();
+  Type t = getCanonicalType();
 
-  return CT.findIf([](Type type) -> bool {
-    return isa<BoundGenericType>(type.getPointer());
-  });
+  for (;;) {
+    if (!t || !t->getAnyNominal())
+      return false;
+    if (t->is<BoundGenericType>())
+      return true;
+    t = t->getNominalParent();
+  }
+
+  return false;
 }
 
-ArrayRef<Type> TypeBase::getAllGenericArgs(SmallVectorImpl<Type> &scratch) {
-  Type type(this);
-  SmallVector<ArrayRef<Type>, 2> allGenericArgs;
-
-  while (type) {
-    // Gather generic arguments from a bound generic type.
-    if (auto bound = type->getAs<BoundGenericType>()) {
-      allGenericArgs.push_back(bound->getGenericArgs());
-
-      // Continue up to the parent.
-      type = bound->getParent();
-      continue;
-    }
-
-    // Use the generic type parameter types for an unbound generic type.
-    if (auto unbound = type->getAs<UnboundGenericType>()) {
-      auto genericSig = unbound->getDecl()->getGenericSignature();
-      auto genericParams = genericSig->getInnermostGenericParams();
-      allGenericArgs.push_back(
-        llvm::makeArrayRef((const Type *)genericParams.data(),
-                           genericParams.size()));
-
-      // Continue up to the parent.
-      type = unbound->getParent();
-      continue;
-    }
-
-    // For a protocol type, use its Self parameter.
-    if (auto protoType = type->getAs<ProtocolType>()) {
-      auto proto = protoType->getDecl();
-      allGenericArgs.push_back(
-        llvm::makeArrayRef(
-          proto->getProtocolSelf()->getDeclaredInterfaceType()));
-
-      // Continue up to the parent.
-      type = protoType->getParent();
-      continue;
-    }
-
-    // Look through non-generic nominal types.
-    if (auto nominal = type->getAs<NominalType>()) {
-      type = nominal->getParent();
-      continue;
-    }
-
-    break;
-  }
-
-  // Trivial case: no generic arguments.
-  if (allGenericArgs.empty())
-    return { };
-
-  // Common case: a single set of generic arguments, for which we need no
-  // allocation.
-  if (allGenericArgs.size() == 1)
-    return allGenericArgs.front();
-
-  // General case: concatenate all of the generic argument lists together.
-  scratch.clear();
-  for (auto args : reversed(allGenericArgs))
-    scratch.append(args.begin(), args.end());
-  return scratch;
-}
-
-ArrayRef<Substitution>
-TypeBase::gatherAllSubstitutions(Module *module,
-                                 LazyResolver *resolver,
-                                 DeclContext *gpContext) {
-  Type type(this);
-  while (type) {
-    // Skip to the parent of a nominal type.
-    if (auto nominal = type->getAs<NominalType>()) {
-      type = nominal->getParent();
-      if (gpContext)
-        gpContext = gpContext->getParent();
-      continue;
-    }
-
-    // Return the substitutions in a bound generic type.
-    // This walks any further parent types.
-    if (auto boundGeneric = type->getAs<BoundGenericType>())
-      return boundGeneric->getSubstitutions(module, resolver, gpContext);
-
-    llvm_unreachable("Not a nominal or bound generic type");
-  }
-
-  // Not a generic type.
-  return { };
-}
-
-bool TypeBase::isUnspecializedGeneric() {
-  CanType CT = getCanonicalType();
-  if (CT.getPointer() != this)
-    return CT->isUnspecializedGeneric();
-
-  switch (getKind()) {
-#define SUGARED_TYPE(id, parent) case TypeKind::id:
-#define TYPE(id, parent)
-#include "swift/AST/TypeNodes.def"
-    llvm_unreachable("we're only working with CanType's here");
-
-  case TypeKind::Error:
-  case TypeKind::Unresolved:
-  case TypeKind::TypeVariable:
-    llvm_unreachable("querying invalid type");
-
-  case TypeKind::UnboundGeneric:
-    return true;
-
-  case TypeKind::BoundGenericClass:
-  case TypeKind::BoundGenericEnum:
-  case TypeKind::BoundGenericStruct:
-    return true;
-
-  case TypeKind::Function:
-  case TypeKind::PolymorphicFunction: {
-    auto funcTy = cast<AnyFunctionType>(this);
-    return funcTy->getInput()->isUnspecializedGeneric() ||
-           funcTy->getResult()->isUnspecializedGeneric();
-  }
-
-  case TypeKind::GenericFunction:
-    return true;
-
-  case TypeKind::Class:
-  case TypeKind::Struct:
-  case TypeKind::Enum:
-    if (auto parentTy = cast<NominalType>(this)->getParent())
-      return parentTy->isUnspecializedGeneric();
-    return false;
-
-  case TypeKind::ExistentialMetatype:
-  case TypeKind::Metatype:
-    return cast<AnyMetatypeType>(this)->getInstanceType()
-             ->isUnspecializedGeneric();
-
-  case TypeKind::UnownedStorage:
-  case TypeKind::UnmanagedStorage:
-  case TypeKind::WeakStorage:
-    return cast<ReferenceStorageType>(this)->getReferentType()
-             ->isUnspecializedGeneric();
-
-  case TypeKind::LValue:
-    return cast<LValueType>(this)->getObjectType()->isUnspecializedGeneric();
-  case TypeKind::InOut:
-    return cast<InOutType>(this)->getObjectType()->isUnspecializedGeneric();
-
-  case TypeKind::Tuple: {
-    auto tupleTy = cast<TupleType>(this);
-    for (auto &Elt : tupleTy->getElements())
-      if (Elt.getType()->isUnspecializedGeneric())
-        return true;
-
-    return false;
-  }
-
-  case TypeKind::Archetype:
-  case TypeKind::BuiltinFloat:
-  case TypeKind::BuiltinInteger:
-  case TypeKind::BuiltinUnknownObject:
-  case TypeKind::BuiltinNativeObject:
-  case TypeKind::BuiltinBridgeObject:
-  case TypeKind::BuiltinRawPointer:
-  case TypeKind::BuiltinUnsafeValueBuffer:
-  case TypeKind::BuiltinVector:
-  case TypeKind::Module:
-  case TypeKind::DynamicSelf:
-  case TypeKind::Protocol:
-  case TypeKind::ProtocolComposition:
-  case TypeKind::SILFunction:
-    return false;
-
-  case TypeKind::GenericTypeParam:
-  case TypeKind::DependentMember:
-    return false;
-      
-  case TypeKind::SILBlockStorage:
-    return cast<SILBlockStorageType>(this)->getCaptureType()
-        ->isUnspecializedGeneric();
-  case TypeKind::SILBox:
-    return cast<SILBoxType>(this)->getBoxedType()
-        ->isUnspecializedGeneric();
-  }
-  llvm_unreachable("bad TypeKind");
-}
-
-bool TypeBase::hasOpenedExistential(ArchetypeType *opened) {
-  assert(opened->getOpenedExistentialType() &&
-         "not an opened existential type");
-
+bool TypeBase::hasOpenedExistential(OpenedArchetypeType *opened) {
   if (!hasOpenedExistential())
     return false;
 
   return getCanonicalType().findIf([&](Type type) -> bool {
-    return opened == dyn_cast<ArchetypeType>(type.getPointer());
+    return opened == dyn_cast<OpenedArchetypeType>(type.getPointer());
   });
 }
 
 void TypeBase::getOpenedExistentials(
-       SmallVectorImpl<ArchetypeType *> &opened) {
+       SmallVectorImpl<OpenedArchetypeType *> &opened) {
   if (!hasOpenedExistential())
     return;
 
   SmallPtrSet<ArchetypeType *, 4> known;
   getCanonicalType().findIf([&](Type type) -> bool {
-    auto archetype = dyn_cast<ArchetypeType>(type.getPointer());
+    auto archetype = dyn_cast<OpenedArchetypeType>(type.getPointer());
     if (!archetype)
-      return false;
-
-    if (!archetype->getOpenedExistentialType())
       return false;
 
     if (known.insert(archetype).second)
@@ -484,47 +381,103 @@ void TypeBase::getOpenedExistentials(
   });
 }
 
-Type TypeBase::eraseOpenedExistential(Module *module,
-                                      ArchetypeType *opened) {
-  assert(opened->getOpenedExistentialType() &&
-         "Not an opened existential type?");
-
+Type TypeBase::eraseOpenedExistential(OpenedArchetypeType *opened) {
   if (!hasOpenedExistential())
     return Type(this);
 
-  TypeSubstitutionMap substitutions;
-  substitutions[opened] = opened->getOpenedExistentialType();
-  return Type(this).subst(module, substitutions, None);
+  auto existentialType = opened->getOpenedExistentialType();
+
+  return Type(this).transform([&](Type t) -> Type {
+    // A metatype with an opened existential type becomes an
+    // existential metatype.
+    if (auto *metatypeType = dyn_cast<MetatypeType>(t.getPointer())) {
+      auto instanceType = metatypeType->getInstanceType();
+      if (instanceType->hasOpenedExistential()) {
+        instanceType = instanceType->eraseOpenedExistential(opened);
+        return ExistentialMetatypeType::get(instanceType);
+      }
+    }
+
+    // @opened P => P
+    if (auto *archetypeType = dyn_cast<ArchetypeType>(t.getPointer())) {
+      if (archetypeType == opened)
+        return existentialType;
+    }
+
+    return t;
+  });
+}
+
+Type TypeBase::addCurriedSelfType(const DeclContext *dc) {
+  if (!dc->isTypeContext())
+    return this;
+
+  auto *type = this;
+
+  GenericSignature *sig = dc->getGenericSignatureOfContext();
+  if (auto *genericFn = type->getAs<GenericFunctionType>()) {
+    sig = genericFn->getGenericSignature();
+    type = FunctionType::get(genericFn->getParams(),
+                             genericFn->getResult(),
+                             genericFn->getExtInfo());
+  }
+
+  auto selfTy = dc->getSelfInterfaceType();
+  auto selfParam = AnyFunctionType::Param(selfTy);
+  if (sig)
+    return GenericFunctionType::get(sig, {selfParam}, type);
+  return FunctionType::get({selfParam}, type);
 }
 
 void
 TypeBase::getTypeVariables(SmallVectorImpl<TypeVariableType *> &typeVariables) {
   // If we know we don't have any type variables, we're done.
   if (hasTypeVariable()) {
-    // Use Type::findIf() to walk the types, finding type variables along the
-    // way.
-    getCanonicalType().findIf([&](Type type) -> bool {
+    auto addTypeVariables = [&](Type type) -> bool {
       if (auto tv = dyn_cast<TypeVariableType>(type.getPointer())) {
         typeVariables.push_back(tv);
       }
 
       return false;
-    });
-    assert(!typeVariables.empty() && "Did not find type variables!");
+    };
+
+    // Use Type::findIf() to walk the types, finding type variables along the
+    // way.
+    getCanonicalType().findIf(addTypeVariables);
+    Type(this).findIf(addTypeVariables);
+    assert((!typeVariables.empty() || hasError()) &&
+           "Did not find type variables!");
   }
 }
 
 static bool isLegalSILType(CanType type) {
+  // L-values and inouts are not legal.
   if (!type->isMaterializable()) return false;
+
+  // Function types must be lowered.
   if (isa<AnyFunctionType>(type)) return false;
+
+  // Metatypes must have a representation.
   if (auto meta = dyn_cast<AnyMetatypeType>(type))
     return meta->hasRepresentation();
+
+  // Tuples are legal if all their elements are legal.
   if (auto tupleType = dyn_cast<TupleType>(type)) {
     for (auto eltType : tupleType.getElementTypes()) {
       if (!isLegalSILType(eltType)) return false;
     }
     return true;
   }
+
+  // Optionals are legal if their object type is legal.
+  if (auto objectType = type.getOptionalObjectType()) {
+    return isLegalSILType(objectType);
+  }
+
+  // Reference storage types are legal if their object type is legal.
+  if (auto refType = dyn_cast<ReferenceStorageType>(type))
+    return isLegalSILType(refType.getReferentType());
+
   return true;
 }
 
@@ -532,96 +485,125 @@ bool TypeBase::isLegalSILType() {
   return ::isLegalSILType(getCanonicalType());
 }
 
-bool TypeBase::isVoid() {
-  return isEqual(getASTContext().TheEmptyTupleType);
-}
+static bool isLegalFormalType(CanType type) {
+  // L-values and inouts are not formal types.
+  if (!type->isMaterializable()) return false;
 
-bool TypeBase::isAssignableType() {
-  if (isLValueType()) return true;
-  if (auto tuple = getAs<TupleType>()) {
-    for (auto eltType : tuple->getElementTypes()) {
-      if (!eltType->isAssignableType())
-        return false;
+  // Function types must not be lowered.
+  if (isa<SILFunctionType>(type)) return false;
+
+  // Reference storage types are not formal types.
+  if (isa<ReferenceStorageType>(type)) return false;
+
+  // Metatypes must not have a representation.
+  if (auto meta = dyn_cast<AnyMetatypeType>(type))
+    return !meta->hasRepresentation();
+
+  // Tuples are legal if all their elements are legal.
+  if (auto tupleType = dyn_cast<TupleType>(type)) {
+    for (auto eltType : tupleType.getElementTypes()) {
+      if (!isLegalFormalType(eltType)) return false;
     }
     return true;
   }
+
+  // Optionals are legal if their object type is legal.
+  if (auto objectType = type.getOptionalObjectType()) {
+    return isLegalFormalType(objectType);
+  }
+
+  return true;
+}
+
+bool TypeBase::isLegalFormalType() {
+  return ::isLegalFormalType(getCanonicalType());
+}
+
+bool TypeBase::hasTypeRepr() const {
+  // A type has a source-printable representation if none of its sub-pieces do
+  // /not/ have a source-printable representation.
+  return !Type(const_cast<TypeBase *>(this)).findIf([](Type subTy) -> bool {
+    switch (subTy->getKind()) {
+    case TypeKind::Error:
+    case TypeKind::Unresolved:
+    case TypeKind::TypeVariable:
+      return true;
+
+    case TypeKind::OpenedArchetype:
+    case TypeKind::OpaqueTypeArchetype:
+    case TypeKind::GenericFunction:
+    case TypeKind::LValue:
+      return true;
+
+#define REF_STORAGE(Name, ...) \
+    case TypeKind::Name##Storage: return true;
+#include "swift/AST/ReferenceStorage.def"
+
+    case TypeKind::SILFunction:
+    case TypeKind::SILBlockStorage:
+    case TypeKind::SILBox:
+    case TypeKind::SILToken:
+      return true;
+
+    default:
+      return false;
+    }
+  });
+}
+
+bool TypeBase::isVoid() {
+  if (auto TT = getAs<TupleType>())
+    return TT->getNumElements() == 0;
   return false;
 }
 
-namespace {
-class GetRValueTypeVisitor : public TypeVisitor<GetRValueTypeVisitor, Type> {
-public:
-  Type visitLValueType(LValueType *lvt) {
-    // Look through lvalue types.
-    assert(!lvt->getObjectType()->isLValueType()
-           && "unexpected nested lvalue");
-    return lvt->getObjectType();
-  }
-  
-  Type visitTupleType(TupleType *tt) {
-    // Look through lvalues in tuples.
-    SmallVector<TupleTypeElt, 4> elts;
-    for (auto &elt : tt->getElements()) {
-      elts.push_back(elt.getWithType(visit(elt.getType())));
-    }
-    return TupleType::get(elts, tt->getASTContext());
-  }
-  
-  Type visitParenType(ParenType *pt) {
-    return ParenType::get(pt->getASTContext(), visit(pt->getUnderlyingType()));
-  }
-  
-  Type visitType(TypeBase *t) {
-    // Other types should not structurally contain lvalues.
-    assert(!t->isLValueType()
-           && "unexpected structural lvalue");
-    return t;
-  }
-};
-} // end anonymous namespace
+/// Check if this type is equal to Swift.Bool.
+bool TypeBase::isBool() {
+  if (auto NTD = getAnyNominal())
+    if (isa<StructDecl>(NTD))
+      return getASTContext().getBoolDecl() == NTD;
+  return false;
+}
 
 Type TypeBase::getRValueType() {
   // If the type is not an lvalue, this is a no-op.
-  if (!isLValueType())
+  if (!hasLValueType())
     return this;
-  
-  return GetRValueTypeVisitor().visit(this);
+
+  return Type(this).transform([](Type t) -> Type {
+      if (auto *lvalueTy = dyn_cast<LValueType>(t.getPointer()))
+        return lvalueTy->getObjectType();
+      return t;
+    });
 }
 
 Type TypeBase::getOptionalObjectType() {
   if (auto boundTy = getAs<BoundGenericEnumType>())
-    if (boundTy->getDecl()->classifyAsOptionalType() == OTK_Optional)
+    if (boundTy->getDecl()->isOptionalDecl())
       return boundTy->getGenericArgs()[0];
   return Type();
 }
 
-Type TypeBase::getImplicitlyUnwrappedOptionalObjectType() {
-  if (auto boundTy = getAs<BoundGenericEnumType>())
-    if (boundTy->getDecl()->classifyAsOptionalType() == OTK_ImplicitlyUnwrappedOptional)
-      return boundTy->getGenericArgs()[0];
-  return Type();
-}
-
-Type TypeBase::getAnyOptionalObjectType(OptionalTypeKind &kind) {
-  if (auto boundTy = getAs<BoundGenericEnumType>())
-    if ((kind = boundTy->getDecl()->classifyAsOptionalType()))
-      return boundTy->getGenericArgs()[0];
-  kind = OTK_None;
-  return Type();
-}
-
-CanType CanType::getAnyOptionalObjectTypeImpl(CanType type,
-                                              OptionalTypeKind &kind) {
+CanType CanType::getOptionalObjectTypeImpl(CanType type) {
   if (auto boundTy = dyn_cast<BoundGenericEnumType>(type))
-    if ((kind = boundTy->getDecl()->classifyAsOptionalType()))
+    if (boundTy->getDecl()->isOptionalDecl())
       return boundTy.getGenericArgs()[0];
-  kind = OTK_None;
   return CanType();
 }
 
 Type TypeBase::getAnyPointerElementType(PointerTypeKind &PTK) {
+  auto &C = getASTContext();
+  if (auto nominalTy = getAs<NominalType>()) {
+    if (nominalTy->getDecl() == C.getUnsafeMutableRawPointerDecl()) {
+      PTK = PTK_UnsafeMutableRawPointer;
+      return C.TheEmptyTupleType;
+    }
+    if (nominalTy->getDecl() == C.getUnsafeRawPointerDecl()) {
+      PTK = PTK_UnsafeRawPointer;
+      return C.TheEmptyTupleType;
+    }
+  }
   if (auto boundTy = getAs<BoundGenericType>()) {
-    auto &C = getASTContext();
     if (boundTy->getDecl() == C.getUnsafeMutablePointerDecl()) {
       PTK = PTK_UnsafeMutablePointer;
     } else if (boundTy->getDecl() == C.getUnsafePointerDecl()) {
@@ -638,17 +620,17 @@ Type TypeBase::getAnyPointerElementType(PointerTypeKind &PTK) {
   return Type();
 }
 
-Type TypeBase::lookThroughAllAnyOptionalTypes() {
+Type TypeBase::lookThroughAllOptionalTypes() {
   Type type(this);
-  while (auto objType = type->getAnyOptionalObjectType())
+  while (auto objType = type->getOptionalObjectType())
     type = objType;
 
   return type;
 }
 
-Type TypeBase::lookThroughAllAnyOptionalTypes(SmallVectorImpl<Type> &optionals){
+Type TypeBase::lookThroughAllOptionalTypes(SmallVectorImpl<Type> &optionals){
   Type type(this);
-  while (auto objType = type->getAnyOptionalObjectType()) {
+  while (auto objType = type->getOptionalObjectType()) {
     optionals.push_back(type);
     type = objType;
   }
@@ -656,104 +638,81 @@ Type TypeBase::lookThroughAllAnyOptionalTypes(SmallVectorImpl<Type> &optionals){
   return type;
 }
 
-ClassDecl *CanType::getClassBoundImpl(CanType type) {
-  if (auto classTy = dyn_cast<ClassType>(type))
-    return classTy->getDecl();
-
-  if (auto boundTy = dyn_cast<BoundGenericClassType>(type))
-    return boundTy->getDecl();
-
-  if (auto archetypeTy = dyn_cast<ArchetypeType>(type)) {
-    assert(archetypeTy->requiresClass());
-    if (Type supertype = archetypeTy->getSuperclass()) {
-      return supertype->getClassOrBoundGenericClass();
-    }
-    return nullptr;
-  }
-
-  llvm_unreachable("class has no class bound!");
-}
-
 bool TypeBase::isAnyObject() {
-  if (auto proto = getAs<ProtocolType>())
-    return proto->getDecl()->isSpecificProtocol(KnownProtocolKind::AnyObject);
+  auto canTy = getCanonicalType();
 
-  return false;
+  if (!canTy.isExistentialType())
+    return false;
+
+  return canTy.getExistentialLayout().isAnyObject();
 }
 
-bool TypeBase::isEmptyExistentialComposition() {
-  if (auto emtType = ExistentialMetatypeType::get(this)) {
-    if (auto pcType = emtType->getInstanceType()->
-        getAs<ProtocolCompositionType>()) {
-      return pcType->getProtocols().empty();
-    }
+bool ExistentialLayout::isErrorExistential() const {
+  auto protocols = getProtocols();
+  return (!hasExplicitAnyObject &&
+          !explicitSuperclass &&
+          protocols.size() == 1 &&
+          protocols[0]->getDecl()->isSpecificProtocol(KnownProtocolKind::Error));
+}
+
+bool ExistentialLayout::isExistentialWithError(ASTContext &ctx) const {
+  auto errorProto = ctx.getProtocol(KnownProtocolKind::Error);
+  if (!errorProto) return false;
+
+  for (auto proto : getProtocols()) {
+    auto *protoDecl = proto->getDecl();
+    if (protoDecl == errorProto || protoDecl->inheritsFrom(errorProto))
+      return true;
   }
-  
+
   return false;
 }
 
-static Type getStrippedType(const ASTContext &context, Type type,
-                            bool stripLabels, bool stripDefaultArgs) {
-  return type.transform([&](Type type) -> Type {
-    auto *tuple = dyn_cast<TupleType>(type.getPointer());
-    if (!tuple)
-      return type;
+LayoutConstraint ExistentialLayout::getLayoutConstraint() const {
+  if (hasExplicitAnyObject) {
+    return LayoutConstraint::getLayoutConstraint(
+      LayoutConstraintKind::Class);
+  }
 
-    SmallVector<TupleTypeElt, 4> elements;
-    bool anyChanged = false;
-    unsigned idx = 0;
-    for (const auto &elt : tuple->getElements()) {
-      Type eltTy = getStrippedType(context, elt.getType(),
-                                   stripLabels, stripDefaultArgs);
-      if (anyChanged || eltTy.getPointer() != elt.getType().getPointer() ||
-          (elt.hasDefaultArg() && stripDefaultArgs) ||
-          (elt.hasName() && stripLabels)) {
-        if (!anyChanged) {
-          elements.reserve(tuple->getNumElements());
-          for (unsigned i = 0; i != idx; ++i) {
-            const TupleTypeElt &elt = tuple->getElement(i);
-            Identifier newName = stripLabels? Identifier() : elt.getName();
-            DefaultArgumentKind newDefArg
-              = stripDefaultArgs? DefaultArgumentKind::None
-                                : elt.getDefaultArgKind();
-            elements.push_back(TupleTypeElt(elt.getType(), newName, newDefArg,
-                                            elt.isVararg()));
-          }
-          anyChanged = true;
-        }
-
-        Identifier newName = stripLabels? Identifier() : elt.getName();
-        DefaultArgumentKind newDefArg
-          = stripDefaultArgs? DefaultArgumentKind::None
-                            : elt.getDefaultArgKind();
-        elements.push_back(TupleTypeElt(eltTy, newName, newDefArg,
-                                        elt.isVararg()));
-      }
-      ++idx;
-    }
-    
-    if (!anyChanged)
-      return type;
-    
-    // An unlabeled 1-element tuple type is represented as a parenthesized
-    // type.
-    if (elements.size() == 1 && !elements[0].isVararg() && 
-        !elements[0].hasName())
-      return ParenType::get(context, elements[0].getType());
-    
-    return TupleType::get(elements, context);
-  });
+  return LayoutConstraint();
 }
 
-Type TypeBase::getUnlabeledType(ASTContext &Context) {
-  return getStrippedType(Context, Type(this), /*labels=*/true,
-                         /*defaultArgs=*/true);
+bool TypeBase::isExistentialWithError() {
+  auto canTy = getCanonicalType();
+
+  if (!canTy.isExistentialType()) return false;
+
+  // FIXME: Compute this as a bit in TypeBase so this operation isn't
+  // overly expensive.
+  auto layout = canTy.getExistentialLayout();
+  return layout.isExistentialWithError(getASTContext());
 }
 
-Type TypeBase::getWithoutDefaultArgs(const ASTContext &Context) {
-  return getStrippedType(Context, Type(this), /*labels=*/false,
-                         /*defaultArgs=*/true);
+/// Remove argument labels from the function type.
+Type TypeBase::removeArgumentLabels(unsigned numArgumentLabels) {
+  // If there is nothing to remove, don't.
+  if (numArgumentLabels == 0) return Type(this);
+
+  auto fnType = castTo<AnyFunctionType>();
+
+  // Drop argument labels from the input type.
+  llvm::SmallVector<AnyFunctionType::Param, 8> unlabeledParams;
+  unlabeledParams.reserve(fnType->getNumParams());
+  for (const auto &param : fnType->getParams())
+    unlabeledParams.push_back(param.getWithoutLabel());
+
+  auto result = fnType->getResult()
+                      ->removeArgumentLabels(numArgumentLabels - 1);
+
+  if (auto *genericFnType = dyn_cast<GenericFunctionType>(fnType)) {
+    return GenericFunctionType::get(genericFnType->getGenericSignature(),
+                                    unlabeledParams, result,
+                                    fnType->getExtInfo());
+  }
+
+  return FunctionType::get(unlabeledParams, result, fnType->getExtInfo());
 }
+
 
 Type TypeBase::getWithoutParens() {
   Type Ty = this;
@@ -763,18 +722,12 @@ Type TypeBase::getWithoutParens() {
 }
 
 Type TypeBase::replaceCovariantResultType(Type newResultType,
-                                          unsigned uncurryLevel,
-                                          bool preserveOptionality) {
+                                          unsigned uncurryLevel) {
   if (uncurryLevel == 0) {
-    if (preserveOptionality) {
-      OptionalTypeKind resultOTK;
-      if (auto objectType = getAnyOptionalObjectType(resultOTK)) {
-        assert(!newResultType->getAnyOptionalObjectType());
-        return OptionalType::get(
-            resultOTK,
-            objectType->replaceCovariantResultType(
-                newResultType, uncurryLevel, preserveOptionality));
-      }
+    if (auto objectType = getOptionalObjectType()) {
+      assert(!newResultType->getOptionalObjectType());
+      return OptionalType::get(
+          objectType->replaceCovariantResultType(newResultType, uncurryLevel));
     }
 
     return newResultType;
@@ -782,12 +735,11 @@ Type TypeBase::replaceCovariantResultType(Type newResultType,
 
   // Determine the input and result types of this function.
   auto fnType = this->castTo<AnyFunctionType>();
-  Type inputType = fnType->getInput();
+  auto inputType = fnType->getParams();
   Type resultType =
     fnType->getResult()->replaceCovariantResultType(newResultType,
-                                                    uncurryLevel - 1,
-                                                    preserveOptionality);
-  
+                                                    uncurryLevel - 1);
+
   // Produce the resulting function type.
   if (auto genericFn = dyn_cast<GenericFunctionType>(fnType)) {
     return GenericFunctionType::get(genericFn->getGenericSignature(),
@@ -795,144 +747,178 @@ Type TypeBase::replaceCovariantResultType(Type newResultType,
                                     fnType->getExtInfo());
   }
   
-  if (auto polyFn = dyn_cast<PolymorphicFunctionType>(fnType)) {
-    return PolymorphicFunctionType::get(inputType, resultType,
-                                        &polyFn->getGenericParams(),
-                                        fnType->getExtInfo());
-  }
-  
   return FunctionType::get(inputType, resultType, fnType->getExtInfo());
+}
+
+ParameterListInfo::ParameterListInfo(
+    ArrayRef<AnyFunctionType::Param> params,
+    const ValueDecl *paramOwner,
+    bool skipCurriedSelf) {
+  defaultArguments.resize(params.size());
+  functionBuilderTypes.resize(params.size());
+
+  // No parameter owner means no parameter list means no default arguments
+  // - hand back the zeroed bitvector.
+  //
+  // FIXME: We ought to not request default argument info in this case.
+  if (!paramOwner)
+    return;
+
+  // If the decl has a curried self, but we're not allowed to skip it, return.
+  if (paramOwner->hasCurriedSelf() && !skipCurriedSelf)
+    return;
+
+  // Find the corresponding parameter list.
+  const ParameterList *paramList = nullptr;
+  if (auto *func = dyn_cast<AbstractFunctionDecl>(paramOwner)) {
+    paramList = func->getParameters();
+  } else if (auto *subscript = dyn_cast<SubscriptDecl>(paramOwner)) {
+    paramList = subscript->getIndices();
+  } else if (auto *enumElement = dyn_cast<EnumElementDecl>(paramOwner)) {
+    paramList = enumElement->getParameterList();
+  }
+
+  // No parameter list means no default arguments - hand back the zeroed
+  // bitvector.
+  if (!paramList) {
+    assert(!paramOwner->hasParameterList());
+    return;
+  }
+
+  switch (params.size()) {
+  case 0:
+    return;
+
+  default:
+    // Arguments and parameters are not guaranteed to always line-up
+    // perfectly, e.g. failure diagnostics tries to match argument type
+    // to different "candidate" parameters.
+    if (params.size() != paramList->size())
+      return;
+
+    break;
+  }
+
+  // Note which parameters have default arguments and/or function builders.
+  for (auto i : range(0, params.size())) {
+    auto param = paramList->get(i);
+    if (param->isDefaultArgument()) {
+      defaultArguments.set(i);
+    }
+
+    if (Type functionBuilderType = param->getFunctionBuilderType()) {
+      functionBuilderTypes[i] = functionBuilderType;
+    }
+  }
+}
+
+bool ParameterListInfo::hasDefaultArgument(unsigned paramIdx) const {
+  return paramIdx < defaultArguments.size() ? defaultArguments[paramIdx]
+      : false;
+}
+
+Type ParameterListInfo::getFunctionBuilderType(unsigned paramIdx) const {
+  return paramIdx < functionBuilderTypes.size()
+      ? functionBuilderTypes[paramIdx]
+      : Type();
+}
+
+/// Turn a param list into a symbolic and printable representation that does not
+/// include the types, something like (_:, b:, c:)
+std::string swift::getParamListAsString(ArrayRef<AnyFunctionType::Param> params) {
+  std::string result = "(";
+
+  interleave(params,
+             [&](const AnyFunctionType::Param &param) {
+               if (!param.getLabel().empty())
+                 result += param.getLabel().str();
+               else
+                 result += "_";
+               result += ":";
+             },
+             [&] { result += ", "; });
+
+  result += ')';
+  return result;
 }
 
 /// Rebuilds the given 'self' type using the given object type as the
 /// replacement for the object type of self.
-static Type rebuildSelfTypeWithObjectType(Type selfTy, Type objectTy) {
-  auto existingObjectTy = selfTy->getRValueInstanceType();
-  return selfTy.transform([=](Type type) -> Type {
-    if (type->isEqual(existingObjectTy))
-      return objectTy;
-    return type;
-  });
+static AnyFunctionType::Param
+rebuildSelfTypeWithObjectType(AnyFunctionType::Param selfParam,
+                              Type objectTy) {
+  if (selfParam.getPlainType()->getAs<MetatypeType>())
+    objectTy = MetatypeType::get(objectTy);
+
+  return AnyFunctionType::Param(objectTy,
+                                selfParam.getLabel(),
+                                selfParam.getParameterFlags());
 }
 
 /// Returns a new function type exactly like this one but with the self
-/// parameter replaced. Only makes sense for members of types.
+/// parameter replaced. Only makes sense for members of classes.
 Type TypeBase::replaceSelfParameterType(Type newSelf) {
   auto fnTy = castTo<AnyFunctionType>();
-  Type input = rebuildSelfTypeWithObjectType(fnTy->getInput(), newSelf);
+
+  auto params = fnTy->getParams();
+  assert(params.size() == 1);
+  auto selfParam = rebuildSelfTypeWithObjectType(params[0], newSelf);
 
   if (auto genericFnTy = getAs<GenericFunctionType>()) {
     return GenericFunctionType::get(genericFnTy->getGenericSignature(),
-                                    input,
+                                    {selfParam},
                                     fnTy->getResult(),
                                     fnTy->getExtInfo());
   }
 
-  if (auto polyFnTy = getAs<PolymorphicFunctionType>()) {
-    return PolymorphicFunctionType::get(input,
-                                        fnTy->getResult(),
-                                        &polyFnTy->getGenericParams());
-  }
-
-  return FunctionType::get(input,
+  return FunctionType::get({selfParam},
                            fnTy->getResult(),
                            fnTy->getExtInfo());
 }
 
-Type TypeBase::getWithoutNoReturn(unsigned UncurryLevel) {
-  if (UncurryLevel == 0)
-    return this;
-
-  auto *FnType = this->castTo<AnyFunctionType>();
-  Type InputType = FnType->getInput();
-  Type ResultType = FnType->getResult()->getWithoutNoReturn(UncurryLevel - 1);
-  auto TheExtInfo = FnType->getExtInfo().withIsNoReturn(false);
-  if (auto *GFT = dyn_cast<GenericFunctionType>(FnType)) {
-    return GenericFunctionType::get(GFT->getGenericSignature(),
-                                    InputType, ResultType,
-                                    TheExtInfo);
-  }
-  if (auto *PFT = dyn_cast<PolymorphicFunctionType>(FnType)) {
-    return PolymorphicFunctionType::get(InputType, ResultType,
-                                        &PFT->getGenericParams(),
-                                        TheExtInfo);
-  }
-  return FunctionType::get(InputType, ResultType, TheExtInfo);
-}
-
-/// Retrieve the object type for a 'self' parameter, digging into one-element
-/// tuples, inout types, and metatypes.
-Type TypeBase::getRValueInstanceType() {
-  Type type = this;
-  
-  // Look through argument list tuples.
-  if (auto tupleTy = type->getAs<TupleType>()) {
-    if (tupleTy->getNumElements() == 1 && !tupleTy->getElement(0).isVararg())
-      type = tupleTy->getElementType(0);
-  }
-  
-  if (auto metaTy = type->getAs<AnyMetatypeType>())
+/// Look through a metatype, or just return the original type if it is
+/// not a metatype.
+Type TypeBase::getMetatypeInstanceType() {
+  if (auto metaTy = getAs<AnyMetatypeType>())
     return metaTy->getInstanceType();
 
-  // For mutable value type methods, we need to dig through inout types.
-  return type->getInOutObjectType();
+  return this;
 }
 
-TypeDecl *TypeBase::getDirectlyReferencedTypeDecl() const {
-  if (auto module = dyn_cast<ModuleType>(this))
-    return module->getModule();
-
-  if (auto nominal = dyn_cast<NominalType>(this))
-    return nominal->getDecl();
-
-  if (auto bound = dyn_cast<BoundGenericType>(this))
-    return bound->getDecl();
-
-  if (auto unbound = dyn_cast<UnboundGenericType>(this))
-    return unbound->getDecl();
-
-  if (auto alias = dyn_cast<NameAliasType>(this))
-    return alias->getDecl();
-
-  if (auto gp = dyn_cast<GenericTypeParamType>(this))
-    return gp->getDecl();
-
-  if (auto depMem = dyn_cast<DependentMemberType>(this))
-    return depMem->getAssocType();
-
-  if (auto archetype = dyn_cast<ArchetypeType>(this)) {
-    if (auto proto = archetype->getSelfProtocol())
-      return proto->getProtocolSelf();
-
-    if (auto assoc = archetype->getAssocType())
-      return assoc;
-
-    return nullptr;
-  }
-
-  return nullptr;
-}
-
-/// \brief Collect the protocols in the existential type T into the given
+/// Collect the protocols in the existential type T into the given
 /// vector.
-static void addProtocols(Type T, SmallVectorImpl<ProtocolDecl *> &Protocols) {
+static void addProtocols(Type T,
+                         SmallVectorImpl<ProtocolDecl *> &Protocols,
+                         Type &Superclass,
+                         bool &HasExplicitAnyObject) {
   if (auto Proto = T->getAs<ProtocolType>()) {
     Protocols.push_back(Proto->getDecl());
-  } else if (auto PC = T->getAs<ProtocolCompositionType>()) {
-    for (auto P : PC->getProtocols())
-      addProtocols(P, Protocols);
+    return;
   }
+
+  if (auto PC = T->getAs<ProtocolCompositionType>()) {
+    if (PC->hasExplicitAnyObject())
+      HasExplicitAnyObject = true;
+    for (auto P : PC->getMembers())
+      addProtocols(P, Protocols, Superclass, HasExplicitAnyObject);
+    return;
+  }
+
+  assert(isa<ClassDecl>(T->getAnyNominal()) && "Non-class, non-protocol "
+         "member in protocol composition");
+  assert((!Superclass || Superclass->isEqual(T)) &&
+         "Should have diagnosed multiple superclasses by now");
+  Superclass = T;
 }
 
-/// \brief Add the protocol (or protocols) in the type T to the stack of
+/// Add the protocol (or protocols) in the type T to the stack of
 /// protocols, checking whether any of the protocols had already been seen and
 /// zapping those in the original list that we find again.
-static void addMinimumProtocols(Type T,
-                                SmallVectorImpl<ProtocolDecl *> &Protocols,
-                           llvm::SmallDenseMap<ProtocolDecl *, unsigned> &Known,
-                                llvm::SmallPtrSet<ProtocolDecl *, 16> &Visited,
-                                SmallVector<ProtocolDecl *, 16> &Stack,
-                                bool &ZappedAny) {
+static void
+addMinimumProtocols(Type T, SmallVectorImpl<ProtocolDecl *> &Protocols,
+                    llvm::SmallDenseMap<ProtocolDecl *, unsigned> &Known,
+                    llvm::SmallPtrSetImpl<ProtocolDecl *> &Visited,
+                    SmallVector<ProtocolDecl *, 16> &Stack, bool &ZappedAny) {
   if (auto Proto = T->getAs<ProtocolType>()) {
     auto KnownPos = Known.find(Proto->getDecl());
     if (KnownPos != Known.end()) {
@@ -943,7 +929,7 @@ static void addMinimumProtocols(Type T,
 
     if (Visited.insert(Proto->getDecl()).second) {
       Stack.push_back(Proto->getDecl());
-      for (auto Inherited : Proto->getDecl()->getInheritedProtocols(nullptr))
+      for (auto Inherited : Proto->getDecl()->getInheritedProtocols())
         addMinimumProtocols(Inherited->getDeclaredType(), Protocols, Known,
                             Visited, Stack, ZappedAny);
     }
@@ -951,26 +937,41 @@ static void addMinimumProtocols(Type T,
   }
   
   if (auto PC = T->getAs<ProtocolCompositionType>()) {
-    for (auto C : PC->getProtocols()) {
+    for (auto C : PC->getMembers()) {
       addMinimumProtocols(C, Protocols, Known, Visited, Stack, ZappedAny);
     }
   }
 }
 
-/// \brief Compare two protocols to establish an ordering between them.
-int ProtocolType::compareProtocols(ProtocolDecl * const* PP1,
-                                   ProtocolDecl * const* PP2) {
-  auto *P1 = *PP1;
-  auto *P2 = *PP2;
-  Module *M1 = P1->getParentModule();
-  Module *M2 = P2->getParentModule();
+bool ProtocolType::visitAllProtocols(
+                                 ArrayRef<ProtocolDecl *> protocols,
+                                 llvm::function_ref<bool(ProtocolDecl *)> fn) {
+  SmallVector<ProtocolDecl *, 4> stack;
+  SmallPtrSet<ProtocolDecl *, 4> knownProtocols;
 
-  // Try ordering based on module name, first.
-  if (int result = M1->getName().str().compare(M2->getName().str()))
-    return result;
+  // Prepopulate the stack.
+  for (auto proto : protocols) {
+    if (knownProtocols.insert(proto).second)
+      stack.push_back(proto);
+  }
+  std::reverse(stack.begin(), stack.end());
 
-  // Order based on protocol name.
-  return P1->getName().str().compare(P2->getName().str());
+  while (!stack.empty()) {
+    auto proto = stack.back();
+    stack.pop_back();
+
+    // Visit this protocol.
+    if (fn(proto))
+      return true;
+
+    // Add inherited protocols that we haven't seen already.
+    for (auto inherited : proto->getInheritedProtocols()) {
+      if (knownProtocols.insert(inherited).second)
+        stack.push_back(inherited);
+    }
+  }
+
+  return false;
 }
 
 void ProtocolType::canonicalizeProtocols(
@@ -994,7 +995,7 @@ void ProtocolType::canonicalizeProtocols(
     }
     
     // We have seen this protocol before; zap this occurrence.
-    protocols[I] = 0;
+    protocols[I] = nullptr;
     zappedAny = true;
   }
   
@@ -1005,7 +1006,7 @@ void ProtocolType::canonicalizeProtocols(
     stack.pop_back();
     
     // Add the protocols we inherited.
-    for (auto Inherited : Current->getInheritedProtocols(nullptr)) {
+    for (auto Inherited : Current->getInheritedProtocols()) {
       addMinimumProtocols(Inherited->getDeclaredType(), protocols, known,
                           visited, stack, zappedAny);
     }
@@ -1017,21 +1018,25 @@ void ProtocolType::canonicalizeProtocols(
 
   // Sort the set of protocols by module + name, to give a stable
   // ordering.
-  llvm::array_pod_sort(protocols.begin(), protocols.end(), compareProtocols);
+  llvm::array_pod_sort(protocols.begin(), protocols.end(), TypeDecl::compare);
 }
 
-/// getCanonicalType - Return the canonical version of this type, which has
-/// sugar from all levels stripped off.
-CanType TypeBase::getCanonicalType() {
-  // If the type is itself canonical, return it.
-  if (isCanonical())
-    return CanType(this);
-  // If the canonical type was already computed, just return what we have.
-  if (TypeBase *CT = CanonicalType.get<TypeBase*>())
-    return CanType(CT);
+static void
+getCanonicalParams(AnyFunctionType *funcType,
+                   CanGenericSignature genericSig,
+                   SmallVectorImpl<AnyFunctionType::Param> &canParams) {
+  auto origParams = funcType->getParams();
+  for (auto param : origParams) {
+    canParams.emplace_back(param.getPlainType()->getCanonicalType(genericSig),
+                           param.getLabel(),
+                           param.getParameterFlags());
+  }
+}
 
-  // Otherwise, compute and cache it.
-  TypeBase *Result = 0;
+CanType TypeBase::computeCanonicalType() {
+  assert(!hasCanonicalTypeComputed() && "called unnecessarily");
+
+  TypeBase *Result = nullptr;
   switch (getKind()) {
 #define ALWAYS_CANONICAL_TYPE(id, parent) case TypeKind::id:
 #define TYPE(id, parent)
@@ -1051,7 +1056,8 @@ CanType TypeBase::getCanonicalType() {
 
   case TypeKind::Enum:
   case TypeKind::Struct:
-  case TypeKind::Class: {
+  case TypeKind::Class:
+  case TypeKind::Protocol: {
     auto nominalTy = cast<NominalType>(this);
     auto parentTy = nominalTy->getParent()->getCanonicalType();
     Result = NominalType::get(nominalTy->getDecl(), parentTy,
@@ -1068,10 +1074,7 @@ CanType TypeBase::getCanonicalType() {
     for (const TupleTypeElt &field : TT->getElements()) {
       assert(!field.getType().isNull() &&
              "Cannot get canonical type of un-typechecked TupleType!");
-      CanElts.push_back(TupleTypeElt(field.getType()->getCanonicalType(),
-                                     field.getName(),
-                                     field.getDefaultArgKind(),
-                                     field.isVararg()));
+      CanElts.push_back(field.getWithType(field.getType()->getCanonicalType()));
     }
 
     const ASTContext &C = CanElts[0].getType()->getASTContext();
@@ -1083,6 +1086,19 @@ CanType TypeBase::getCanonicalType() {
     GenericTypeParamType *gp = cast<GenericTypeParamType>(this);
     auto gpDecl = gp->getDecl();
 
+    // If we haven't set a depth for this generic parameter, try to do so.
+    // FIXME: This is a dreadful hack.
+    if (gpDecl->getDepth() == GenericTypeParamDecl::InvalidDepth) {
+      auto resolver = gpDecl->getASTContext().getLazyResolver();
+      assert(resolver && "Need to resolve generic parameter depth");
+      if (auto decl =
+            gpDecl->getDeclContext()->getInnermostDeclarationDeclContext())
+        if (auto valueDecl = dyn_cast<ValueDecl>(decl))
+          resolver->resolveDeclSignature(valueDecl);
+    }
+
+    assert(gpDecl->getDepth() != GenericTypeParamDecl::InvalidDepth &&
+           "parameter hasn't been validated");
     Result = GenericTypeParamType::get(gpDecl->getDepth(), gpDecl->getIndex(),
                                        gpDecl->getASTContext());
     break;
@@ -1091,17 +1107,17 @@ CanType TypeBase::getCanonicalType() {
   case TypeKind::DependentMember: {
     auto dependent = cast<DependentMemberType>(this);
     auto base = dependent->getBase()->getCanonicalType();
-    const ASTContext &ctx = base->getASTContext();
     if (auto assocType = dependent->getAssocType())
-      Result = DependentMemberType::get(base, assocType, ctx);
+      Result = DependentMemberType::get(base, assocType);
     else
-      Result = DependentMemberType::get(base, dependent->getName(), ctx);
+      Result = DependentMemberType::get(base, dependent->getName());
     break;
   }
 
-  case TypeKind::UnownedStorage:
-  case TypeKind::UnmanagedStorage:
-  case TypeKind::WeakStorage: {
+#define REF_STORAGE(Name, ...) \
+  case TypeKind::Name##Storage:
+#include "swift/AST/ReferenceStorage.def"
+  {
     auto ref = cast<ReferenceStorageType>(this);
     Type referentType = ref->getReferentType()->getCanonicalType();
     Result = ReferenceStorageType::get(referentType, ref->getOwnership(),
@@ -1109,71 +1125,51 @@ CanType TypeBase::getCanonicalType() {
     break;
   }
   case TypeKind::LValue:
-    Result = LValueType::get(getRValueType()->getCanonicalType());
+    Result = LValueType::get(cast<LValueType>(this)->getObjectType()
+                               ->getCanonicalType());
     break;
   case TypeKind::InOut:
     Result = InOutType::get(getInOutObjectType()->getCanonicalType());
     break;
-  case TypeKind::PolymorphicFunction: {
-    PolymorphicFunctionType *FT = cast<PolymorphicFunctionType>(this);
-    Type In = FT->getInput()->getCanonicalType();
-    Type Out = FT->getResult()->getCanonicalType();
-    Result = PolymorphicFunctionType::get(In, Out, &FT->getGenericParams(),
-                                          FT->getExtInfo());
-    break;
-  }
+  case TypeKind::Function:
   case TypeKind::GenericFunction: {
-    GenericFunctionType *function = cast<GenericFunctionType>(this);
+    AnyFunctionType *funcTy = cast<AnyFunctionType>(this);
 
-    // Canonicalize the signature.
-    GenericSignature *sig = function->getGenericSignature()
-      ->getCanonicalSignature();
-    
-    // Canonicalize generic parameters.
-    SmallVector<GenericTypeParamType *, 4> genericParams;
-    for (auto param : function->getGenericParams()) {
-      auto newParam = param->getCanonicalType()->castTo<GenericTypeParamType>();
-      genericParams.push_back(newParam);
+    CanGenericSignature genericSig;
+    if (auto *genericFnTy = dyn_cast<GenericFunctionType>(this))
+      genericSig = genericFnTy->getGenericSignature()->getCanonicalSignature();
+
+    // Transform the parameter and result types.
+    SmallVector<AnyFunctionType::Param, 8> canParams;
+    getCanonicalParams(funcTy, genericSig, canParams);
+    auto resultTy = funcTy->getResult()->getCanonicalType(genericSig);
+
+    if (genericSig) {
+      Result = GenericFunctionType::get(genericSig, canParams, resultTy,
+                                        funcTy->getExtInfo());
+    } else {
+      Result = FunctionType::get(canParams, resultTy,
+                                 funcTy->getExtInfo());
     }
-
-    // Transform requirements.
-    SmallVector<Requirement, 4> requirements;
-    for (const auto &req : function->getRequirements()) {
-      auto firstType = req.getFirstType()->getCanonicalType();
-      auto secondType = req.getSecondType();
-      if (secondType)
-        secondType = secondType->getCanonicalType();
-      requirements.push_back(Requirement(req.getKind(), firstType, secondType));
-    }
-
-    // Transform input type.
-    auto inputTy = function->getInput()->getCanonicalType();
-    auto resultTy = function->getResult()->getCanonicalType();
-
-    Result = GenericFunctionType::get(sig, inputTy, resultTy,
-                                      function->getExtInfo());
+    assert(Result->isCanonical());
     break;
   }
-      
+
   case TypeKind::SILBlockStorage:
   case TypeKind::SILBox:
   case TypeKind::SILFunction:
+  case TypeKind::SILToken:
     llvm_unreachable("SIL-only types are always canonical!");
 
-  case TypeKind::Function: {
-    FunctionType *FT = cast<FunctionType>(this);
-    Type In = FT->getInput()->getCanonicalType();
-    Type Out = FT->getResult()->getCanonicalType();
-    Result = FunctionType::get(In, Out, FT->getExtInfo());
-    break;
-  }
   case TypeKind::ProtocolComposition: {
+    auto *PCT = cast<ProtocolCompositionType>(this);
     SmallVector<Type, 4> CanProtos;
-    for (Type t : cast<ProtocolCompositionType>(this)->getProtocols())
+    for (Type t : PCT->getMembers())
       CanProtos.push_back(t->getCanonicalType());
     assert(!CanProtos.empty() && "Non-canonical empty composition?");
     const ASTContext &C = CanProtos[0]->getASTContext();
-    Type Composition = ProtocolCompositionType::get(C, CanProtos);
+    Type Composition = ProtocolCompositionType::get(C, CanProtos,
+                                                    PCT->hasExplicitAnyObject());
     Result = Composition.getPointer();
     break;
   }
@@ -1223,123 +1219,120 @@ CanType TypeBase::getCanonicalType() {
     break;
   }
   }
-    
-  
+
   // Cache the canonical type for future queries.
   assert(Result && "Case not implemented!");
-  CanonicalType = Result;
-  return CanType(Result);
+  return CanonicalType = CanType(Result);
 }
 
+CanType TypeBase::getCanonicalType(GenericSignature *sig) {
+  if (!sig)
+    return getCanonicalType();
 
-TypeBase *TypeBase::getDesugaredType() {
-  switch (getKind()) {
-#define ALWAYS_CANONICAL_TYPE(id, parent) case TypeKind::id:
-#define UNCHECKED_TYPE(id, parent) case TypeKind::id:
-#define TYPE(id, parent)
+  return sig->getCanonicalTypeInContext(this);
+}
+
+TypeBase *TypeBase::reconstituteSugar(bool Recursive) {
+  auto Func = [](Type Ty) -> Type {
+    if (auto boundGeneric = dyn_cast<BoundGenericType>(Ty.getPointer())) {
+      auto &ctx = boundGeneric->getASTContext();
+      if (boundGeneric->getDecl() == ctx.getArrayDecl())
+        return ArraySliceType::get(boundGeneric->getGenericArgs()[0]);
+      if (boundGeneric->getDecl() == ctx.getDictionaryDecl())
+        return DictionaryType::get(boundGeneric->getGenericArgs()[0],
+                                   boundGeneric->getGenericArgs()[1]);
+      if (boundGeneric->getDecl() == ctx.getOptionalDecl())
+        return OptionalType::get(boundGeneric->getGenericArgs()[0]);
+    }
+    return Ty;
+  };
+  if (Recursive)
+    return Type(this).transform(Func).getPointer();
+  else
+    return Func(this).getPointer();
+}
+
+#define TYPE(Id, Parent)
+#define SUGARED_TYPE(Id, Parent) \
+  static_assert(std::is_base_of<SugarType, Id##Type>::value, "Sugar mismatch");
 #include "swift/AST/TypeNodes.def"
-  case TypeKind::Tuple:
-  case TypeKind::Function:
-  case TypeKind::PolymorphicFunction:
-  case TypeKind::GenericFunction:
-  case TypeKind::SILBlockStorage:
-  case TypeKind::SILBox:
-  case TypeKind::SILFunction:
-  case TypeKind::LValue:
-  case TypeKind::InOut:
-  case TypeKind::ProtocolComposition:
-  case TypeKind::ExistentialMetatype:
-  case TypeKind::Metatype:
-  case TypeKind::BoundGenericClass:
-  case TypeKind::BoundGenericEnum:
-  case TypeKind::BoundGenericStruct:
-  case TypeKind::Enum:
-  case TypeKind::Struct:
-  case TypeKind::Class:
-  case TypeKind::GenericTypeParam:
-  case TypeKind::DependentMember:
-  case TypeKind::UnownedStorage:
-  case TypeKind::UnmanagedStorage:
-  case TypeKind::WeakStorage:
-  case TypeKind::DynamicSelf:
-    // None of these types have sugar at the outer level.
-    return this;
-#define SUGARED_TYPE(ID, PARENT) \
-  case TypeKind::ID: \
-    return cast<ID##Type>(this)->getSinglyDesugaredType()->getDesugaredType();
-#define TYPE(id, parent)
-#include "swift/AST/TypeNodes.def"
-  }
 
-  llvm_unreachable("Unknown type kind");
+ParenType::ParenType(Type baseType, RecursiveTypeProperties properties,
+                     ParameterTypeFlags flags)
+  : SugarType(TypeKind::Paren,
+              flags.isInOut() ? InOutType::get(baseType) : baseType,
+              properties) {
+  Bits.ParenType.Flags = flags.toRaw();
+  if (flags.isInOut())
+    assert(!baseType->is<InOutType>() && "caller did not pass a base type");
+  if (baseType->is<InOutType>())
+    assert(flags.isInOut() && "caller did not set flags correctly");
 }
 
-TypeBase *ParenType::getSinglyDesugaredType() {
-  return getUnderlyingType().getPointer();
-}
 
-TypeBase *NameAliasType::getSinglyDesugaredType() {
-  auto *TAD = getDecl();
-
-  // The type for a generic TypeAliasDecl is an UnboundGenericType.
-  if (TAD->getGenericParams())
-    return UnboundGenericType::get(TAD,
-                           TAD->getDeclContext()->getDeclaredTypeInContext(),
-                                   TAD->getASTContext());
-
-  return getDecl()->getUnderlyingType().getPointer();
-}
-
-TypeBase *SyntaxSugarType::getSinglyDesugaredType() {
-  return getImplementationType().getPointer();
-}
-
-Type SyntaxSugarType::getImplementationType() {
-  if (ImplOrContext.is<Type>())
-    return ImplOrContext.get<Type>();
-
+Type SugarType::getSinglyDesugaredTypeSlow() {
   // Find the generic type that implements this syntactic sugar type.
-  auto &ctx = *ImplOrContext.get<const ASTContext *>();
   NominalTypeDecl *implDecl;
 
-  if (isa<ArraySliceType>(this)) {
-    implDecl = ctx.getArrayDecl();
-    assert(implDecl && "Array type has not been set yet");
-  } else if (isa<OptionalType>(this)) {
-    implDecl = ctx.getOptionalDecl();
-    assert(implDecl && "Optional type has not been set yet");
-  } else if (isa<ImplicitlyUnwrappedOptionalType>(this)) {
-    implDecl = ctx.getImplicitlyUnwrappedOptionalDecl();
-    assert(implDecl && "Optional type has not been set yet");
+  // XXX -- If the Decl and Type class hierarchies agreed on spelling, then
+  // we could handle the entire switch statement via macros.
+  switch (getKind()) {
+#define TYPE(Id, Parent) \
+  case TypeKind::Id: llvm_unreachable("non-sugared type?");
+#define SUGARED_TYPE(Id, Parent)
+#include "swift/AST/TypeNodes.def"
+  case TypeKind::Paren:
+    llvm_unreachable("parenthesis are sugar, but not syntax sugar");
+  case TypeKind::TypeAlias:
+    llvm_unreachable("bound type alias types always have an underlying type");
+  case TypeKind::ArraySlice:
+    implDecl = Context->getArrayDecl();
+    break;
+  case TypeKind::Optional:
+    implDecl = Context->getOptionalDecl();
+    break;
+  case TypeKind::Dictionary:
+    implDecl = Context->getDictionaryDecl();
+    break;
+  }
+  if (!implDecl) {
+    return ErrorType::get(*Context);
+  }
+
+  Bits.SugarType.HasCachedType = true;
+  if (auto Ty = dyn_cast<UnarySyntaxSugarType>(this)) {
+    UnderlyingType = BoundGenericType::get(implDecl, Type(), Ty->getBaseType());
+  } else if (auto Ty = dyn_cast<DictionaryType>(this)) {
+    UnderlyingType = BoundGenericType::get(implDecl, Type(),
+                                      { Ty->getKeyType(), Ty->getValueType() });
   } else {
-    llvm_unreachable("Unhandled syntax sugar type");
+    llvm_unreachable("Not UnarySyntaxSugarType or DictionaryType?");
   }
 
   // Record the implementation type.
-  ImplOrContext = BoundGenericType::get(implDecl, Type(), Base);
-  return ImplOrContext.get<Type>();
+  return UnderlyingType;
 }
 
-TypeBase *DictionaryType::getSinglyDesugaredType() {
-  return getImplementationType().getPointer();
-}
+SmallVector<Type, 2> TypeAliasType::getInnermostGenericArgs() const {
+  SmallVector<Type, 2> result;
 
-Type DictionaryType::getImplementationType() {
-  if (ImplOrContext.is<Type>())
-    return ImplOrContext.get<Type>();
+  // If the typealias is not generic, there are no generic arguments
+  if (!typealias->isGeneric()) return result;
 
-  // Find the generic type that implements this syntactic sugar type.
-  auto &ctx = *ImplOrContext.get<const ASTContext *>();
-  NominalTypeDecl *implDecl = ctx.getDictionaryDecl();
-  assert(implDecl && "Dictionary type has not been set yet");
+  // If the substitution map is empty, bail out.
+  auto subMap = getSubstitutionMap();
+  if (subMap.empty()) return result;
 
-  // Record the implementation type.
-  ImplOrContext = BoundGenericType::get(implDecl, Type(), { Key, Value });
-  return ImplOrContext.get<Type>();
-}
-
-TypeBase *SubstitutedType::getSinglyDesugaredType() {
-  return getReplacementType().getPointer();
+  // Retrieve the substitutions for the generic parameters (only).
+  auto genericSig = subMap.getGenericSignature();
+  unsigned numAllGenericParams = genericSig->getGenericParams().size();
+  unsigned numMyGenericParams = typealias->getGenericParams()->size();
+  result.reserve(numMyGenericParams);
+  unsigned startIndex = numAllGenericParams - numMyGenericParams;
+  for (auto gp : genericSig->getGenericParams().slice(startIndex)) {
+    result.push_back(Type(gp).subst(subMap, SubstFlags::UseErrorType));
+  }
+  return result;
 }
 
 unsigned GenericTypeParamType::getDepth() const {
@@ -1386,267 +1379,100 @@ Identifier GenericTypeParamType::getName() const {
   return name;
 }
 
-TypeBase *AssociatedTypeType::getSinglyDesugaredType() {
-  return getDecl()->getArchetype();
-}
-
 const llvm::fltSemantics &BuiltinFloatType::getAPFloatSemantics() const {
   switch (getFPKind()) {
-  case BuiltinFloatType::IEEE16:  return APFloat::IEEEhalf;
-  case BuiltinFloatType::IEEE32:  return APFloat::IEEEsingle;
-  case BuiltinFloatType::IEEE64:  return APFloat::IEEEdouble;
-  case BuiltinFloatType::IEEE80:  return APFloat::x87DoubleExtended;
-  case BuiltinFloatType::IEEE128: return APFloat::IEEEquad;
-  case BuiltinFloatType::PPC128:  return APFloat::PPCDoubleDouble;
+  case BuiltinFloatType::IEEE16:  return APFloat::IEEEhalf();
+  case BuiltinFloatType::IEEE32:  return APFloat::IEEEsingle();
+  case BuiltinFloatType::IEEE64:  return APFloat::IEEEdouble();
+  case BuiltinFloatType::IEEE80:  return APFloat::x87DoubleExtended();
+  case BuiltinFloatType::IEEE128: return APFloat::IEEEquad();
+  case BuiltinFloatType::PPC128:  return APFloat::PPCDoubleDouble();
   }
   llvm::report_fatal_error("Unknown FP semantics");
 }
 
-bool TypeBase::isSpelledLike(Type other) {
-  TypeBase *me = this;
-  TypeBase *them = other.getPointer();
-  
-  if (me == them)
+bool TypeBase::mayHaveSuperclass() {
+  if (getClassOrBoundGenericClass())
     return true;
-  
-  if (me->getKind() != them->getKind())
-    return false;
 
-  switch (me->getKind()) {
-#define ALWAYS_CANONICAL_TYPE(id, parent) case TypeKind::id:
-#define UNCHECKED_TYPE(id, parent) case TypeKind::id:
-#define TYPE(id, parent)
-#include "swift/AST/TypeNodes.def"
-  case TypeKind::Enum:
-  case TypeKind::Struct:
-  case TypeKind::Class:
-  case TypeKind::NameAlias:
-  case TypeKind::Substituted:
-  case TypeKind::AssociatedType:
-  case TypeKind::GenericTypeParam:
-  case TypeKind::DependentMember:
-  case TypeKind::DynamicSelf:
-    return false;
+  if (auto archetype = getAs<ArchetypeType>())
+    return (bool)archetype->requiresClass();
 
-  case TypeKind::BoundGenericClass:
-  case TypeKind::BoundGenericEnum:
-  case TypeKind::BoundGenericStruct: {
-    auto bgMe = cast<BoundGenericType>(me);
-    auto bgThem = cast<BoundGenericType>(them);
-    if (bgMe->getDecl() != bgThem->getDecl())
-      return false;
-    if (bgMe->getGenericArgs().size() != bgThem->getGenericArgs().size())
-      return false;
-    for (size_t i = 0, sz = bgMe->getGenericArgs().size(); i < sz; ++i)
-      if (!bgMe->getGenericArgs()[i]->isSpelledLike(bgThem->getGenericArgs()[i]))
-        return false;
-    return true;
-  }
-
-  case TypeKind::Tuple: {
-    auto tMe = cast<TupleType>(me);
-    auto tThem = cast<TupleType>(them);
-    if (tMe->getNumElements() != tThem->getNumElements())
-      return false;
-    for (size_t i = 0, sz = tMe->getNumElements(); i < sz; ++i) {
-      auto &myField = tMe->getElement(i), &theirField = tThem->getElement(i);
-      if (myField.hasDefaultArg() != theirField.hasDefaultArg())
-        return false;
-      
-      if (myField.getName() != theirField.getName())
-        return false;
-      
-      if (myField.isVararg() != theirField.isVararg())
-        return false;
-      if (!myField.getType()->isSpelledLike(theirField.getType()))
-        return false;
-    }
-    return true;
-  }
-
-  case TypeKind::SILFunction:
-  case TypeKind::SILBlockStorage:
-  case TypeKind::SILBox:
-  case TypeKind::PolymorphicFunction:
-  case TypeKind::GenericFunction: {
-    // Polymorphic function types should never be explicitly spelled.
-    return false;
-  }
-
-  // TODO: change this to is same ExtInfo.
-  case TypeKind::Function: {
-    auto fMe = cast<FunctionType>(me);
-    auto fThem = cast<FunctionType>(them);
-    if (fMe->isAutoClosure() != fThem->isAutoClosure())
-      return false;
-    if (fMe->getRepresentation() != fThem->getRepresentation())
-      return false;
-    if (fMe->isNoReturn() != fThem->isNoReturn())
-      return false;
-    if (!fMe->getInput()->isSpelledLike(fThem->getInput()))
-      return false;
-    if (!fMe->getResult()->isSpelledLike(fThem->getResult()))
-      return false;
-    return true;
-  }
-
-  case TypeKind::LValue: {
-    auto lMe = cast<LValueType>(me);
-    auto lThem = cast<LValueType>(them);
-    return lMe->getObjectType()->isSpelledLike(lThem->getObjectType());
-  }
-  case TypeKind::InOut: {
-    auto lMe = cast<InOutType>(me);
-    auto lThem = cast<InOutType>(them);
-    return lMe->getObjectType()->isSpelledLike(lThem->getObjectType());
-  }
-  case TypeKind::ProtocolComposition: {
-    auto pMe = cast<ProtocolCompositionType>(me);
-    auto pThem = cast<ProtocolCompositionType>(them);
-    if (pMe->getProtocols().size() != pThem->getProtocols().size())
-      return false;
-    for (size_t i = 0, sz = pMe->getProtocols().size(); i < sz; ++i)
-      if (!pMe->getProtocols()[i]->isSpelledLike(pThem->getProtocols()[i]))
-        return false;
-    return true;
-  }
-  case TypeKind::ExistentialMetatype: {
-    auto mMe = cast<ExistentialMetatypeType>(me);
-    auto mThem = cast<ExistentialMetatypeType>(them);
-    return mMe->getInstanceType()->isSpelledLike(mThem->getInstanceType());
-  }
-  case TypeKind::Metatype: {
-    auto mMe = cast<MetatypeType>(me);
-    auto mThem = cast<MetatypeType>(them);
-    return mMe->getInstanceType()->isSpelledLike(mThem->getInstanceType());
-  }
-  case TypeKind::Paren: {
-    auto pMe = cast<ParenType>(me);
-    auto pThem = cast<ParenType>(them);
-    return pMe->getUnderlyingType()->isSpelledLike(pThem->getUnderlyingType());
-  }
-  case TypeKind::ArraySlice:
-  case TypeKind::Optional:
-  case TypeKind::ImplicitlyUnwrappedOptional: {
-    auto aMe = cast<SyntaxSugarType>(me);
-    auto aThem = cast<SyntaxSugarType>(them);
-    return aMe->getBaseType()->isSpelledLike(aThem->getBaseType());
-  }
-  case TypeKind::Dictionary: {
-    auto aMe = cast<DictionaryType>(me);
-    auto aThem = cast<DictionaryType>(them);
-    return aMe->getKeyType()->isSpelledLike(aThem->getKeyType()) &&
-           aMe->getValueType()->isSpelledLike(aThem->getValueType());
-  }
-  case TypeKind::UnownedStorage:
-  case TypeKind::UnmanagedStorage:
-  case TypeKind::WeakStorage: {
-    auto rMe = cast<ReferenceStorageType>(me);
-    auto rThem = cast<ReferenceStorageType>(them);
-    return rMe->getReferentType()->isSpelledLike(rThem->getReferentType());
-  }
-  }
-
-  llvm_unreachable("Unknown type kind");
+  return is<DynamicSelfType>();
 }
 
-Type TypeBase::getSuperclass(LazyResolver *resolver) {
-  // If this type is either a bound generic type, or a nested type inside a
-  // bound generic type, we will need to fish out the generic parameters.
-  Type specializedTy;
+bool TypeBase::satisfiesClassConstraint() {
+  return mayHaveSuperclass() || isObjCExistentialType();
+}
 
-  ClassDecl *classDecl;
-  if (auto classTy = getAs<ClassType>()) {
-    classDecl = classTy->getDecl();
-    if (auto parentTy = classTy->getParent()) {
-      if (parentTy->isSpecialized())
-        specializedTy = parentTy;
-    }
-  } else if (auto boundTy = getAs<BoundGenericType>()) {
-    classDecl = dyn_cast<ClassDecl>(boundTy->getDecl());
-    specializedTy = this;
-  } else if (auto archetype = getAs<ArchetypeType>()) {
-    return archetype->getSuperclass();
-  } else if (auto dynamicSelfTy = getAs<DynamicSelfType>()) {
-    return dynamicSelfTy->getSelfType();
-  } else {
+Type TypeBase::getSuperclass(bool useArchetypes) {
+  auto *nominalDecl = getAnyNominal();
+  auto *classDecl = dyn_cast_or_null<ClassDecl>(nominalDecl);
+
+  // Handle some special non-class types here.
+  if (!classDecl) {
+    if (auto archetype = getAs<ArchetypeType>())
+      return archetype->getSuperclass();
+
+    if (auto dynamicSelfTy = getAs<DynamicSelfType>())
+      return dynamicSelfTy->getSelfType();
+
+    if (isExistentialType())
+      return getExistentialLayout().getSuperclass();
+
     // No other types have superclasses.
-    return nullptr;
+    return Type();
   }
 
-  // Get the superclass type. If the class is generic, the superclass type may
-  // contain generic type parameters from the signature of the class.
-  Type superclassTy;
-  if (classDecl)
-    superclassTy = classDecl->getSuperclass();
+  // We have a class, so get the superclass type.
+  //
+  // If the derived class is generic, the superclass type may contain
+  // generic type parameters from the signature of the derived class.
+  Type superclassTy = classDecl->getSuperclass();
 
-  // If there's no superclass, return a null type. If the class is not in a
-  // generic context, return the original superclass type.
-  if (!superclassTy || !classDecl->isGenericContext())
+  // If there's no superclass, or it is fully concrete, we're done.
+  if (!superclassTy || !superclassTy->hasTypeParameter() ||
+      hasUnboundGenericType())
     return superclassTy;
 
-  // The class is defined in a generic context, so its superclass type may refer
-  // to generic parameters of the class or some parent type of the class. Map
-  // it to a contextual type.
-
-  // FIXME: Lame to rely on archetypes in the substitution below.
-  superclassTy = ArchetypeBuilder::mapTypeIntoContext(classDecl, superclassTy);
-
-  // If the type does not bind any generic parameters, return the superclass
-  // type as-is.
-  if (!specializedTy)
-    return superclassTy;
-
-  // If the type is specialized, we need to gather all of the substitutions
-  // for the type and any parent types.
-  TypeSubstitutionMap substitutions;
-  while (specializedTy) {
-    if (auto nominalTy = specializedTy->getAs<NominalType>()) {
-      specializedTy = nominalTy->getParent();
-      continue;
-    }
-
-    // Introduce substitutions for each of the generic parameters/arguments.
-    auto boundTy = specializedTy->castTo<BoundGenericType>();
-    auto gp = boundTy->getDecl()->getGenericParams()->getParams();
-    for (unsigned i = 0, n = boundTy->getGenericArgs().size(); i != n; ++i) {
-      auto archetype = gp[i]->getArchetype();
-      substitutions[archetype] = boundTy->getGenericArgs()[i];
-    }
-
-    specializedTy = boundTy->getParent();
-  }
-
-  // Perform substitutions into the superclass type to yield the
-  // substituted superclass type.
-  Module *module = classDecl->getModuleContext();
-  return superclassTy.subst(module, substitutions, None);
+  // Gather substitutions from the self type, and apply them to the original
+  // superclass type to form the substituted superclass type.
+  ModuleDecl *module = classDecl->getModuleContext();
+  auto subMap = getContextSubstitutionMap(module,
+                                          classDecl,
+                                          (useArchetypes
+                                           ? classDecl->getGenericEnvironment()
+                                           : nullptr));
+  return superclassTy.subst(subMap);
 }
 
-bool TypeBase::isExactSuperclassOf(Type ty, LazyResolver *resolver) {
-  // For there to be a superclass relationship, we must be a superclass, and
-  // the potential subtype must be a class or superclass-bounded archetype.
-  if (!getClassOrBoundGenericClass() || !ty->mayHaveSuperclass())
+bool TypeBase::isExactSuperclassOf(Type ty) {
+  // For there to be a superclass relationship, we must be a class, and
+  // the potential subtype must be a class, superclass-bounded archetype,
+  // or subclass existential involving an imported class and @objc
+  // protocol.
+  if (!getClassOrBoundGenericClass() ||
+      !(ty->mayHaveSuperclass() ||
+        (ty->isObjCExistentialType() &&
+         ty->getSuperclass() &&
+         ty->getSuperclass()->getAnyNominal()->hasClangNode())))
     return false;
 
   do {
     if (ty->isEqual(this))
       return true;
-    if (ty->getAnyNominal() && ty->getAnyNominal()->isInvalid())
-      return false;
-  } while ((ty = ty->getSuperclass(resolver)));
+  } while ((ty = ty->getSuperclass()));
   return false;
 }
 
 /// Returns true if type `a` has archetypes that can be bound to form `b`.
-bool TypeBase::isBindableTo(Type b, LazyResolver *resolver) {
+bool TypeBase::isBindableTo(Type b) {
   class IsBindableVisitor : public TypeVisitor<IsBindableVisitor, bool, CanType>
   {
     llvm::DenseMap<ArchetypeType *, CanType> Bindings;
-    LazyResolver *Resolver;
+
   public:
-    IsBindableVisitor(LazyResolver *Resolver)
-      : Resolver(Resolver) {}
+    IsBindableVisitor() {}
   
     bool visitArchetypeType(ArchetypeType *orig, CanType subst) {
       // If we already bound this archetype, make sure the new binding candidate
@@ -1655,26 +1481,14 @@ bool TypeBase::isBindableTo(Type b, LazyResolver *resolver) {
       if (bound != Bindings.end()) {
         return bound->second->isEqual(subst);
       }
-      
-      auto canBindClassConstrainedArchetype = [](CanType t) -> bool {
-        // Classes and class-constrained archetypes.
-        if (t->mayHaveSuperclass())
-          return true;
-        
-        // Pure @objc existentials.
-        if (t->isObjCExistentialType())
-          return true;
-        
-        return false;
-      };
-      
+
       // Check that the archetype isn't constrained in a way that makes the
       // binding impossible.
       // For instance, if the archetype is class-constrained, and the binding
       // is not a class, it can never be bound.
-      if (orig->requiresClass() && !canBindClassConstrainedArchetype(subst))
+      if (orig->requiresClass() && !subst->satisfiesClassConstraint())
         return false;
-      
+
       // TODO: If the archetype has a superclass constraint, check that the
       // substitution is a subclass.
       
@@ -1756,9 +1570,11 @@ bool TypeBase::isBindableTo(Type b, LazyResolver *resolver) {
         if (func->getExtInfo() != substFunc->getExtInfo())
           return false;
         
-        if (!visit(func->getInput()->getCanonicalType(),
-                   substFunc->getInput()->getCanonicalType()))
-          return false;
+        for (unsigned i : indices(func->getParams())) {
+          if (!visit(func->getParams()[i].getOldType(),
+                     substFunc.getParams()[i].getOldType()))
+            return false;
+        }
         
         return visit(func->getResult()->getCanonicalType(),
                      substFunc->getResult()->getCanonicalType());
@@ -1778,7 +1594,7 @@ bool TypeBase::isBindableTo(Type b, LazyResolver *resolver) {
         
         if (func->getParameters().size() != substFunc->getParameters().size())
           return false;
-        if (func->getAllResults().size() != substFunc->getAllResults().size())
+        if (func->getResults().size() != substFunc->getResults().size())
           return false;
         
         for (unsigned i : indices(func->getParameters())) {
@@ -1789,14 +1605,14 @@ bool TypeBase::isBindableTo(Type b, LazyResolver *resolver) {
                      substFunc->getParameters()[i].getType()))
             return false;
         }
-        
-        for (unsigned i : indices(func->getAllResults())) {
-          if (func->getAllResults()[i].getConvention()
-                != substFunc->getAllResults()[i].getConvention())
+
+        for (unsigned i : indices(func->getResults())) {
+          if (func->getResults()[i].getConvention()
+              != substFunc->getResults()[i].getConvention())
             return false;
-          
-          if (!visit(func->getAllResults()[i].getType(),
-                     substFunc->getAllResults()[i].getType()))
+
+          if (!visit(func->getResults()[i].getType(),
+                     substFunc->getResults()[i].getType()))
             return false;
         }
         
@@ -1810,39 +1626,42 @@ bool TypeBase::isBindableTo(Type b, LazyResolver *resolver) {
       if (auto substBGT = dyn_cast<BoundGenericType>(subst)) {
         if (bgt->getDecl() != substBGT->getDecl())
           return false;
-        
-        if (bgt->getDecl()->isInvalid())
+
+        auto *decl = bgt->getDecl();
+        if (decl->isInvalid())
           return false;
-        
-        auto origSubs = bgt->getSubstitutions(bgt->getDecl()->getParentModule(),
-                                              Resolver);
-        auto substSubs = substBGT->getSubstitutions(
-                                              bgt->getDecl()->getParentModule(),
-                                              Resolver);
-        assert(origSubs.size() == substSubs.size());
-        for (unsigned subi : indices(origSubs)) {
-          if (!visit(origSubs[subi].getReplacement()->getCanonicalType(),
-                     substSubs[subi].getReplacement()->getCanonicalType()))
+
+        auto *moduleDecl = decl->getParentModule();
+        auto origSubMap = bgt->getContextSubstitutionMap(
+            moduleDecl, decl, decl->getGenericEnvironment());
+        auto substSubMap = substBGT->getContextSubstitutionMap(
+            moduleDecl, decl, decl->getGenericEnvironment());
+
+        auto *genericSig = decl->getGenericSignature();
+        for (auto gp : genericSig->getGenericParams()) {
+          auto orig = Type(gp).subst(origSubMap)->getCanonicalType();
+          auto subst = Type(gp).subst(substSubMap)->getCanonicalType();
+          if (!visit(orig, subst))
             return false;
-          assert(origSubs[subi].getConformances().size()
-                 == substSubs[subi].getConformances().size());
-          for (unsigned conformancei :
-                 indices(origSubs[subi].getConformances())) {
-            // An abstract conformance can be bound to a concrete one.
-            // A concrete conformance may be bindable to a different
-            // specialization of the same root conformance.
-            auto origConf = origSubs[subi].getConformances()[conformancei],
-                 substConf = substSubs[subi].getConformances()[conformancei];
-            if (origConf.isConcrete()) {
-              if (!substConf.isConcrete())
-                return false;
-              if (origConf.getConcrete()->getRootNormalConformance()
-                   != substConf.getConcrete()->getRootNormalConformance())
-                return false;
-            }
+        }
+
+        for (const auto &req : genericSig->getRequirements()) {
+          if (req.getKind() != RequirementKind::Conformance) continue;
+
+          auto canTy = req.getFirstType()->getCanonicalType();
+          auto *proto = req.getSecondType()->castTo<ProtocolType>()->getDecl();
+          auto origConf = *origSubMap.lookupConformance(canTy, proto);
+          auto substConf = *substSubMap.lookupConformance(canTy, proto);
+
+          if (origConf.isConcrete()) {
+            if (!substConf.isConcrete())
+              return false;
+            if (origConf.getConcrete()->getRootConformance()
+                  != substConf.getConcrete()->getRootConformance())
+              return false;
           }
         }
-        
+
         // Same decl should always either have or not have a parent.
         assert((bool)bgt->getParent() == (bool)substBGT->getParent());
         if (bgt->getParent())
@@ -1854,14 +1673,14 @@ bool TypeBase::isBindableTo(Type b, LazyResolver *resolver) {
     }
   };
   
-  return IsBindableVisitor(resolver).visit(getCanonicalType(),
-                                           b->getCanonicalType());
+  return IsBindableVisitor().visit(getCanonicalType(),
+                                   b->getCanonicalType());
 }
 
-bool TypeBase::isBindableToSuperclassOf(Type ty, LazyResolver *resolver) {
+bool TypeBase::isBindableToSuperclassOf(Type ty) {
   // Do an exact match if no archetypes are involved.
   if (!hasArchetype())
-    return isExactSuperclassOf(ty, resolver);
+    return isExactSuperclassOf(ty);
   
   // For there to be a superclass relationship,
   // the potential subtype must be a class or superclass-bounded archetype.
@@ -1878,11 +1697,11 @@ bool TypeBase::isBindableToSuperclassOf(Type ty, LazyResolver *resolver) {
     return true;
   
   do {
-    if (isBindableTo(ty, resolver))
+    if (isBindableTo(ty))
       return true;
     if (ty->getAnyNominal() && ty->getAnyNominal()->isInvalid())
       return false;
-  } while ((ty = ty->getSuperclass(resolver)));
+  } while ((ty = ty->getSuperclass()));
   return false;
 }
 
@@ -1930,7 +1749,7 @@ static bool isBridgeableObjectType(CanType type) {
 
 static bool hasRetainablePointerRepresentation(CanType type) {
   // Look through one level of Optional<> or ImplicitlyUnwrappedOptional<>.
-  if (auto objType = type.getAnyOptionalObjectType()) {
+  if (auto objType = type.getOptionalObjectType()) {
     type = objType;
   }
 
@@ -1946,10 +1765,19 @@ bool TypeBase::isBridgeableObjectType() {
 }
 
 bool TypeBase::isPotentiallyBridgedValueType() {
+  // struct and enum types
   if (auto nominal = getAnyNominal()) {
-    return isa<StructDecl>(nominal) || isa<EnumDecl>(nominal);
+    if (isa<StructDecl>(nominal) || isa<EnumDecl>(nominal))
+      return true;
   }
-  
+
+  // Error existentials.
+  if (isExistentialWithError()) return true;
+
+  // Archetypes that aren't class-constrained.
+  if (auto archetype = getAs<ArchetypeType>())
+    return !archetype->requiresClass();
+
   return false;
 }
 
@@ -1958,11 +1786,17 @@ static ForeignRepresentableKind
 getObjCObjectRepresentable(Type type, const DeclContext *dc) {
   // @objc metatypes are representable when their instance type is.
   if (auto metatype = type->getAs<AnyMetatypeType>()) {
-    // If the instance type is not representable, the metatype is not
-    // representable.
     auto instanceType = metatype->getInstanceType();
+
+    // Consider metatype of any existential type as not Objective-C
+    // representable.
+    if (metatype->is<MetatypeType>() && instanceType->isAnyExistentialType())
+      return ForeignRepresentableKind::None;
+
+    // If the instance type is not representable verbatim, the metatype is not
+    // representable.
     if (getObjCObjectRepresentable(instanceType, dc)
-          == ForeignRepresentableKind::None)
+          != ForeignRepresentableKind::Object)
       return ForeignRepresentableKind::None;
 
     // Objective-C metatypes are trivially representable.
@@ -1974,31 +1808,48 @@ getObjCObjectRepresentable(Type type, const DeclContext *dc) {
     return ForeignRepresentableKind::Bridged;
   }
 
-  // Look through DynamicSelfType.
+  // DynamicSelfType is always representable in Objective-C, even if
+  // the class is not @objc, allowing Self-returning methods to witness
+  // @objc protocol requirements.
   if (auto dynSelf = type->getAs<DynamicSelfType>())
-    type = dynSelf->getSelfType();
+    return ForeignRepresentableKind::Object;
 
   // @objc classes.
   if (auto classDecl = type->getClassOrBoundGenericClass()) {
-    auto &ctx = classDecl->getASTContext();
-    if (auto resolver = ctx.getLazyResolver())
-      resolver->resolveDeclSignature(classDecl);
-
     if (classDecl->isObjC())
       return ForeignRepresentableKind::Object;
   }
 
-  // Objective-C existential types.
-  if (type->isObjCExistentialType())
-    return ForeignRepresentableKind::Object;
-  
-  // Class-constrained generic parameters, from ObjC generic classes.
-  if (auto tyContext = dc->getInnermostTypeContext())
-    if (auto clas = tyContext->getAsClassOrClassExtensionContext())
-      if (clas->hasClangNode())
+  // Objective-C existential types are trivially representable if
+  // they don't have a superclass constraint, or if the superclass
+  // constraint is an @objc class.
+  if (type->isExistentialType()) {
+    auto layout = type->getExistentialLayout();
+    if (layout.isObjC() &&
+        (!layout.explicitSuperclass ||
+         getObjCObjectRepresentable(layout.explicitSuperclass, dc) ==
+           ForeignRepresentableKind::Object))
+      return ForeignRepresentableKind::Object;
+  }
+
+  // Any can be bridged to id.
+  if (type->isAny()) {
+    return ForeignRepresentableKind::Bridged;
+  }
+
+  if (auto tyContext = dc->getInnermostTypeContext()) {
+    // Class-constrained generic parameters, from ObjC generic classes.
+    if (auto *classDecl = tyContext->getSelfClassDecl())
+      if (classDecl->hasClangNode())
         if (auto archetype = type->getAs<ArchetypeType>())
           if (archetype->requiresClass())
             return ForeignRepresentableKind::Object;
+
+    // The 'Self' parameter in a protocol is representable in Objective-C.
+    if (auto *protoDecl = dyn_cast<ProtocolDecl>(tyContext))
+      if (type->isEqual(dc->mapTypeIntoContext(protoDecl->getSelfInterfaceType())))
+        return ForeignRepresentableKind::Object;
+  }
 
   return ForeignRepresentableKind::None;
 }
@@ -2014,7 +1865,7 @@ getForeignRepresentable(Type type, ForeignLanguage language,
                         const DeclContext *dc) {
   // Look through one level of optional type, but remember that we did.
   bool wasOptional = false;
-  if (auto valueType = type->getAnyOptionalObjectType()) {
+  if (auto valueType = type->getOptionalObjectType()) {
     type = valueType;
     wasOptional = true;
   }
@@ -2055,6 +1906,7 @@ getForeignRepresentable(Type type, ForeignLanguage language,
         return false;
 
       case ForeignRepresentableKind::Bridged:
+      case ForeignRepresentableKind::BridgedError:
         anyBridged = true;
         return false;
 
@@ -2062,6 +1914,8 @@ getForeignRepresentable(Type type, ForeignLanguage language,
         anyStaticBridged = true;
         return false;
       }
+
+      llvm_unreachable("Unhandled ForeignRepresentableKind in switch.");
     };
 
     // Check the representation of the function type.
@@ -2082,39 +1936,40 @@ getForeignRepresentable(Type type, ForeignLanguage language,
       break;
     }
 
+    auto success = [](bool anyStaticBridged,
+                      bool anyBridged,
+                      bool isBlock) -> std::pair<ForeignRepresentableKind,
+                                                 ProtocolConformance *> {
+      // We have something representable; check how it is representable.
+      return { anyStaticBridged ? ForeignRepresentableKind::StaticBridged
+                   : anyBridged ? ForeignRepresentableKind::Bridged
+                   : isBlock    ? ForeignRepresentableKind::Object
+                   : ForeignRepresentableKind::Trivial,
+                   nullptr };
+    };
+
     // Look at the result type.
     Type resultType = functionType->getResult();
     if (!resultType->isVoid() && recurse(resultType))
       return failure();
 
-    // Look at the input types.
-    Type inputType = functionType->getInput();
-    if (auto inputTuple = inputType->getAs<TupleType>()) {
-      for (const auto &elt : inputTuple->getElements()) {
-        if (elt.isVararg())
-          return failure();
-        if (recurse(elt.getType()))
-          return failure();
-      }
-    } else if (recurse(inputType)) {
-      return failure();
+    // Look at the input params.
+    for (const auto &param : functionType->getParams()) {
+      if (param.isVariadic())
+        return failure();
+      if (recurse(param.getOldType()))
+        return failure();
     }
 
-    // We have something representable; check how it is representable.
-    return { anyStaticBridged ? ForeignRepresentableKind::StaticBridged
-                 : anyBridged ? ForeignRepresentableKind::Bridged
-                 : isBlock    ? ForeignRepresentableKind::Object
-                 : ForeignRepresentableKind::Trivial,
-             nullptr };
+    return success(anyStaticBridged, anyBridged, isBlock);
   }
 
-  // In Objective-C, type parameters are always objects.
-  if (type->isTypeParameter() && language == ForeignLanguage::ObjectiveC)
-    return { ForeignRepresentableKind::Object, nullptr };
+  // Give special dispensation to builtin types for testing purposes.
+  if (type->is<BuiltinType>())
+    return { ForeignRepresentableKind::Trivial, nullptr };
 
   auto nominal = type->getAnyNominal();
-  if (!nominal)
-    return failure();
+  if (!nominal) return failure();
 
   ASTContext &ctx = nominal->getASTContext();
 
@@ -2143,17 +1998,24 @@ getForeignRepresentable(Type type, ForeignLanguage language,
       // Imported classes and protocols are not representable in C.
       if (isa<ClassDecl>(nominal) || isa<ProtocolDecl>(nominal))
         return failure();
-      SWIFT_FALLTHROUGH;
+      LLVM_FALLTHROUGH;
 
     case ForeignLanguage::ObjectiveC:
       if (isa<StructDecl>(nominal) || isa<EnumDecl>(nominal)) {
         // Optional structs are not representable in (Objective-)C if they
-        // originally came from C, whether or not they are bridged. If they
-        // are defined in Swift, they are only representable if they are
-        // bridged (checked below).
+        // originally came from C, whether or not they are bridged, unless they
+        // came from swift_newtype. If they are defined in Swift, they are only
+        // representable if they are bridged (checked below).
         if (wasOptional) {
-          if (nominal->hasClangNode())
+          if (nominal->hasClangNode()) {
+            Type underlyingType =
+                nominal->getDeclaredType()->getSwiftNewtypeUnderlyingType();
+            if (underlyingType) {
+              return getForeignRepresentable(OptionalType::get(underlyingType),
+                                             language, dc);
+            }
             return failure();
+          }
           break;
         }
       }
@@ -2166,6 +2028,8 @@ getForeignRepresentable(Type type, ForeignLanguage language,
   PointerTypeKind pointerKind;
   if (auto pointerElt = type->getAnyPointerElementType(pointerKind)) {
     switch (pointerKind) {
+    case PTK_UnsafeMutableRawPointer:
+    case PTK_UnsafeRawPointer:
     case PTK_UnsafeMutablePointer:
     case PTK_UnsafePointer:
       // An UnsafeMutablePointer<T> or UnsafePointer<T> is
@@ -2182,7 +2046,7 @@ getForeignRepresentable(Type type, ForeignLanguage language,
       // Objective-C.
 
       // Allow one level of optionality.
-      if (auto objectType = pointerElt->getAnyOptionalObjectType())
+      if (auto objectType = pointerElt->getOptionalObjectType())
         pointerElt = objectType;
 
       if (language == ForeignLanguage::ObjectiveC &&
@@ -2197,8 +2061,7 @@ getForeignRepresentable(Type type, ForeignLanguage language,
   // Determine whether this nominal type is known to be representable
   // in this foreign language.
   auto result = ctx.getForeignRepresentationInfo(nominal, language, dc);
-  if (result.getKind() == ForeignRepresentableKind::None)
-    return failure();
+  if (result.getKind() == ForeignRepresentableKind::None) return failure();
 
   if (wasOptional && !result.isRepresentableAsOptional())
     return failure();
@@ -2210,8 +2073,15 @@ getForeignRepresentable(Type type, ForeignLanguage language,
   if (auto boundGenericType = type->getAs<BoundGenericType>()) {
     for (auto typeArg : boundGenericType->getGenericArgs()) {
       // Type arguments cannot be optional.
-      if (typeArg->getAnyOptionalObjectType())
+      if (typeArg->getOptionalObjectType())
         return failure();
+
+      // A type parameter can appear here when we're looking at an
+      // extension of an @objc imported class.
+      //
+      // FIXME: Make this more principled.
+      if (typeArg->isTypeParameter())
+        continue;
 
       // And must be representable either an object or bridged.
       switch (typeArg->getForeignRepresentableIn(language, dc).first) {
@@ -2238,6 +2108,7 @@ getForeignRepresentable(Type type, ForeignLanguage language,
         
       case ForeignRepresentableKind::Object:
       case ForeignRepresentableKind::Bridged:
+      case ForeignRepresentableKind::BridgedError:
         break;
       }
     }
@@ -2261,9 +2132,12 @@ bool TypeBase::isRepresentableIn(ForeignLanguage language,
   case ForeignRepresentableKind::Trivial:
   case ForeignRepresentableKind::Object:
   case ForeignRepresentableKind::Bridged:
+  case ForeignRepresentableKind::BridgedError:
   case ForeignRepresentableKind::StaticBridged:
     return true;
   }
+
+  llvm_unreachable("Unhandled ForeignRepresentableKind in switch.");
 }
 
 bool TypeBase::isTriviallyRepresentableIn(ForeignLanguage language,
@@ -2271,6 +2145,7 @@ bool TypeBase::isTriviallyRepresentableIn(ForeignLanguage language,
   switch (getForeignRepresentableIn(language, dc).first) {
   case ForeignRepresentableKind::None:
   case ForeignRepresentableKind::Bridged:
+  case ForeignRepresentableKind::BridgedError:
   case ForeignRepresentableKind::StaticBridged:
     return false;
 
@@ -2278,44 +2153,119 @@ bool TypeBase::isTriviallyRepresentableIn(ForeignLanguage language,
   case ForeignRepresentableKind::Object:
     return true;
   }
+
+  llvm_unreachable("Unhandled ForeignRepresentableKind in switch.");
 }
 
-/// Is t1 not just a subtype of t2, but one such that its values are
-/// trivially convertible to values of the other?
-static bool canOverride(CanType t1, CanType t2,
-                        OverrideMatchMode matchMode,
-                        bool isParameter,
-                        bool insideOptional,
-                        LazyResolver *resolver) {
+static bool isABICompatibleEvenAddingOptional(CanType t1, CanType t2) {
+  // Classes, class-constrained archetypes, and pure-ObjC existential
+  // types all have single retainable pointer representation; optionality
+  // change is allowed.
+  // NOTE: This doesn't use isAnyClassReferenceType because we want it to
+  // return a conservative answer for dependent types. There's probably
+  // a better answer here, though.
+  if ((t1->mayHaveSuperclass() || t1->isObjCExistentialType()) &&
+      (t2->mayHaveSuperclass() || t2->isObjCExistentialType())) {
+    return true;
+  }
+
+  // Class metatypes are ABI-compatible even under optionality change.
+  if (auto metaTy1 = dyn_cast<MetatypeType>(t1)) {
+    if (auto metaTy2 = dyn_cast<MetatypeType>(t2)) {
+      if (metaTy1.getInstanceType().getClassOrBoundGenericClass() &&
+          metaTy2.getInstanceType().getClassOrBoundGenericClass()) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+namespace {
+  enum class ParameterPosition {
+    NotParameter,
+    Parameter,
+    ParameterTupleElement
+  };
+
+  enum class OptionalUnwrapping {
+    None,
+    OptionalToOptional,
+    ValueToOptional,
+    OptionalToValue
+  };
+} // end anonymous namespace
+
+static bool matchesFunctionType(CanAnyFunctionType fn1, CanAnyFunctionType fn2,
+                                TypeMatchOptions matchMode,
+                                OptionalUnwrapping insideOptional,
+                                llvm::function_ref<bool()> paramsAndResultMatch) {
+  // FIXME: Handle generic functions in non-ABI matches.
+  if (!matchMode.contains(TypeMatchFlags::AllowABICompatible)) {
+    if (!isa<FunctionType>(fn1) || !isa<FunctionType>(fn2))
+      return false;
+  }
+
+  // When checking overrides, allow the base type to be throwing even if the
+  // overriding type isn't.
+  auto ext1 = fn1->getExtInfo();
+  auto ext2 = fn2->getExtInfo();
+  if (matchMode.contains(TypeMatchFlags::AllowOverride)) {
+    if (ext2.throws()) {
+      ext1 = ext1.withThrows(true);
+    }
+  }
+  // If specified, allow an escaping function parameter to override a
+  // non-escaping function parameter when the parameter is optional.
+  // Note that this is checking 'ext2' rather than 'ext1' because parameters
+  // must be contravariant for the containing function to be covariant.
+  if (matchMode.contains(
+          TypeMatchFlags::IgnoreNonEscapingForOptionalFunctionParam) &&
+      insideOptional == OptionalUnwrapping::OptionalToOptional) {
+    if (!ext2.isNoEscape())
+      ext1 = ext1.withNoEscape(false);
+  }
+  if (ext1 != ext2)
+    return false;
+
+  return paramsAndResultMatch();
+}
+
+static bool matches(CanType t1, CanType t2, TypeMatchOptions matchMode,
+                    ParameterPosition paramPosition,
+                    OptionalUnwrapping insideOptional) {
   if (t1 == t2) return true;
 
   // First try unwrapping optionals.
   // Make sure we only unwrap at most one layer of optional.
-  if (!insideOptional) {
+  if (insideOptional == OptionalUnwrapping::None) {
     // Value-to-optional and optional-to-optional.
-    if (auto obj2 = t2.getAnyOptionalObjectType()) {
+    if (auto obj2 = t2.getOptionalObjectType()) {
       // Optional-to-optional.
-      if (auto obj1 = t1.getAnyOptionalObjectType()) {
-        // Allow T? and T! to freely override one another.
-        return canOverride(obj1, obj2, matchMode,
-                           /*isParameter=*/false,
-                           /*insideOptional=*/true,
-                           resolver);
+      if (auto obj1 = t1.getOptionalObjectType()) {
+        // Allow T? and T! to freely match one another.
+        return matches(obj1, obj2, matchMode, ParameterPosition::NotParameter,
+                       OptionalUnwrapping::OptionalToOptional);
       }
 
       // Value-to-optional.
-      return canOverride(t1, obj2, matchMode,
-                         /*isParameter=*/false,
-                         /*insideOptional=*/true,
-                         resolver);
+      if (matchMode.contains(TypeMatchFlags::AllowABICompatible)) {
+        if (isABICompatibleEvenAddingOptional(t1, obj2))
+          return true;
+      }
+      if (matchMode.contains(TypeMatchFlags::AllowOverride) ||
+          matchMode.contains(TypeMatchFlags::AllowTopLevelOptionalMismatch)) {
+        return matches(t1, obj2, matchMode, ParameterPosition::NotParameter,
+                       OptionalUnwrapping::ValueToOptional);
+      }
 
-    } else if (matchMode == OverrideMatchMode::AllowTopLevelOptionalMismatch) {
+    } else if (matchMode.contains(
+                 TypeMatchFlags::AllowTopLevelOptionalMismatch)) {
       // Optional-to-value, normally disallowed.
-      if (auto obj1 = t1.getAnyOptionalObjectType()) {
-        return canOverride(obj1, t2, matchMode,
-                           /*isParameter=*/false,
-                           /*insideOptional=*/true,
-                           resolver);
+      if (auto obj1 = t1.getOptionalObjectType()) {
+        return matches(obj1, t2, matchMode, ParameterPosition::NotParameter,
+                       OptionalUnwrapping::OptionalToValue);
       }
     }
   }
@@ -2324,94 +2274,111 @@ static bool canOverride(CanType t1, CanType t2,
   if (auto tuple2 = dyn_cast<TupleType>(t2)) {
     // We only ever look into singleton tuples on the RHS if we're
     // certain that the LHS isn't also a singleton tuple.
+    ParameterPosition elementPosition;
+    switch (paramPosition) {
+    case ParameterPosition::NotParameter:
+    case ParameterPosition::ParameterTupleElement:
+      elementPosition = ParameterPosition::NotParameter;
+      break;
+    case ParameterPosition::Parameter:
+      elementPosition = ParameterPosition::ParameterTupleElement;
+      break;
+    }
+
     auto tuple1 = dyn_cast<TupleType>(t1);
     if (!tuple1 || tuple1->getNumElements() != tuple2->getNumElements()) {
-      if (tuple2->getNumElements() == 1)
-        return canOverride(t1, tuple2.getElementType(0),
-                           matchMode,
-                           isParameter,
-                           /*insideOptional=*/false,
-                           resolver);
+      if (tuple2->getNumElements() == 1) {
+        return matches(t1, tuple2.getElementType(0), matchMode, elementPosition,
+                       OptionalUnwrapping::None);
+      }
       return false;
     }
 
     for (auto i : indices(tuple1.getElementTypes())) {
-      if (!canOverride(tuple1.getElementType(i),
-                       tuple2.getElementType(i),
-                       matchMode,
-                       isParameter,
-                       /*insideOptional=*/false,
-                       resolver))
+      if (!matches(tuple1.getElementType(i), tuple2.getElementType(i),
+                   matchMode, elementPosition, OptionalUnwrapping::None)) {
         return false;
+      }
     }
     return true;
   }
 
-  // Function-to-function.  (Polymorphic functions?)
-  if (auto fn2 = dyn_cast<FunctionType>(t2)) {
-    auto fn1 = dyn_cast<FunctionType>(t1);
+  // Function-to-function.
+  if (auto fn2 = dyn_cast<AnyFunctionType>(t2)) {
+    auto fn1 = dyn_cast<AnyFunctionType>(t1);
     if (!fn1)
       return false;
 
-    // Allow ExtInfos to differ in these ways:
-    //   - the overriding type may be noreturn even if the base type isn't
-    //   - the base type may be throwing even if the overriding type isn't
-    auto ext1 = fn1->getExtInfo();
-    auto ext2 = fn2->getExtInfo();
-    if (ext2.throws()) ext1 = ext1.withThrows(true);
-    if (ext1.isNoReturn()) ext2 = ext2.withIsNoReturn(true);
-    if (ext1 != ext2)
-      return false;
+    auto paramsAndResultMatch = [&]() {
+      auto fn2Params = fn2.getParams();
+      auto fn1Params = fn1.getParams();
+      if (fn2Params.size() != fn1Params.size()) {
+        return false;
+      }
 
-    // Inputs are contravariant, results are covariant.
-    return (canOverride(fn2.getInput(), fn1.getInput(),
-                        matchMode,
-                        /*isParameter=*/true,
-                        /*insideOptional=*/false,
-                        resolver) &&
-            canOverride(fn1.getResult(), fn2.getResult(),
-                        matchMode,
-                        /*isParameter=*/false,
-                        /*insideOptional=*/false,
-                        resolver));
-  }
+      // Inputs are contravariant.
+      for (auto i : indices(fn2.getParams())) {
+        if (!matches(fn2Params[i].getOldType(), fn1Params[i].getOldType(),
+                     matchMode, ParameterPosition::ParameterTupleElement,
+                     OptionalUnwrapping::None)) {
+          return false;
+        }
+      }
 
-  if (matchMode == OverrideMatchMode::AllowNonOptionalForIUOParam &&
-      isParameter && !insideOptional) {
-    // Allow T to override T! in certain cases.
-    if (auto obj1 = t1->getImplicitlyUnwrappedOptionalObjectType()) {
-      t1 = obj1->getCanonicalType();
-      if (t1 == t2) return true;
-    }
+      // Results are covariant.
+      return (matches(fn1.getResult(), fn2.getResult(), matchMode,
+                      ParameterPosition::NotParameter,
+                      OptionalUnwrapping::None));
+    };
+
+    return matchesFunctionType(fn1, fn2, matchMode, insideOptional,
+                               paramsAndResultMatch);
   }
 
   // Class-to-class.
-  return t2->isExactSuperclassOf(t1, resolver);
-}
-
-bool TypeBase::canOverride(Type other, OverrideMatchMode matchMode,
-                           LazyResolver *resolver) {
-  return ::canOverride(getCanonicalType(), other->getCanonicalType(),
-                       matchMode,
-                       /*isParameter=*/false,
-                       /*insideOptional=*/false,
-                       resolver);
-}
-
-/// hasAnyDefaultValues - Return true if any of our elements has a default
-/// value.
-bool TupleType::hasAnyDefaultValues() const {
-  for (const TupleTypeElt &Elt : Elements)
-    if (Elt.hasDefaultArg())
+  if (matchMode.contains(TypeMatchFlags::AllowOverride))
+    if (t2->isExactSuperclassOf(t1))
       return true;
+
+  if (matchMode.contains(TypeMatchFlags::AllowABICompatible))
+    if (isABICompatibleEvenAddingOptional(t1, t2))
+      return true;
+
+  if (matchMode.contains(TypeMatchFlags::AllowCompatibleOpaqueTypeArchetypes))
+    if (auto opaque1 = t1->getAs<OpaqueTypeArchetypeType>())
+      if (auto opaque2 = t2->getAs<OpaqueTypeArchetypeType>())
+        return opaque1->getBoundSignature() == opaque2->getBoundSignature() &&
+               opaque1->getInterfaceType()->getCanonicalType()->matches(
+                   opaque2->getInterfaceType()->getCanonicalType(), matchMode);
+
   return false;
+}
+
+bool TypeBase::matches(Type other, TypeMatchOptions matchMode) {
+  return ::matches(getCanonicalType(), other->getCanonicalType(), matchMode,
+                   ParameterPosition::NotParameter, OptionalUnwrapping::None);
+}
+
+bool TypeBase::matchesParameter(Type other, TypeMatchOptions matchMode) {
+  return ::matches(getCanonicalType(), other->getCanonicalType(), matchMode,
+                   ParameterPosition::Parameter, OptionalUnwrapping::None);
+}
+
+bool TypeBase::matchesFunctionType(Type other, TypeMatchOptions matchMode,
+                                   llvm::function_ref<bool()> paramsAndResultMatch) {
+  auto thisFnTy = dyn_cast<AnyFunctionType>(getCanonicalType());
+  auto otherFnTy = dyn_cast<AnyFunctionType>(other->getCanonicalType());
+
+  assert(thisFnTy && otherFnTy);
+  return ::matchesFunctionType(thisFnTy, otherFnTy, matchMode,
+                               OptionalUnwrapping::None, paramsAndResultMatch);
 }
 
 /// getNamedElementId - If this tuple has a field with the specified name,
 /// return the field index, otherwise return -1.
 int TupleType::getNamedElementId(Identifier I) const {
-  for (unsigned i = 0, e = Elements.size(); i != e; ++i) {
-    if (Elements[i].getName() == I)
+  for (unsigned i = 0, e = Bits.TupleType.Count; i != e; ++i) {
+    if (getTrailingObjects<TupleTypeElt>()[i].getName() == I)
       return i;
   }
 
@@ -2419,120 +2386,350 @@ int TupleType::getNamedElementId(Identifier I) const {
   return -1;
 }
 
-/// getElementForScalarInit - If a tuple of this type can be initialized with a
-/// scalar, return the field number that the scalar is assigned to.  If not,
-/// return -1.
-int TupleType::getElementForScalarInit() const {
-  if (Elements.empty()) return -1;
-  
-  int FieldWithoutDefault = -1;
-  for (unsigned i = 0, e = Elements.size(); i != e; ++i) {
-    // Ignore fields with a default value.
-    if (Elements[i].hasDefaultArg()) continue;
-    
-    // If we already saw a non-vararg field missing a default value, then we
-    // cannot assign a scalar to this tuple.
-    if (FieldWithoutDefault != -1) {
-      // Vararg fields are okay; they'll just end up being empty.
-      if (Elements[i].isVararg())
-        continue;
-    
-      return -1;
-    }
-    
-    // Otherwise, remember this field number.
-    FieldWithoutDefault = i;    
-  }
-  
-  // If all the elements have default values, the scalar initializes the first
-  // value in the tuple.
-  return FieldWithoutDefault == -1 ? 0 : FieldWithoutDefault;
+ArchetypeType::ArchetypeType(TypeKind Kind,
+                             const ASTContext &Ctx,
+                             RecursiveTypeProperties properties,
+                             Type InterfaceType,
+                             ArrayRef<ProtocolDecl *> ConformsTo,
+                             Type Superclass, LayoutConstraint Layout)
+  : SubstitutableType(Kind, &Ctx, properties),
+    InterfaceType(InterfaceType)
+{
+  // Set up the bits we need for trailing objects to work.
+  Bits.ArchetypeType.ExpandedNestedTypes = false;
+  Bits.ArchetypeType.HasSuperclass = static_cast<bool>(Superclass);
+  Bits.ArchetypeType.HasLayoutConstraint = static_cast<bool>(Layout);
+  Bits.ArchetypeType.NumProtocols = ConformsTo.size();
+
+  // Record the superclass.
+  if (Superclass)
+    *getSubclassTrailingObjects<Type>() = Superclass;
+
+  // Record the layout constraint.
+  if (Layout)
+    *getSubclassTrailingObjects<LayoutConstraint>() = Layout;
+
+  // Copy the protocols.
+  std::uninitialized_copy(ConformsTo.begin(), ConformsTo.end(),
+                          getSubclassTrailingObjects<ProtocolDecl *>());
 }
 
-/// If this tuple has a varargs element to it, return the base type of the
-/// varargs element (i.e., if it is "Int...", this returns Int, not [Int]).
-/// Otherwise, this returns Type().
-Type TupleType::getVarArgsBaseType() const {
-  for (unsigned i = 0, e = Elements.size(); i != e; ++i) {
-    if (Elements[i].isVararg())
-      return Elements[i].getVarargBaseTy();
+GenericEnvironment *ArchetypeType::getGenericEnvironment() const {
+  auto root = getRoot();
+  if (auto primary = dyn_cast<PrimaryArchetypeType>(root)) {
+    return primary->getGenericEnvironment();
   }
-  
-  return Type();
+  if (auto opened = dyn_cast<OpenedArchetypeType>(root)) {
+    return opened->getGenericEnvironment();
+  }
+  if (auto opaque = dyn_cast<OpaqueTypeArchetypeType>(root)) {
+    return opaque->getGenericEnvironment();
+  }
+  llvm_unreachable("unhandled root archetype kind?!");
 }
 
+ArchetypeType *ArchetypeType::getRoot() const {
+  auto parent = this;
+  while (auto nested = dyn_cast<NestedArchetypeType>(parent)) {
+    parent = nested->getParent();
+  }
+  return const_cast<ArchetypeType*>(parent);
+}
 
-CanArchetypeType ArchetypeType::getNew(const ASTContext &Ctx,
+Type ArchetypeType::getExistentialType() const {
+  // Opened types hold this directly.
+  if (auto opened = dyn_cast<OpenedArchetypeType>(this))
+    return opened->getOpenedExistentialType();
+  
+  // Otherwise, compute it from scratch.
+  SmallVector<Type, 4> constraintTypes;
+  
+  if (auto super = getSuperclass()) {
+    constraintTypes.push_back(super);
+  }
+  for (auto proto : getConformsTo()) {
+    constraintTypes.push_back(proto->getDeclaredType());
+  }
+  return ProtocolCompositionType::get(
+     const_cast<ArchetypeType*>(this)->getASTContext(), constraintTypes, false);
+}
+
+PrimaryArchetypeType::PrimaryArchetypeType(const ASTContext &Ctx,
+                                     GenericEnvironment *GenericEnv,
+                                     Type InterfaceType,
+                                     ArrayRef<ProtocolDecl *> ConformsTo,
+                                     Type Superclass, LayoutConstraint Layout)
+  : ArchetypeType(TypeKind::PrimaryArchetype, Ctx,
+                  RecursiveTypeProperties::HasArchetype,
+                  InterfaceType, ConformsTo, Superclass, Layout),
+    Environment(GenericEnv)
+{
+}
+
+OpenedArchetypeType::OpenedArchetypeType(const ASTContext &Ctx,
+                                         Type Existential,
+                                         ArrayRef<ProtocolDecl *> ConformsTo,
+                                         Type Superclass,
+                                         LayoutConstraint Layout, UUID uuid)
+  : ArchetypeType(TypeKind::OpenedArchetype, Ctx,
+                  RecursiveTypeProperties::HasArchetype
+                    | RecursiveTypeProperties::HasOpenedExistential,
+                  Type(), ConformsTo, Superclass, Layout),
+    Opened(Existential.getPointer()),
+    ID(uuid)
+{
+}
+
+NestedArchetypeType::NestedArchetypeType(const ASTContext &Ctx,
                                        ArchetypeType *Parent,
-                                       AssocTypeOrProtocolType AssocTypeOrProto,
-                                       Identifier Name,
-                                       ArrayRef<Type> ConformsTo,
+                                       Type InterfaceType,
+                                       ArrayRef<ProtocolDecl *> ConformsTo,
                                        Type Superclass,
-                                       bool isRecursive) {
-  // Gather the set of protocol declarations to which this archetype conforms.
-  SmallVector<ProtocolDecl *, 4> ConformsToProtos;
-  for (auto P : ConformsTo) {
-    addProtocols(P, ConformsToProtos);
-  }
-  ProtocolType::canonicalizeProtocols(ConformsToProtos);
-
-  auto arena = AllocationArena::Permanent;
-  return CanArchetypeType(
-           new (Ctx, arena) ArchetypeType(Ctx, Parent, AssocTypeOrProto, Name,
-                                          Ctx.AllocateCopy(ConformsToProtos),
-                                          Superclass, isRecursive));
+                                       LayoutConstraint Layout)
+  : ArchetypeType(TypeKind::NestedArchetype, Ctx,
+                  Parent->getRecursiveProperties(),
+                  InterfaceType, ConformsTo, Superclass, Layout),
+    Parent(Parent)
+{
 }
 
-CanArchetypeType
-ArchetypeType::getNew(const ASTContext &Ctx, ArchetypeType *Parent,
-                      AssocTypeOrProtocolType AssocTypeOrProto,
-                      Identifier Name,
-                      SmallVectorImpl<ProtocolDecl *> &ConformsTo,
-                      Type Superclass, bool isRecursive) {
+OpaqueTypeArchetypeType::OpaqueTypeArchetypeType(OpaqueTypeDecl *OpaqueDecl,
+                                   SubstitutionMap Substitutions,
+                                   RecursiveTypeProperties Props,
+                                   Type InterfaceType,
+                                   ArrayRef<ProtocolDecl*> ConformsTo,
+                                   Type Superclass, LayoutConstraint Layout)
+  : ArchetypeType(TypeKind::OpaqueTypeArchetype, OpaqueDecl->getASTContext(),
+                  Props,
+                  InterfaceType, ConformsTo, Superclass, Layout),
+    OpaqueDecl(OpaqueDecl),
+    Substitutions(Substitutions)
+{
+}
+
+GenericSignature *OpaqueTypeArchetypeType::getBoundSignature() const {
+  return Environment->getGenericSignature();
+}
+
+static Optional<std::pair<ArchetypeType *, OpaqueTypeArchetypeType*>>
+getArchetypeAndRootOpaqueArchetype(Type maybeOpaqueType) {
+  auto archetype = dyn_cast<ArchetypeType>(maybeOpaqueType.getPointer());
+  if (!archetype)
+    return None;
+  auto opaqueRoot = dyn_cast<OpaqueTypeArchetypeType>(archetype->getRoot());
+  if (!opaqueRoot)
+    return None;
+
+  return std::make_pair(archetype, opaqueRoot);
+}
+
+bool ReplaceOpaqueTypesWithUnderlyingTypes::shouldPerformSubstitution(
+    OpaqueTypeDecl *opaque) const {
+  return shouldPerformSubstitution(opaque, contextModule, contextExpansion);
+}
+
+bool ReplaceOpaqueTypesWithUnderlyingTypes::shouldPerformSubstitution(
+    OpaqueTypeDecl *opaque, ModuleDecl *contextModule,
+    ResilienceExpansion contextExpansion) {
+  auto namingDecl = opaque->getNamingDecl();
+
+  // Allow replacement of opaque result types of inlineable function regardless
+  // of resilience and in which context.
+  if (auto *afd = dyn_cast<AbstractFunctionDecl>(namingDecl)) {
+    if (afd->getResilienceExpansion() == ResilienceExpansion::Minimal) {
+      return true;
+    }
+  } else if (auto *asd = dyn_cast<AbstractStorageDecl>(namingDecl)) {
+    auto *getter = asd->getGetter();
+    if (getter &&
+        getter->getResilienceExpansion() == ResilienceExpansion::Minimal) {
+      return true;
+    }
+  }
+
+  // Allow replacement of opaque result types in the context of maximal
+  // resilient expansion if the context's and the opaque type's module are the
+  // same.
+  auto module = namingDecl->getModuleContext();
+  if (contextExpansion == ResilienceExpansion::Maximal &&
+      module == contextModule)
+    return true;
+
+  // Allow general replacement from non resilient modules. Otherwise, disallow.
+  return !module->isResilient();
+}
+
+static Type
+substOpaqueTypesWithUnderlyingTypes(Type ty, ModuleDecl *contextModule,
+                                    ResilienceExpansion contextExpansion) {
+  ReplaceOpaqueTypesWithUnderlyingTypes replacer(contextModule,
+                                                 contextExpansion);
+  return ty.subst(replacer, replacer, SubstFlags::SubstituteOpaqueArchetypes);
+}
+
+Type ReplaceOpaqueTypesWithUnderlyingTypes::
+operator()(SubstitutableType *maybeOpaqueType) const {
+  auto archetypeAndRoot = getArchetypeAndRootOpaqueArchetype(maybeOpaqueType);
+  if (!archetypeAndRoot)
+    return maybeOpaqueType;
+
+  auto archetype = archetypeAndRoot->first;
+  auto opaqueRoot = archetypeAndRoot->second;
+
+  if (!shouldPerformSubstitution(opaqueRoot->getDecl())) {
+    return maybeOpaqueType;
+  }
+
+  auto subs = opaqueRoot->getDecl()->getUnderlyingTypeSubstitutions();
+  // If the body of the opaque decl providing decl has not been type checked we
+  // don't have a underlying subsitution.
+  if (!subs.hasValue())
+    return maybeOpaqueType;
+
+  // Apply the underlying type substitutions to the interface type of the
+  // archetype in question. This will map the inner generic signature of the
+  // opaque type to its outer signature.
+  auto partialSubstTy = archetype->getInterfaceType().subst(*subs);
+  // Then apply the substitutions from the root opaque archetype, to specialize
+  // for its type arguments.
+  auto substTy = partialSubstTy.subst(opaqueRoot->getSubstitutions());
+
+  // If the type still contains opaque types, recur.
+  if (substTy->hasOpaqueArchetype()) {
+    return substOpaqueTypesWithUnderlyingTypes(substTy, contextModule,
+                                               contextExpansion);
+  }
+  return substTy;
+}
+
+static ProtocolConformanceRef
+substOpaqueTypesWithUnderlyingTypes(ProtocolConformanceRef ref, Type origType,
+                                    ModuleDecl *contextModule,
+                                    ResilienceExpansion contextExpansion) {
+  ReplaceOpaqueTypesWithUnderlyingTypes replacer(contextModule,
+                                                 contextExpansion);
+  return ref.subst(origType, replacer, replacer,
+                   SubstFlags::SubstituteOpaqueArchetypes);
+}
+
+Optional<ProtocolConformanceRef> ReplaceOpaqueTypesWithUnderlyingTypes::
+operator()(CanType maybeOpaqueType, Type replacementType,
+           ProtocolDecl *protocol) const {
+  auto abstractRef = ProtocolConformanceRef(protocol);
+
+  auto archetypeAndRoot = getArchetypeAndRootOpaqueArchetype(maybeOpaqueType);
+  if (!archetypeAndRoot) {
+    assert(maybeOpaqueType->isTypeParameter() ||
+           maybeOpaqueType->is<ArchetypeType>());
+    return abstractRef;
+  }
+
+  auto archetype = archetypeAndRoot->first;
+  auto opaqueRoot = archetypeAndRoot->second;
+
+  if (!shouldPerformSubstitution(opaqueRoot->getDecl())) {
+    return abstractRef;
+  }
+
+  auto subs = opaqueRoot->getDecl()->getUnderlyingTypeSubstitutions();
+  // If the body of the opaque decl providing decl has not been type checked we
+  // don't have a underlying subsitution.
+  if (!subs.hasValue())
+    return abstractRef;
+
+  // Apply the underlying type substitutions to the interface type of the
+  // archetype in question. This will map the inner generic signature of the
+  // opaque type to its outer signature.
+  auto partialSubstTy = archetype->getInterfaceType().subst(*subs);
+  auto partialSubstRef =
+      abstractRef.subst(archetype->getInterfaceType(), *subs);
+
+  // Then apply the substitutions from the root opaque archetype, to specialize
+  // for its type arguments.
+  auto substTy = partialSubstTy.subst(opaqueRoot->getSubstitutions());
+  auto substRef =
+      partialSubstRef.subst(partialSubstTy, opaqueRoot->getSubstitutions());
+
+  // If the type still contains opaque types, recur.
+  if (substTy->hasOpaqueArchetype()) {
+    return substOpaqueTypesWithUnderlyingTypes(substRef, substTy, contextModule,
+                                               contextExpansion);
+  }
+  return substRef;
+}
+
+CanNestedArchetypeType NestedArchetypeType::getNew(
+                                   const ASTContext &Ctx,
+                                   ArchetypeType *Parent,
+                                   DependentMemberType *InterfaceType,
+                                   SmallVectorImpl<ProtocolDecl *> &ConformsTo,
+                                   Type Superclass,
+                                   LayoutConstraint Layout) {
+  assert(!Superclass || Superclass->getClassOrBoundGenericClass());
+
   // Gather the set of protocol declarations to which this archetype conforms.
   ProtocolType::canonicalizeProtocols(ConformsTo);
 
   auto arena = AllocationArena::Permanent;
-  return CanArchetypeType(
-           new (Ctx, arena) ArchetypeType(Ctx, Parent, AssocTypeOrProto, Name,
-                                          Ctx.AllocateCopy(ConformsTo),
-                                          Superclass, isRecursive));
+  void *mem = Ctx.Allocate(
+    NestedArchetypeType::totalSizeToAlloc<ProtocolDecl *, Type, LayoutConstraint>(
+          ConformsTo.size(), Superclass ? 1 : 0, Layout ? 1 : 0),
+      alignof(NestedArchetypeType), arena);
+
+  return CanNestedArchetypeType(::new (mem) NestedArchetypeType(
+      Ctx, Parent, InterfaceType, ConformsTo, Superclass, Layout));
+}
+
+CanPrimaryArchetypeType
+PrimaryArchetypeType::getNew(const ASTContext &Ctx,
+                      GenericEnvironment *GenericEnv,
+                      GenericTypeParamType *InterfaceType,
+                      SmallVectorImpl<ProtocolDecl *> &ConformsTo,
+                      Type Superclass,
+                      LayoutConstraint Layout) {
+  assert(!Superclass || Superclass->getClassOrBoundGenericClass());
+  assert(GenericEnv && "missing generic environment for archetype");
+
+  // Gather the set of protocol declarations to which this archetype conforms.
+  ProtocolType::canonicalizeProtocols(ConformsTo);
+
+  auto arena = AllocationArena::Permanent;
+  void *mem = Ctx.Allocate(
+    PrimaryArchetypeType::totalSizeToAlloc<ProtocolDecl *, Type, LayoutConstraint>(
+          ConformsTo.size(), Superclass ? 1 : 0, Layout ? 1 : 0),
+      alignof(PrimaryArchetypeType), arena);
+
+  return CanPrimaryArchetypeType(::new (mem) PrimaryArchetypeType(
+      Ctx, GenericEnv, InterfaceType, ConformsTo, Superclass, Layout));
 }
 
 bool ArchetypeType::requiresClass() const {
-  if (Superclass)
+  if (Bits.ArchetypeType.HasSuperclass)
     return true;
+  if (auto layout = getLayoutConstraint())
+    if (layout->isClass())
+      return true;
   for (ProtocolDecl *conformed : getConformsTo())
     if (conformed->requiresClass())
       return true;
   return false;
 }
 
-void ArchetypeType::resolveNestedType(
-       std::pair<Identifier, NestedType> &nested) const {
-  auto &ctx = const_cast<ArchetypeType *>(this)->getASTContext();
-  auto lazyArchetype = ctx.getLazyArchetype(this);
-  nested.second = lazyArchetype.second->getNestedType(nested.first,
-                                                      *lazyArchetype.first)
-                    ->getType(*lazyArchetype.first);
-}
-
 namespace {
-  /// \brief Function object that orders archetypes by name.
+  /// Function object that orders archetypes by name.
   struct OrderArchetypeByName {
-    using NestedType = ArchetypeType::NestedType;
-    bool operator()(std::pair<Identifier, NestedType> X,
-                    std::pair<Identifier, NestedType> Y) const {
+    bool operator()(std::pair<Identifier, Type> X,
+                    std::pair<Identifier, Type> Y) const {
       return X.first.str() < Y.first.str();
     }
 
-    bool operator()(std::pair<Identifier, NestedType> X,
+    bool operator()(std::pair<Identifier, Type> X,
                     Identifier Y) const {
       return X.first.str() < Y.str();
     }
 
     bool operator()(Identifier X,
-                    std::pair<Identifier, NestedType> Y) const {
+                    std::pair<Identifier, Type> Y) const {
       return X.str() < Y.first.str();
     }
 
@@ -2540,42 +2737,37 @@ namespace {
       return X.str() < Y.str();
     }
   };
+} // end anonymous namespace
+
+void ArchetypeType::populateNestedTypes() const {
+  if (Bits.ArchetypeType.ExpandedNestedTypes) return;
+
+  // Collect the set of nested types of this archetype.
+  SmallVector<std::pair<Identifier, Type>, 4> nestedTypes;
+  llvm::SmallPtrSet<Identifier, 4> knownNestedTypes;
+  ProtocolType::visitAllProtocols(getConformsTo(),
+                                  [&](ProtocolDecl *proto) -> bool {
+    for (auto assocType : proto->getAssociatedTypeMembers()) {
+      if (knownNestedTypes.insert(assocType->getName()).second)
+        nestedTypes.push_back({ assocType->getName(), Type() });
+    }
+
+    return false;
+  });
+
+  // Record the nested types.
+  auto mutableThis = const_cast<ArchetypeType *>(this);
+  mutableThis->setNestedTypes(mutableThis->getASTContext(), nestedTypes);
 }
 
-ArchetypeType::NestedType ArchetypeType::getNestedType(Identifier Name) const {
+Type ArchetypeType::getNestedType(Identifier Name) const {
+  populateNestedTypes();
+
   auto Pos = std::lower_bound(NestedTypes.begin(), NestedTypes.end(), Name,
                               OrderArchetypeByName());
-  if ((Pos == NestedTypes.end() || Pos->first != Name) && this->isRecursive) {
-    if (Name == this->getName()) {
-      NestedType rec = NestedType::forArchetype((ArchetypeType*)this);
-    
-      return rec;
-    } else {
-      auto conformances = this->getConformsTo();
-      
-      for (auto conformance : conformances) {
-        auto conformanceType = conformance->getType().getPointer();
-        
-        if (auto metatypeType = dyn_cast<MetatypeType>(conformanceType)) {
-          conformanceType = metatypeType->getInstanceType().getPointer();
-          
-          if (auto protocolType = dyn_cast<ProtocolType>(conformanceType)) {
-            conformanceType = protocolType->getDecl()->getProtocolSelf()
-                                ->getArchetype();
-          }
-        }
-        
-        if (auto conformedArchetype = dyn_cast<ArchetypeType>(conformanceType)){
-          return conformedArchetype->getNestedType(Name);
-        }
-      }
-    }
+  if (Pos == NestedTypes.end() || Pos->first != Name) {
+    return ErrorType::get(const_cast<ArchetypeType *>(this)->getASTContext());
   }
-
-  if (Pos == NestedTypes.end() || Pos->first != Name)
-    return NestedType::forConcreteType(
-             ErrorType::get(
-               const_cast<ArchetypeType *>(this)->getASTContext()));
 
   // If the type is null, lazily resolve it. 
   if (!Pos->second) {
@@ -2585,14 +2777,29 @@ ArchetypeType::NestedType ArchetypeType::getNestedType(Identifier Name) const {
   return Pos->second;
 }
 
+Optional<Type> ArchetypeType::getNestedTypeIfKnown(Identifier Name) const {
+  populateNestedTypes();
+
+  auto Pos = std::lower_bound(NestedTypes.begin(), NestedTypes.end(), Name,
+                              OrderArchetypeByName());
+  if (Pos == NestedTypes.end() || Pos->first != Name || !Pos->second)
+    return None;
+
+  return Pos->second;
+}
+
 bool ArchetypeType::hasNestedType(Identifier Name) const {
+  populateNestedTypes();
+
   auto Pos = std::lower_bound(NestedTypes.begin(), NestedTypes.end(), Name,
                               OrderArchetypeByName());
   return Pos != NestedTypes.end() && Pos->first == Name;
 }
 
-ArrayRef<std::pair<Identifier, ArchetypeType::NestedType>>
-ArchetypeType::getNestedTypes(bool resolveTypes) const {
+ArrayRef<std::pair<Identifier, Type>>
+ArchetypeType::getAllNestedTypes(bool resolveTypes) const {
+  populateNestedTypes();
+
   if (resolveTypes) {
     for (auto &nested : NestedTypes) {
       if (!nested.second)
@@ -2604,20 +2811,46 @@ ArchetypeType::getNestedTypes(bool resolveTypes) const {
 }
 
 void ArchetypeType::setNestedTypes(
-       ASTContext &Ctx,
-       MutableArrayRef<std::pair<Identifier, NestedType>> Nested) {
-  std::sort(Nested.begin(), Nested.end(), OrderArchetypeByName());
+                                 ASTContext &Ctx,
+                                 ArrayRef<std::pair<Identifier, Type>> Nested) {
+  assert(!Bits.ArchetypeType.ExpandedNestedTypes && "Already expanded");
   NestedTypes = Ctx.AllocateCopy(Nested);
+  std::sort(NestedTypes.begin(), NestedTypes.end(), OrderArchetypeByName());
+  Bits.ArchetypeType.ExpandedNestedTypes = true;
+}
+
+void ArchetypeType::registerNestedType(Identifier name, Type nested) {
+  populateNestedTypes();
+
+  auto found = std::lower_bound(NestedTypes.begin(), NestedTypes.end(), name,
+                                OrderArchetypeByName());
+  assert(found != NestedTypes.end() && found->first == name &&
+         "Unable to find nested type?");
+  assert(!found->second ||
+         found->second->isEqual(nested) ||
+         (found->second->hasError() && nested->hasError()));
+  found->second = nested;
 }
 
 static void collectFullName(const ArchetypeType *Archetype,
                             SmallVectorImpl<char> &Result) {
-  if (auto Parent = Archetype->getParent()) {
-    collectFullName(Parent, Result);
+  if (auto nested = dyn_cast<NestedArchetypeType>(Archetype)) {
+    collectFullName(nested->getParent(), Result);
     Result.push_back('.');
   }
   Result.append(Archetype->getName().str().begin(),
                 Archetype->getName().str().end());
+}
+
+AssociatedTypeDecl *NestedArchetypeType::getAssocType() const {
+  return InterfaceType->castTo<DependentMemberType>()->getAssocType();
+}
+
+Identifier ArchetypeType::getName() const {
+  if (auto nested = dyn_cast<NestedArchetypeType>(this))
+    return nested->getAssocType()->getName();
+  assert(InterfaceType);
+  return InterfaceType->castTo<GenericTypeParamType>()->getName();
 }
 
 std::string ArchetypeType::getFullName() const {
@@ -2626,289 +2859,554 @@ std::string ArchetypeType::getFullName() const {
   return Result.str().str();
 }
 
-void ProtocolCompositionType::Profile(llvm::FoldingSetNodeID &ID,
-                                      ArrayRef<Type> Protocols) {
-  for (auto P : Protocols)
-    ID.AddPointer(P.getPointer());
+void
+OpaqueTypeArchetypeType::Profile(llvm::FoldingSetNodeID &id,
+                                 OpaqueTypeDecl *decl,
+                                 SubstitutionMap subs) {
+  id.AddPointer(decl);
+  subs.profile(id);
 }
 
-bool ProtocolType::requiresClass() const {
+void ProtocolCompositionType::Profile(llvm::FoldingSetNodeID &ID,
+                                      ArrayRef<Type> Members,
+                                      bool HasExplicitAnyObject) {
+  ID.AddInteger(HasExplicitAnyObject);
+  for (auto T : Members)
+    ID.AddPointer(T.getPointer());
+}
+
+bool ProtocolType::requiresClass() {
   return getDecl()->requiresClass();
 }
 
-void ProtocolCompositionType::getAnyExistentialTypeProtocols(
-                                   SmallVectorImpl<ProtocolDecl *> &protos) {
-  // The canonical type for a protocol composition canonicalizes the
-  // order of the protocols.
-  auto canonical = cast<ProtocolCompositionType>(getCanonicalType());
-  canonical.getAnyExistentialTypeProtocols(protos);
-}
-
-bool ProtocolCompositionType::requiresClass() const {
-  for (Type t : getProtocols()) {
-    if (const ProtocolType *proto = t->getAs<ProtocolType>()) {
-      if (proto->requiresClass())
-        return true;
-    } else {
-      if (t->castTo<ProtocolCompositionType>()->requiresClass())
-        return true;
-    }
-  }
-  return false;
+bool ProtocolCompositionType::requiresClass() {
+  return getExistentialLayout().requiresClass();
 }
 
 Type ProtocolCompositionType::get(const ASTContext &C,
-                                  ArrayRef<Type> ProtocolTypes) {
-  for (Type t : ProtocolTypes) {
+                                  ArrayRef<Type> Members,
+                                  bool HasExplicitAnyObject) {
+  for (Type t : Members) {
     if (!t->isCanonical())
-      return build(C, ProtocolTypes);
+      return build(C, Members, HasExplicitAnyObject);
   }
     
+  Type Superclass;
   SmallVector<ProtocolDecl *, 4> Protocols;
-  for (Type t : ProtocolTypes)
-    addProtocols(t, Protocols);
+  for (Type t : Members) {
+    addProtocols(t, Protocols, Superclass, HasExplicitAnyObject);
+  }
   
   // Minimize the set of protocols composed together.
   ProtocolType::canonicalizeProtocols(Protocols);
 
-  // If one protocol remains, its nominal type is the canonical type.
-  if (Protocols.size() == 1)
+  // The presence of a superclass constraint makes AnyObject redundant.
+  if (Superclass)
+    HasExplicitAnyObject = false;
+
+  // If one protocol remains with no further constraints, its nominal
+  // type is the canonical type.
+  if (Protocols.size() == 1 && !Superclass && !HasExplicitAnyObject)
     return Protocols.front()->getDeclaredType();
 
   // Form the set of canonical protocol types from the protocol
   // declarations, and use that to build the canonical composition type.
-  SmallVector<Type, 4> CanProtocolTypes;
+  SmallVector<Type, 4> CanTypes;
+  if (Superclass)
+    CanTypes.push_back(Superclass->getCanonicalType());
   std::transform(Protocols.begin(), Protocols.end(),
-                 std::back_inserter(CanProtocolTypes),
+                 std::back_inserter(CanTypes),
                  [](ProtocolDecl *Proto) {
                    return Proto->getDeclaredType();
                  });
 
-  return build(C, CanProtocolTypes);
-}
-
-ArrayRef<GenericTypeParamDecl *>
-PolymorphicFunctionType::getGenericParameters() const {
-  return Params->getParams();
-}
-
-TypeSubstitutionMap
-GenericParamList::getSubstitutionMap(ArrayRef<swift::Substitution> Subs) const {
-  TypeSubstitutionMap map;
-  
-  for (auto arch : getAllNestedArchetypes()) {
-    auto sub = Subs.front();
-    Subs = Subs.slice(1);
-    
-    map.insert({arch, sub.getReplacement()});
-  }
-  
-  assert(Subs.empty() && "did not use all substitutions?!");
-  return map;
+  // TODO: Canonicalize away HasExplicitAnyObject if it is implied
+  // by one of our member protocols.
+  return build(C, CanTypes, HasExplicitAnyObject);
 }
 
 FunctionType *
-GenericFunctionType::substGenericArgs(Module *M, ArrayRef<Substitution> args) {
-  auto params = getGenericParams();
-  (void)params;
-  
-  TypeSubstitutionMap subs
-    = getGenericSignature()->getSubstitutionMap(args);
-
-  Type input = getInput().subst(M, subs, SubstFlags::IgnoreMissing);
-  Type result = getResult().subst(M, subs, SubstFlags::IgnoreMissing);
-  return FunctionType::get(input, result, getExtInfo());
+GenericFunctionType::substGenericArgs(SubstitutionMap subs) {
+  auto substFn = Type(this).subst(subs)->castTo<AnyFunctionType>();
+  return FunctionType::get(substFn->getParams(),
+                           substFn->getResult(), getExtInfo());
 }
 
-static Type getMemberForBaseType(Module *module,
+FunctionType *GenericFunctionType::substGenericArgs(
+    llvm::function_ref<Type(Type)> substFn) const {
+  llvm::SmallVector<AnyFunctionType::Param, 4> params;
+  params.reserve(getNumParams());
+
+  llvm::transform(getParams(), std::back_inserter(params),
+                  [&](const AnyFunctionType::Param &param) {
+                    return param.withType(substFn(param.getPlainType()));
+                  });
+
+  auto resultTy = substFn(getResult());
+
+  // Build the resulting (non-generic) function type.
+  return FunctionType::get(params, resultTy, getExtInfo());
+}
+
+CanFunctionType
+CanGenericFunctionType::substGenericArgs(SubstitutionMap subs) const {
+  return cast<FunctionType>(
+           getPointer()->substGenericArgs(subs)->getCanonicalType());
+}
+
+static Type getMemberForBaseType(LookupConformanceFn lookupConformances,
+                                 Type origBase,
                                  Type substBase,
                                  AssociatedTypeDecl *assocType,
                                  Identifier name,
                                  SubstOptions options) {
+  // Produce a dependent member type for the given base type.
+  auto getDependentMemberType = [&](Type baseType) {
+    if (assocType)
+      return DependentMemberType::get(baseType, assocType);
+
+    return DependentMemberType::get(baseType, name);
+  };
+
+  // Produce a failed result.
+  auto failed = [&]() -> Type {
+    if (!options.contains(SubstFlags::UseErrorType)) return Type();
+
+    Type baseType = ErrorType::get(substBase ? substBase : origBase);
+    if (assocType)
+      return DependentMemberType::get(baseType, assocType);
+
+    return DependentMemberType::get(baseType, name);
+  };
+
+  // If we don't have a substituted base type, fail.
+  if (!substBase) return failed();
+
+  if (auto *selfType = substBase->getAs<DynamicSelfType>())
+    substBase = selfType->getSelfType();
+
   // Error recovery path.
+  // FIXME: Generalized existentials will look here.
   if (substBase->isOpenedExistential())
-    return ErrorType::get(module->getASTContext());
+    return failed();
 
   // If the parent is an archetype, extract the child archetype with the
   // given name.
   if (auto archetypeParent = substBase->getAs<ArchetypeType>()) {
     if (archetypeParent->hasNestedType(name))
-      return archetypeParent->getNestedTypeValue(name);
-
-    if (auto parent = archetypeParent->getParent()) {
-      // If the archetype doesn't have the requested type and the parent is not
-      // self derived, error out
-      return parent->isSelfDerived() ? parent->getNestedTypeValue(name)
-                                     : ErrorType::get(module->getASTContext());
-    }
+      return archetypeParent->getNestedType(name);
 
     // If looking for an associated type and the archetype is constrained to a
     // class, continue to the default associated type lookup
-    if (!assocType || !archetypeParent->getSuperclass()) {
-      // else just error out
-      return ErrorType::get(module->getASTContext());
-    }
+    if (!assocType || !archetypeParent->getSuperclass())
+      return failed();
   }
 
-  // If the parent is a type variable, retrieve its member type
-  // variable.
-  if (auto typeVarParent = substBase->getAs<TypeVariableType>()) {
-    assert(assocType && "Missing associated type");
-    return substBase->getASTContext().getTypeVariableMemberType(typeVarParent,
-                                                                assocType);
-  }
+  // If the parent is a type variable or a member rooted in a type variable,
+  // or if the parent is a type parameter, we're done. Also handle
+  // UnresolvedType here, which can come up in diagnostics.
+  if (substBase->isTypeVariableOrMember() ||
+      substBase->isTypeParameter() ||
+      substBase->is<UnresolvedType>())
+    return getDependentMemberType(substBase);
 
   // Retrieve the member type with the given name.
 
   // Tuples don't have member types.
-  if (substBase->is<TupleType>()) {
-    return Type();
-  }
-
-  // If the parent is dependent, create a dependent member type.
-  if (substBase->isTypeParameter()) {
-    if (assocType)
-      return DependentMemberType::get(substBase, assocType,
-                                      substBase->getASTContext());
-    else
-      return DependentMemberType::get(substBase, name,
-                                      substBase->getASTContext());
-  }
+  if (substBase->is<TupleType>())
+    return failed();
 
   // If we know the associated type, look in the witness table.
   LazyResolver *resolver = substBase->getASTContext().getLazyResolver();
   if (assocType) {
     auto proto = assocType->getProtocol();
-    // FIXME: Introduce substituted type node here?
-    auto conformance = module->lookupConformance(substBase, proto, resolver);
-    if (!conformance)
-      return Type();
+    Optional<ProtocolConformanceRef> conformance
+      = lookupConformances(origBase->getCanonicalType(),
+                           substBase, proto);
 
-    // If we have an unsatisfied type witness while we're checking the
-    // conformances we're supposed to skip this conformance's unsatisfied type
-    // witnesses, and we have an unsatisfied type witness, return
-    // "missing".
-    assert(conformance->isConcrete());
-    if (conformance->getConcrete()->getRootNormalConformance()->getState()
-          == ProtocolConformanceState::CheckingTypeWitnesses &&
-        !conformance->getConcrete()->hasTypeWitness(assocType, nullptr))
-      return Type();
+    if (!conformance) return failed();
+    if (!conformance->isConcrete()) return failed();
 
-    return conformance->getConcrete()->getTypeWitness(assocType, resolver)
-             .getReplacement();
-  }
+    // Retrieve the type witness.
+    auto witness =
+      conformance->getConcrete()->getTypeWitness(assocType, resolver, options);
+    if (!witness)
+      return failed();
 
-  // FIXME: This is a fallback. We want the above, conformance-based
-  // result to be the only viable path.
-  if (resolver) {
-    if (Type memberType = resolver->resolveMemberType(module, substBase, name)){
-      return memberType;
+    // This is a hacky feature allowing code completion to migrate to
+    // using Type::subst() without changing output.
+    if (options & SubstFlags::DesugarMemberTypes) {
+      if (auto *aliasType =
+                   dyn_cast<TypeAliasType>(witness.getPointer())) {
+        if (!aliasType->is<ErrorType>())
+          witness = aliasType->getSinglyDesugaredType();
+      }
     }
+
+    if (witness->is<ErrorType>())
+      return failed();
+
+    return witness;
   }
 
-  return Type();
+  return failed();
 }
 
-Type DependentMemberType::substBaseType(Module *module,
+Optional<ProtocolConformanceRef>
+LookUpConformanceInModule::operator()(CanType dependentType,
+                                      Type conformingReplacementType,
+                                      ProtocolDecl *conformedProtocol) const {
+  if (conformingReplacementType->isTypeParameter())
+    return ProtocolConformanceRef(conformedProtocol);
+
+  return M->lookupConformance(conformingReplacementType,
+                              conformedProtocol);
+}
+
+Optional<ProtocolConformanceRef>
+LookUpConformanceInSubstitutionMap::operator()(CanType dependentType,
+                                       Type conformingReplacementType,
+                                       ProtocolDecl *conformedProtocol) const {
+  return Subs.lookupConformance(dependentType, conformedProtocol);
+}
+
+Optional<ProtocolConformanceRef>
+MakeAbstractConformanceForGenericType::operator()(CanType dependentType,
+                                       Type conformingReplacementType,
+                                       ProtocolDecl *conformedProtocol) const {
+  assert((conformingReplacementType->is<ErrorType>()
+          || conformingReplacementType->is<SubstitutableType>()
+          || conformingReplacementType->is<DependentMemberType>())
+         && "replacement requires looking up a concrete conformance");
+  return ProtocolConformanceRef(conformedProtocol);
+}
+
+Optional<ProtocolConformanceRef>
+LookUpConformanceInSignature::operator()(CanType dependentType,
+                                         Type conformingReplacementType,
+                                         ProtocolDecl *conformedProtocol) const {
+  // FIXME: Should pass dependentType instead, once
+  // GenericSignature::lookupConformance() does the right thing
+  return Sig.lookupConformance(conformingReplacementType->getCanonicalType(),
+                               conformedProtocol);
+}
+
+Type DependentMemberType::substBaseType(ModuleDecl *module,
                                         Type substBase,
                                         LazyResolver *resolver) {
+  return substBaseType(substBase, LookUpConformanceInModule(module));
+}
+
+Type DependentMemberType::substBaseType(Type substBase,
+                                        LookupConformanceFn lookupConformance) {
   if (substBase.getPointer() == getBase().getPointer() &&
       substBase->hasTypeParameter())
     return this;
 
-  return getMemberForBaseType(module, substBase, getAssocType(), getName(),
-                              None);
+  return getMemberForBaseType(lookupConformance, getBase(), substBase,
+                              getAssocType(), getName(), None);
 }
 
-Type Type::subst(Module *module, TypeSubstitutionMap &substitutions,
-                 SubstOptions options) const {
-  /// Return the original type or a null type, depending on the 'ignoreMissing'
-  /// flag.
-  auto failed = [&](Type t){
-    return options.contains(SubstFlags::IgnoreMissing) ? t : Type();
-  };
-  
-  return transform([&](Type type) -> Type {
+static Type substGenericFunctionType(GenericFunctionType *genericFnType,
+                                     TypeSubstitutionFn substitutions,
+                                     LookupConformanceFn lookupConformances,
+                                     SubstOptions options) {
+  // Substitute into the function type (without generic signature).
+  auto *bareFnType = FunctionType::get(genericFnType->getParams(),
+                                       genericFnType->getResult(),
+                                       genericFnType->getExtInfo());
+  Type result =
+    Type(bareFnType).subst(substitutions, lookupConformances, options);
+  if (!result || result->is<ErrorType>()) return result;
+
+  auto *fnType = result->castTo<FunctionType>();
+  // Substitute generic parameters.
+  bool anySemanticChanges = false;
+  SmallVector<GenericTypeParamType *, 4> genericParams;
+  for (auto param : genericFnType->getGenericParams()) {
+    Type paramTy =
+      Type(param).subst(substitutions, lookupConformances, options);
+    if (!paramTy)
+      return Type();
+
+    if (auto newParam = paramTy->getAs<GenericTypeParamType>()) {
+      if (!newParam->isEqual(param))
+        anySemanticChanges = true;
+
+      genericParams.push_back(newParam);
+    } else {
+      anySemanticChanges = true;
+    }
+  }
+
+  // If no generic parameters remain, this is a non-generic function type.
+  if (genericParams.empty())
+    return result;
+
+  // Transform requirements.
+  SmallVector<Requirement, 4> requirements;
+  for (const auto &req : genericFnType->getRequirements()) {
+    // Substitute into the requirement.
+    auto substReqt = req.subst(substitutions, lookupConformances, options);
+    if (!substReqt) {
+      anySemanticChanges = true;
+      continue;
+    }
+
+    // Did anything change?
+    if (!anySemanticChanges &&
+        (!req.getFirstType()->isEqual(substReqt->getFirstType()) ||
+         (req.getKind() != RequirementKind::Layout &&
+          !req.getSecondType()->isEqual(substReqt->getSecondType())))) {
+      anySemanticChanges = true;
+    }
+
+    // Skip any erroneous requirements.
+    if (substReqt->getFirstType()->hasError() ||
+        (substReqt->getKind() != RequirementKind::Layout &&
+         substReqt->getSecondType()->hasError()))
+      continue;
+
+    requirements.push_back(*substReqt);
+  }
+
+  GenericSignature *genericSig = nullptr;
+  if (anySemanticChanges) {
+    // If there were semantic changes, we need to build a new generic
+    // signature.
+    GenericSignatureBuilder builder(genericFnType->getASTContext());
+
+    // Add the generic parameters to the builder.
+    for (auto gp : genericParams)
+      builder.addGenericParameter(gp);
+
+    // Add the requirements to the builder.
+    auto source =
+      GenericSignatureBuilder::FloatingRequirementSource::forAbstract();
+    for (const auto &req : requirements)
+      builder.addRequirement(req, source, /*inferForModule=*/nullptr);
+
+    // Form the generic signature.
+    genericSig = std::move(builder).computeGenericSignature(SourceLoc());
+  } else {
+    // Use the mapped generic signature.
+    genericSig = GenericSignature::get(genericParams, requirements);
+  }
+
+  // Produce the new generic function type.
+  return GenericFunctionType::get(genericSig, fnType->getParams(),
+                                  fnType->getResult(), fnType->getExtInfo());
+}
+
+static Type substType(Type derivedType,
+                      TypeSubstitutionFn substitutions,
+                      LookupConformanceFn lookupConformances,
+                      SubstOptions options) {
+  // Handle substitutions into generic function types.
+  if (auto genericFnType = derivedType->getAs<GenericFunctionType>()) {
+    return substGenericFunctionType(genericFnType, substitutions,
+                                    lookupConformances, options);
+  }
+
+  // FIXME: Change getTypeOfMember() to not pass GenericFunctionType here
+  if (!derivedType->hasArchetype()
+      && !derivedType->hasTypeParameter()
+      && (!options.contains(SubstFlags::SubstituteOpaqueArchetypes)
+          || !derivedType->hasOpaqueArchetype()))
+    return derivedType;
+
+  return derivedType.transformRec([&](TypeBase *type) -> Optional<Type> {
+    // FIXME: Add SIL versions of mapTypeIntoContext() and
+    // mapTypeOutOfContext() and use them appropriately
     assert((options.contains(SubstFlags::AllowLoweredTypes) ||
-            !isa<SILFunctionType>(type.getPointer())) &&
+            !isa<SILFunctionType>(type)) &&
            "should not be doing AST type-substitution on a lowered SIL type;"
            "use SILType::subst");
 
+    // Special-case handle SILBoxTypes; we want to structurally substitute the
+    // substitutions.
+    if (auto boxTy = dyn_cast<SILBoxType>(type)) {
+      auto subMap = boxTy->getSubstitutions();
+      auto newSubMap = subMap.subst(substitutions, lookupConformances);
+
+      return SILBoxType::get(boxTy->getASTContext(),
+                             boxTy->getLayout(),
+                             newSubMap);
+    }
+    
     // We only substitute for substitutable types and dependent member types.
     
     // For dependent member types, we may need to look up the member if the
     // base is resolved to a non-dependent type.
-    if (auto depMemTy = type->getAs<DependentMemberType>()) {
-      // Check whether we have a direct substitution for the dependent type.
-      // FIXME: This arguably should be getMemberForBaseType's responsibility.
-      auto known =
-        substitutions.find(depMemTy->getCanonicalType().getPointer());
-      if (known != substitutions.end() && known->second) {
-        return SubstitutedType::get(type, known->second,
-                                    module->getASTContext());
-      }
-    
-      auto newBase = depMemTy->getBase().subst(module, substitutions, options);
+    if (auto depMemTy = dyn_cast<DependentMemberType>(type)) {
+      auto newBase = substType(depMemTy->getBase(),
+                               substitutions, lookupConformances, options);
       if (!newBase)
-        return failed(type);
+        return Type();
       
-      if (Type r = getMemberForBaseType(module, newBase,
-                                        depMemTy->getAssocType(),
-                                        depMemTy->getName(), options))
-        return r;
-
-      return failed(type);
+      return getMemberForBaseType(lookupConformances,
+                                  depMemTy->getBase(), newBase,
+                                  depMemTy->getAssocType(),
+                                  depMemTy->getName(), options);
     }
     
-    auto substOrig = type->getAs<SubstitutableType>();
+    auto substOrig = dyn_cast<SubstitutableType>(type);
     if (!substOrig)
-      return type;
+      return None;
+    // Opaque types can't normally be directly substituted unless we
+    // specifically were asked to substitute them.
+    if (!options.contains(SubstFlags::SubstituteOpaqueArchetypes)
+        && isa<OpaqueTypeArchetypeType>(substOrig))
+      return None;
 
     // If we have a substitution for this type, use it.
-    auto key = substOrig->getCanonicalType()->castTo<SubstitutableType>();
-    auto known = substitutions.find(key);
-    if (known != substitutions.end() && known->second)
-      return SubstitutedType::get(type, known->second,
-                                  module->getASTContext());
+    if (auto known = substitutions(substOrig))
+      return known;
 
-    // If we don't have a substitution for this type and it doesn't have a
-    // parent, then we're not substituting it.
-    auto parent = substOrig->getParent();
-    if (!parent)
-      return type;
+    // If we failed to substitute a generic type parameter, give up.
+    if (isa<GenericTypeParamType>(substOrig)) {
+      if (options.contains(SubstFlags::UseErrorType))
+        return ErrorType::get(type);
+      return Type();
+    }
+
+    if (auto primaryArchetype = dyn_cast<PrimaryArchetypeType>(substOrig)) {
+      if (options.contains(SubstFlags::UseErrorType))
+        return ErrorType::get(type);
+      return Type();
+    }
+
+    // Opened existentials cannot be substituted in this manner,
+    // but if they appear in the original type this is not an
+    // error.
+    if (isa<OpenedArchetypeType>(substOrig))
+      return Type(type);
+
+    // For nested archetypes, we can substitute the parent.
+    auto nestedArchetype = cast<NestedArchetypeType>(substOrig);
+    auto parent = nestedArchetype->getParent();
 
     // Substitute into the parent type.
-    Type substParent = Type(parent).subst(module, substitutions, options);
-    if (!substParent)
-      return Type();
+    Type substParent = substType(parent, substitutions,
+                                 lookupConformances, options);
 
     // If the parent didn't change, we won't change.
     if (substParent.getPointer() == parent)
-      return type;
+      return Type(type);
 
     // Get the associated type reference from a child archetype.
-    AssociatedTypeDecl *assocType = nullptr;
-    if (auto archetype = substOrig->getAs<ArchetypeType>()) {
-      assocType = archetype->getAssocType();
-    }
-    
-    
-    if (Type r = getMemberForBaseType(module, substParent, assocType,
-                                      substOrig->getName(), options))
-      return r;
-    return failed(type);
+    AssociatedTypeDecl *assocType = nestedArchetype->getAssocType();
+
+    return getMemberForBaseType(lookupConformances, parent, substParent,
+                                assocType, nestedArchetype->getName(),
+                                options);
   });
 }
 
-TypeSubstitutionMap TypeBase::getMemberSubstitutions(const DeclContext *dc) {
+Type Type::subst(SubstitutionMap substitutions,
+                 SubstOptions options) const {
+  return substType(*this,
+                   QuerySubstitutionMap{substitutions},
+                   LookUpConformanceInSubstitutionMap(substitutions),
+                   options);
+}
 
-  // Ignore lvalues in the base type.
-  Type baseTy(getRValueType());
+Type Type::subst(TypeSubstitutionFn substitutions,
+                 LookupConformanceFn conformances,
+                 SubstOptions options) const {
+  return substType(*this, substitutions, conformances, options);
+}
 
-  // Look through the metatype; it has no bearing on the result.
-  if (auto metaBase = baseTy->getAs<AnyMetatypeType>()) {
-    baseTy = metaBase->getInstanceType()->getRValueType();
+Type Type::substDependentTypesWithErrorTypes() const {
+  return substType(*this,
+                   [](SubstitutableType *t) -> Type { return Type(); },
+                   MakeAbstractConformanceForGenericType(),
+                   (SubstFlags::AllowLoweredTypes |
+                    SubstFlags::UseErrorType));
+}
+
+const DependentMemberType *TypeBase::findUnresolvedDependentMemberType() {
+  if (!hasTypeParameter()) return nullptr;
+
+  const DependentMemberType *unresolvedDepMemTy = nullptr;
+  Type(this).findIf([&](Type type) -> bool {
+    if (auto depMemTy = type->getAs<DependentMemberType>()) {
+      if (depMemTy->getAssocType() == nullptr) {
+        unresolvedDepMemTy = depMemTy;
+        return true;
+      }
+    }
+    return false;
+  });
+
+  return unresolvedDepMemTy;
+}
+
+bool TypeBase::isNoEscape() const {
+  auto type = getCanonicalType();
+
+  if (auto silFuncTy = dyn_cast<SILFunctionType>(type))
+    return silFuncTy->isNoEscape();
+
+  if (auto funcTy = dyn_cast<FunctionType>(type))
+    return funcTy->isNoEscape();
+
+  if (auto tupleTy = dyn_cast<TupleType>(type)) {
+    for (auto eltTy : tupleTy.getElementTypes())
+      if (eltTy->isNoEscape())
+        return true;
   }
+
+  return false;
+}
+
+static Type getConcreteTypeForSuperclassTraversing(Type t) {
+  if (t->isExistentialType()) {
+    return t->getExistentialLayout().getSuperclass();
+  } if (auto archetype = t->getAs<ArchetypeType>()) {
+    return archetype->getSuperclass();
+  } else if (auto dynamicSelfTy = t->getAs<DynamicSelfType>()) {
+    return dynamicSelfTy->getSelfType();
+  }
+  return t;
+}
+
+Type TypeBase::getSuperclassForDecl(const ClassDecl *baseClass,
+                                    bool useArchetypes) {
+  Type t = getConcreteTypeForSuperclassTraversing(this);
+
+  while (t) {
+    // If we have a class-constrained archetype or class-constrained
+    // existential, get the underlying superclass constraint.
+    auto *nominalDecl = t->getAnyNominal();
+    assert(nominalDecl && "expected nominal type here");
+    assert(isa<ClassDecl>(nominalDecl) && "expected a class here");
+
+    if (nominalDecl == baseClass)
+      return t;
+
+    t = t->getSuperclass(useArchetypes);
+  }
+
+#ifndef NDEBUG
+  auto *currentClass = getConcreteTypeForSuperclassTraversing(this)
+      ->getClassOrBoundGenericClass();
+  assert(baseClass->isSuperclassOf(currentClass) &&
+         "no inheritance relationship between given classes");
+#endif
+
+  return ErrorType::get(this);
+}
+
+TypeSubstitutionMap
+TypeBase::getContextSubstitutions(const DeclContext *dc,
+                                  GenericEnvironment *genericEnv) {
+  assert(dc->isTypeContext());
+  Type baseTy(this);
+
+  assert(!baseTy->hasLValueType() &&
+         !baseTy->is<AnyMetatypeType>() &&
+         !baseTy->is<ErrorType>());
 
   // The resulting set of substitutions. Always use this to ensure we
   // don't miss out on NRVO anywhere.
@@ -2916,55 +3414,50 @@ TypeSubstitutionMap TypeBase::getMemberSubstitutions(const DeclContext *dc) {
 
   // If the member is part of a protocol or extension thereof, we need
   // to substitute in the type of Self.
-  if (dc->getAsProtocolOrProtocolExtensionContext()) {
-    // We only substitute into archetypes for now for protocols.
-    // FIXME: This seems like an odd restriction. Whatever is depending on
-    // this, shouldn't.
-    if (!baseTy->is<ArchetypeType>() && isa<ProtocolDecl>(dc))
-      return substitutions;
-
+  if (dc->getSelfProtocolDecl()) {
     // FIXME: This feels painfully inefficient. We're creating a dense map
     // for a single substitution.
-    substitutions[dc->getProtocolSelf()->getArchetype()] = baseTy;
-    substitutions[dc->getProtocolSelf()->getDeclaredType()
+    substitutions[dc->getSelfInterfaceType()
                     ->getCanonicalType()->castTo<GenericTypeParamType>()]
       = baseTy;
     return substitutions;
   }
 
-  // Extract the lazy resolver.
-  LazyResolver *resolver = dc->getASTContext().getLazyResolver();
-
   // Find the superclass type with the context matching that of the member.
-  auto ownerNominal = dc->getAsNominalTypeOrNominalTypeExtensionContext();
-  while (!baseTy->is<ErrorType>() &&
-         baseTy->getAnyNominal() &&
-         baseTy->getAnyNominal() != ownerNominal) {
-    baseTy = baseTy->getSuperclass(resolver);
-    assert(baseTy && "Couldn't find appropriate context");
-  }
+  auto *ownerNominal = dc->getSelfNominalTypeDecl();
+  if (auto *ownerClass = dyn_cast<ClassDecl>(ownerNominal))
+    baseTy = baseTy->getSuperclassForDecl(ownerClass);
 
-  // If the base type isn't specialized, there's nothing to substitute.
-  if (!baseTy->isSpecialized())
-    return substitutions;
+  assert(ownerNominal == baseTy->getAnyNominal());
 
   // Gather all of the substitutions for all levels of generic arguments.
-  GenericParamList *curGenericParams = dc->getGenericParamsOfContext();
-  while (baseTy) {
+  auto *genericSig = dc->getGenericSignatureOfContext();
+  if (!genericSig)
+    return substitutions;
+
+  auto params = genericSig->getGenericParams();
+  unsigned n = params.size();
+
+  while (baseTy && n > 0) {
     // For a bound generic type, gather the generic parameter -> generic
     // argument substitutions.
     if (auto boundGeneric = baseTy->getAs<BoundGenericType>()) {
-      auto params = curGenericParams->getParams();
       auto args = boundGeneric->getGenericArgs();
-      for (unsigned i = 0, n = args.size(); i != n; ++i) {
-        substitutions[params[i]->getDeclaredType()->getCanonicalType()
-                        ->castTo<GenericTypeParamType>()]
-          = args[i];
+      for (unsigned i = 0, e = args.size(); i < e; ++i) {
+        substitutions[params[n - e + i]->getCanonicalType()
+                        ->castTo<GenericTypeParamType>()] = args[i];
       }
 
       // Continue looking into the parent.
       baseTy = boundGeneric->getParent();
-      curGenericParams = curGenericParams->getOuterParameters();
+      n -= args.size();
+      continue;
+    }
+
+    // Continue looking into the parent.
+    if (auto protocolTy = baseTy->getAs<ProtocolType>()) {
+      baseTy = protocolTy->getParent();
+      n--;
       continue;
     }
 
@@ -2974,35 +3467,126 @@ TypeSubstitutionMap TypeBase::getMemberSubstitutions(const DeclContext *dc) {
       continue;
     }
 
-    // We're done.
-    break;
+    llvm_unreachable("Bad base type");
+  }
+
+  while (n > 0) {
+    auto *gp = params[--n];
+    auto substTy = (genericEnv
+                    ? genericEnv->mapTypeIntoContext(gp)
+                    : gp);
+    auto result = substitutions.insert(
+      {gp->getCanonicalType()->castTo<GenericTypeParamType>(),
+       substTy});
+    assert(result.second);
+    (void) result;
   }
 
   return substitutions;
 }
 
-Type TypeBase::getTypeOfMember(Module *module, const ValueDecl *member,
-                               LazyResolver *resolver, Type memberType) {
+SubstitutionMap TypeBase::getContextSubstitutionMap(
+    ModuleDecl *module, const DeclContext *dc,
+    GenericEnvironment *genericEnv) {
+  auto *genericSig = dc->getGenericSignatureOfContext();
+  if (genericSig == nullptr)
+    return SubstitutionMap();
+  return SubstitutionMap::get(
+    genericSig,
+    QueryTypeSubstitutionMap{getContextSubstitutions(dc, genericEnv)},
+    LookUpConformanceInModule(module));
+}
+
+TypeSubstitutionMap TypeBase::getMemberSubstitutions(
+    const ValueDecl *member,
+    GenericEnvironment *genericEnv) {
+  auto *memberDC = member->getDeclContext();
+
+  TypeSubstitutionMap substitutions;
+
+  // Compute the set of member substitutions to apply.
+  if (memberDC->isTypeContext())
+    substitutions = getContextSubstitutions(memberDC, genericEnv);
+
+  // If the member itself is generic, preserve its generic parameters.
+  // We need this since code completion and diagnostics want to be able
+  // to call getTypeOfMember() with functions and nested types.
+  if (isa<AbstractFunctionDecl>(member) ||
+      isa<GenericTypeDecl>(member) ||
+      isa<SubscriptDecl>(member)) {
+    auto *innerDC = member->getInnermostDeclContext();
+    if (innerDC->isInnermostContextGeneric()) {
+      auto *sig = innerDC->getGenericSignatureOfContext();
+      for (auto param : sig->getInnermostGenericParams()) {
+        auto *genericParam = param->getCanonicalType()
+            ->castTo<GenericTypeParamType>();
+        substitutions[genericParam] =
+          (genericEnv
+           ? genericEnv->mapTypeIntoContext(param)
+           : param);
+      }
+    }
+  }
+
+  return substitutions;
+}
+
+SubstitutionMap TypeBase::getMemberSubstitutionMap(
+    ModuleDecl *module, const ValueDecl *member,
+    GenericEnvironment *genericEnv) {
+  auto *genericSig = member->getInnermostDeclContext()
+      ->getGenericSignatureOfContext();
+  if (genericSig == nullptr)
+    return SubstitutionMap();
+  auto subs = getMemberSubstitutions(member, genericEnv);
+  return SubstitutionMap::get(
+      genericSig,
+      QueryTypeSubstitutionMap{subs},
+      LookUpConformanceInModule(module));
+}
+
+Type TypeBase::getTypeOfMember(ModuleDecl *module, const ValueDecl *member,
+                               Type memberType) {
   // If no member type was provided, use the member's type.
   if (!memberType)
     memberType = member->getInterfaceType();
 
-  return getTypeOfMember(module, memberType, member->getDeclContext());
+  assert(memberType);
+
+  // Perform the substitution.
+  auto substitutions = getMemberSubstitutionMap(module, member);
+  return memberType.subst(substitutions, SubstFlags::UseErrorType);
 }
 
-Type TypeBase::getTypeOfMember(Module *module, Type memberType,
-                               const DeclContext *memberDC) {
-  // If the member is not part of a type, there's nothing to substitute.
-  if (!memberDC->isTypeContext())
-    return memberType;
+Type TypeBase::adjustSuperclassMemberDeclType(const ValueDecl *baseDecl,
+                                              const ValueDecl *derivedDecl,
+                                              Type memberType) {
+  auto subs = SubstitutionMap::getOverrideSubstitutions(
+      baseDecl, derivedDecl, /*derivedSubs=*/None);
 
-  // Compute the set of member substitutions to apply.
-  TypeSubstitutionMap substitutions = getMemberSubstitutions(memberDC);
-  if (substitutions.empty())
-    return memberType;
+  if (auto *genericMemberType = memberType->getAs<GenericFunctionType>()) {
+    memberType = FunctionType::get(genericMemberType->getParams(),
+                                   genericMemberType->getResult(),
+                                   genericMemberType->getExtInfo());
+  }
 
-  // Perform the substitutions.
-  return memberType.subst(module, substitutions, None);
+  auto type = memberType.subst(subs, SubstFlags::UseErrorType);
+  if (baseDecl->getDeclContext()->getSelfProtocolDecl())
+    return type;
+
+  if (auto *afd = dyn_cast<AbstractFunctionDecl>(baseDecl)) {
+    type = type->replaceSelfParameterType(this);
+    if (afd->hasDynamicSelfResult())
+      type = type->replaceCovariantResultType(this, /*uncurryLevel=*/2);
+  } else if (auto *sd = dyn_cast<SubscriptDecl>(baseDecl)) {
+    if (sd->getElementInterfaceType()->hasDynamicSelfType())
+      type = type->replaceCovariantResultType(this, /*uncurryLevel=*/1);
+  } else if (auto *vd = dyn_cast<VarDecl>(baseDecl)) {
+    if (vd->getValueInterfaceType()->hasDynamicSelfType())
+      type = type->replaceCovariantResultType(this, /*uncurryLevel=*/0);
+  }
+
+  return type;
 }
 
 Identifier DependentMemberType::getName() const {
@@ -3012,9 +3596,10 @@ Identifier DependentMemberType::getName() const {
   return NameOrAssocType.get<AssociatedTypeDecl *>()->getName();
 }
 
-static bool transformSILResult(SILResultInfo &result, bool &changed,
-                               llvm::function_ref<Type(Type)> fn) {
-  Type transType = result.getType().transform(fn);
+static bool transformSILResult(
+                           SILResultInfo &result, bool &changed,
+                           llvm::function_ref<Optional<Type>(TypeBase *)> fn) {
+  Type transType = result.getType().transformRec(fn);
   if (!transType) return true;
 
   CanType canTransType = transType->getCanonicalType();
@@ -3025,9 +3610,24 @@ static bool transformSILResult(SILResultInfo &result, bool &changed,
   return false;
 }
 
-static bool transformSILParameter(SILParameterInfo &param, bool &changed,
-                                  llvm::function_ref<Type(Type)> fn) {
-  Type transType = param.getType().transform(fn);
+static bool transformSILYield(
+                            SILYieldInfo &yield, bool &changed,
+                            llvm::function_ref<Optional<Type>(TypeBase *)> fn) {
+  Type transType = yield.getType().transformRec(fn);
+  if (!transType) return true;
+
+  CanType canTransType = transType->getCanonicalType();
+  if (canTransType != yield.getType()) {
+    changed = true;
+    yield = yield.getWithType(canTransType);
+  }
+  return false;
+}
+
+static bool transformSILParameter(
+                            SILParameterInfo &param, bool &changed,
+                            llvm::function_ref<Optional<Type>(TypeBase *)> fn) {
+  Type transType = param.getType().transformRec(fn);
   if (!transType) return true;
 
   CanType canTransType = transType->getCanonicalType();
@@ -3039,33 +3639,54 @@ static bool transformSILParameter(SILParameterInfo &param, bool &changed,
 }
 
 Type Type::transform(llvm::function_ref<Type(Type)> fn) const {
-  // Transform this type node.
-  Type transformed = fn(*this);
+  return transformRec([&fn](TypeBase *type) -> Optional<Type> {
+    Type transformed = fn(Type(type));
+    if (!transformed)
+      return Type();
 
-  // If the client changed the type, we're done.
-  if (!transformed || transformed.getPointer() != getPointer())
+    // If the function didn't change the type at all, let transformRec()
+    // recurse.
+    if (transformed.getPointer() == type)
+      return None;
+
     return transformed;
+  });
+}
 
-  // Recursive into children of this type.
+Type Type::transformRec(
+                    llvm::function_ref<Optional<Type>(TypeBase *)> fn) const {
+  if (!isa<ParenType>(getPointer())) {
+    // Transform this type node.
+    if (Optional<Type> transformed = fn(getPointer()))
+      return *transformed;
+
+    // Recur.
+  }
+
+  // Recur into children of this type.
   TypeBase *base = getPointer();
   switch (base->getKind()) {
-#define ALWAYS_CANONICAL_TYPE(Id, Parent) \
+#define BUILTIN_TYPE(Id, Parent) \
 case TypeKind::Id:
 #define TYPE(Id, Parent)
 #include "swift/AST/TypeNodes.def"
+  case TypeKind::PrimaryArchetype:
+  case TypeKind::OpenedArchetype:
   case TypeKind::Error:
   case TypeKind::Unresolved:
   case TypeKind::TypeVariable:
-  case TypeKind::AssociatedType:
   case TypeKind::GenericTypeParam:
+  case TypeKind::SILToken:
+  case TypeKind::Module:
     return *this;
 
   case TypeKind::Enum:
   case TypeKind::Struct:
-  case TypeKind::Class: {
+  case TypeKind::Class:
+  case TypeKind::Protocol: {
     auto nominalTy = cast<NominalType>(base);
     if (auto parentTy = nominalTy->getParent()) {
-      parentTy = parentTy.transform(fn);
+      parentTy = parentTy.transformRec(fn);
       if (!parentTy)
         return Type();
 
@@ -3081,7 +3702,7 @@ case TypeKind::Id:
       
   case TypeKind::SILBlockStorage: {
     auto storageTy = cast<SILBlockStorageType>(base);
-    Type transCap = storageTy->getCaptureType().transform(fn);
+    Type transCap = storageTy->getCaptureType().transformRec(fn);
     if (!transCap)
       return Type();
     CanType canTransCap = transCap->getCanonicalType();
@@ -3091,16 +3712,18 @@ case TypeKind::Id:
   }
 
   case TypeKind::SILBox: {
-    auto storageTy = cast<SILBoxType>(base);
-    Type transBoxed = storageTy->getBoxedType().transform(fn);
-    if (!transBoxed)
-      return Type();
-    CanType canTransBoxed = transBoxed->getCanonicalType();
-    if (canTransBoxed != storageTy->getBoxedType())
-      return SILBoxType::get(canTransBoxed);
-    return storageTy;
+#ifndef NDEBUG
+    // This interface isn't suitable for updating the substitution map in a
+    // generic SILBox.
+    auto boxTy = cast<SILBoxType>(base);
+    for (Type type : boxTy->getSubstitutions().getReplacementTypes()) {
+      assert(type->isEqual(type.transformRec(fn))
+             && "SILBoxType can't be transformed");
+    }
+#endif
+    return base;
   }
-
+  
   case TypeKind::SILFunction: {
     auto fnTy = cast<SILFunctionType>(base);
     bool changed = false;
@@ -3111,8 +3734,14 @@ case TypeKind::Id:
       transInterfaceParams.push_back(param);
     }
 
+    SmallVector<SILYieldInfo, 8> transInterfaceYields;
+    for (SILYieldInfo yield : fnTy->getYields()) {
+      if (transformSILYield(yield, changed, fn)) return Type();
+      transInterfaceYields.push_back(yield);
+    }
+
     SmallVector<SILResultInfo, 8> transInterfaceResults;
-    for (SILResultInfo result : fnTy->getAllResults()) {
+    for (SILResultInfo result : fnTy->getResults()) {
       if (transformSILResult(result, changed, fn)) return Type();
       transInterfaceResults.push_back(result);
     }
@@ -3128,19 +3757,23 @@ case TypeKind::Id:
 
     return SILFunctionType::get(fnTy->getGenericSignature(),
                                 fnTy->getExtInfo(),
+                                fnTy->getCoroutineKind(),
                                 fnTy->getCalleeConvention(),
                                 transInterfaceParams,
+                                transInterfaceYields,
                                 transInterfaceResults,
                                 transErrorResult,
-                                Ptr->getASTContext());
+                                Ptr->getASTContext(),
+                                fnTy->getWitnessMethodConformanceOrNone());
   }
 
-  case TypeKind::UnownedStorage:
-  case TypeKind::UnmanagedStorage:
-  case TypeKind::WeakStorage: {
+#define REF_STORAGE(Name, ...) \
+  case TypeKind::Name##Storage:
+#include "swift/AST/ReferenceStorage.def"
+  {
     auto storageTy = cast<ReferenceStorageType>(base);
     Type refTy = storageTy->getReferentType();
-    Type substRefTy = refTy.transform(fn);
+    Type substRefTy = refTy.transformRec(fn);
     if (!substRefTy)
       return Type();
 
@@ -3155,7 +3788,7 @@ case TypeKind::Id:
     auto unbound = cast<UnboundGenericType>(base);
     Type substParentTy;
     if (auto parentTy = unbound->getParent()) {
-      substParentTy = parentTy.transform(fn);
+      substParentTy = parentTy.transformRec(fn);
       if (!substParentTy)
         return Type();
 
@@ -3177,7 +3810,7 @@ case TypeKind::Id:
     bool anyChanged = false;
     Type substParentTy;
     if (auto parentTy = bound->getParent()) {
-      substParentTy = parentTy.transform(fn);
+      substParentTy = parentTy.transformRec(fn);
       if (!substParentTy)
         return Type();
 
@@ -3186,7 +3819,7 @@ case TypeKind::Id:
     }
 
     for (auto arg : bound->getGenericArgs()) {
-      Type substArg = arg.transform(fn);
+      Type substArg = arg.transformRec(fn);
       if (!substArg)
         return Type();
       substArgs.push_back(substArg);
@@ -3199,10 +3832,59 @@ case TypeKind::Id:
 
     return BoundGenericType::get(bound->getDecl(), substParentTy, substArgs);
   }
+      
+  case TypeKind::OpaqueTypeArchetype: {
+    auto opaque = cast<OpaqueTypeArchetypeType>(base);
+    if (opaque->getSubstitutions().empty())
+      return *this;
+    
+    SmallVector<Type, 4> newSubs;
+    bool anyChanged = false;
+    for (auto replacement : opaque->getSubstitutions().getReplacementTypes()) {
+      Type newReplacement = replacement.transformRec(fn);
+      if (!newReplacement)
+        return Type();
+      newSubs.push_back(newReplacement);
+      if (replacement.getPointer() != newReplacement.getPointer())
+        anyChanged = true;
+    }
+    
+    if (!anyChanged)
+      return *this;
+    
+    // FIXME: This re-looks-up conformances instead of transforming them in
+    // a systematic way.
+    auto sig = opaque->getDecl()->getGenericSignature();
+    auto newSubMap =
+      SubstitutionMap::get(sig,
+       [&](SubstitutableType *t) -> Type {
+         auto index = sig->getGenericParamOrdinal(cast<GenericTypeParamType>(t));
+         return newSubs[index];
+       },
+       LookUpConformanceInModule(opaque->getDecl()->getModuleContext()));
+    return OpaqueTypeArchetypeType::get(opaque->getDecl(),
+                                        newSubMap);
+  }
+  case TypeKind::NestedArchetype: {
+    // Transform the root type of a nested opaque archetype.
+    auto nestedType = cast<NestedArchetypeType>(base);
+    auto root = dyn_cast<OpaqueTypeArchetypeType>(nestedType->getRoot());
+    if (!root)
+      return *this;
+    
+    auto substRoot = Type(root).transformRec(fn);
+    if (substRoot.getPointer() == root) {
+      return *this;
+    }
+    
+    // Substitute the new root into the root of the interface type.
+    return nestedType->getInterfaceType()->substBaseType(substRoot,
+        LookUpConformanceInModule(root->getDecl()->getModuleContext()));
+  }
 
   case TypeKind::ExistentialMetatype: {
     auto meta = cast<ExistentialMetatypeType>(base);
-    auto instanceTy = meta->getInstanceType().transform(fn);
+    auto instanceTy = meta->getInstanceType().transformRec(fn);
     if (!instanceTy)
       return Type();
 
@@ -3217,7 +3899,7 @@ case TypeKind::Id:
 
   case TypeKind::Metatype: {
     auto meta = cast<MetatypeType>(base);
-    auto instanceTy = meta->getInstanceType().transform(fn);
+    auto instanceTy = meta->getInstanceType().transformRec(fn);
     if (!instanceTy)
       return Type();
 
@@ -3231,7 +3913,7 @@ case TypeKind::Id:
 
   case TypeKind::DynamicSelf: {
     auto dynamicSelf = cast<DynamicSelfType>(base);
-    auto selfTy = dynamicSelf->getSelfType().transform(fn);
+    auto selfTy = dynamicSelf->getSelfType().transformRec(fn);
     if (!selfTy)
       return Type();
 
@@ -3241,29 +3923,60 @@ case TypeKind::Id:
     return DynamicSelfType::get(selfTy, selfTy->getASTContext());
   }
 
-  case TypeKind::NameAlias: {
-    auto alias = cast<NameAliasType>(base);
-    auto underlyingTy = alias->getDecl()->getUnderlyingType().transform(fn);
-    if (!underlyingTy)
-      return Type();
+  case TypeKind::TypeAlias: {
+    auto alias = cast<TypeAliasType>(base);
+    Type oldUnderlyingType = Type(alias->getSinglyDesugaredType());
+    Type newUnderlyingType = oldUnderlyingType.transformRec(fn);
+    if (!newUnderlyingType) return Type();
 
-    if (underlyingTy.getPointer() ==
-          alias->getDecl()->getUnderlyingType().getPointer())
+    Type oldParentType = alias->getParent();
+    Type newParentType;
+    if (oldParentType && !oldParentType->hasTypeParameter() &&
+        !oldParentType->hasArchetype()) {
+      newParentType = oldParentType.transformRec(fn);
+      if (!newParentType) return newUnderlyingType;
+    }
+
+    auto subMap = alias->getSubstitutionMap();
+    if (auto genericSig = subMap.getGenericSignature()) {
+      for (Type gp : genericSig->getGenericParams()) {
+        Type oldReplacementType = gp.subst(subMap);
+        if (!oldReplacementType)
+          return newUnderlyingType;
+
+        if (oldReplacementType->hasTypeParameter() ||
+            oldReplacementType->hasArchetype())
+          return newUnderlyingType;
+
+        Type newReplacementType = oldReplacementType.transformRec(fn);
+        if (!newReplacementType)
+          return newUnderlyingType;
+
+        // If anything changed with the replacement type, we lose the sugar.
+        // FIXME: This is really unfortunate.
+        if (!newReplacementType->isEqual(oldReplacementType))
+          return newUnderlyingType;
+      }
+    }
+
+    if (oldUnderlyingType.getPointer() == newUnderlyingType.getPointer())
       return *this;
 
-    return SubstitutedType::get(*this, underlyingTy, Ptr->getASTContext());
+    return TypeAliasType::get(alias->getDecl(), newParentType, subMap,
+                                   newUnderlyingType);
   }
 
   case TypeKind::Paren: {
     auto paren = cast<ParenType>(base);
-    Type underlying = paren->getUnderlyingType().transform(fn);
+    Type underlying = paren->getUnderlyingType().transformRec(fn);
     if (!underlying)
       return Type();
 
     if (underlying.getPointer() == paren->getUnderlyingType().getPointer())
       return *this;
 
-    return ParenType::get(Ptr->getASTContext(), underlying);
+    auto otherFlags = paren->getParameterFlags().withInOut(underlying->is<InOutType>());
+    return ParenType::get(Ptr->getASTContext(), underlying->getInOutObjectType(), otherFlags);
   }
 
   case TypeKind::Tuple: {
@@ -3272,7 +3985,7 @@ case TypeKind::Id:
     SmallVector<TupleTypeElt, 4> elements;
     unsigned Index = 0;
     for (const auto &elt : tuple->getElements()) {
-      Type eltTy = elt.getType().transform(fn);
+      Type eltTy = elt.getType().transformRec(fn);
       if (!eltTy)
         return Type();
 
@@ -3286,19 +3999,13 @@ case TypeKind::Id:
       // elements.
       if (!anyChanged) {
         // Copy all of the previous elements.
-        for (unsigned I = 0; I != Index; ++I) {
-          const TupleTypeElt &FromElt =tuple->getElement(I);
-          elements.push_back(TupleTypeElt(FromElt.getType(), FromElt.getName(),
-                                          FromElt.getDefaultArgKind(),
-                                          FromElt.isVararg()));
-        }
-
+        elements.append(tuple->getElements().begin(),
+                        tuple->getElements().begin() + Index);
         anyChanged = true;
       }
 
       // Add the new tuple element, with the new type, no initializer,
-      elements.push_back(TupleTypeElt(eltTy, elt.getName(),
-                                      elt.getDefaultArgKind(), elt.isVararg()));
+      elements.push_back(elt.getWithType(eltTy));
       ++Index;
     }
 
@@ -3311,7 +4018,7 @@ case TypeKind::Id:
 
   case TypeKind::DependentMember: {
     auto dependent = cast<DependentMemberType>(base);
-    auto dependentBase = dependent->getBase().transform(fn);
+    auto dependentBase = dependent->getBase().transformRec(fn);
     if (!dependentBase)
       return Type();
 
@@ -3319,128 +4026,78 @@ case TypeKind::Id:
       return *this;
 
     if (auto assocType = dependent->getAssocType())
-      return DependentMemberType::get(dependentBase, assocType,
-                                      Ptr->getASTContext());
+      return DependentMemberType::get(dependentBase, assocType);
 
-    return DependentMemberType::get(dependentBase, dependent->getName(),
-                                    Ptr->getASTContext());
+    return DependentMemberType::get(dependentBase, dependent->getName());
   }
 
-  case TypeKind::Substituted: {
-    auto substAT = cast<SubstitutedType>(base);
-    auto substTy = substAT->getReplacementType().transform(fn);
-    if (!substTy)
-      return Type();
-
-    if (substTy.getPointer() == substAT->getReplacementType().getPointer())
-      return *this;
-
-    return SubstitutedType::get(substAT->getOriginal(), substTy,
-                                Ptr->getASTContext());
-  }
-
-  case TypeKind::Function:
-  case TypeKind::PolymorphicFunction: {
+  case TypeKind::GenericFunction:
+  case TypeKind::Function: {
     auto function = cast<AnyFunctionType>(base);
-    auto inputTy = function->getInput().transform(fn);
-    if (!inputTy)
-      return Type();
-    auto resultTy = function->getResult().transform(fn);
-    if (!resultTy)
-      return Type();
 
-    if (inputTy.getPointer() == function->getInput().getPointer() &&
-        resultTy.getPointer() == function->getResult().getPointer())
-      return *this;
+    bool isUnchanged = true;
 
-    if (auto polyFn = dyn_cast<PolymorphicFunctionType>(function)) {
-      return PolymorphicFunctionType::get(inputTy, resultTy,
-                                          &polyFn->getGenericParams(),
-                                          function->getExtInfo());
-    }
+    // Transform function parameter types.
+    SmallVector<AnyFunctionType::Param, 8> substParams;
+    for (auto param : function->getParams()) {
+      auto type = param.getPlainType();
+      auto label = param.getLabel();
+      auto flags = param.getParameterFlags();
 
-    return FunctionType::get(inputTy, resultTy,
-                             function->getExtInfo());
-  }
-
-  case TypeKind::GenericFunction: {
-    GenericFunctionType *function = cast<GenericFunctionType>(base);
-    bool anyChanges = false;
-
-    // Transform generic parameters.
-    SmallVector<GenericTypeParamType *, 4> genericParams;
-    for (auto param : function->getGenericParams()) {
-      Type paramTy = Type(param).transform(fn);
-      if (!paramTy)
+      auto substType = type.transformRec(fn);
+      if (!substType)
         return Type();
 
-      if (auto newParam = paramTy->getAs<GenericTypeParamType>()) {
-        if (newParam != param)
-          anyChanges = true;
+      if (type.getPointer() != substType.getPointer())
+        isUnchanged = false;
 
-        genericParams.push_back(newParam);
-      } else {
-        anyChanges = true;
-      }
-    }
-
-    // Transform requirements.
-    SmallVector<Requirement, 4> requirements;
-    for (const auto &req : function->getRequirements()) {
-      auto firstType = req.getFirstType().transform(fn);
-      if (!firstType)
-        return Type();
-
-      Type secondType = req.getSecondType();
-      if (secondType) {
-        secondType = secondType.transform(fn);
-        if (!secondType)
-          return Type();
+      // FIXME: Remove this once we get rid of TVO_CanBindToInOut;
+      // the only time we end up here is when the constraint solver
+      // simplifies a type containing a type variable fixed to an
+      // InOutType.
+      if (substType->is<InOutType>()) {
+        assert(flags.getValueOwnership() == ValueOwnership::Default);
+        substType = substType->getInOutObjectType();
+        flags = flags.withInOut(true);
       }
 
-      if (firstType->hasTypeParameter() ||
-          (secondType && secondType->hasTypeParameter())) {
-        if (firstType.getPointer() != req.getFirstType().getPointer() ||
-            secondType.getPointer() != req.getSecondType().getPointer())
-          anyChanges = true;
-
-        requirements.push_back(Requirement(req.getKind(), firstType,
-                                           secondType));
-      } else
-        anyChanges = true;
+      substParams.emplace_back(substType, label, flags);
     }
-    
-    auto sig = GenericSignature::get(genericParams, requirements);
-
-    // Transform input type.
-    auto inputTy = function->getInput().transform(fn);
-    if (!inputTy)
-      return Type();
 
     // Transform result type.
-    auto resultTy = function->getResult().transform(fn);
+    auto resultTy = function->getResult().transformRec(fn);
     if (!resultTy)
       return Type();
 
-    // Check whether anything changed.
-    if (!anyChanges &&
-        inputTy.getPointer() == function->getInput().getPointer() &&
-        resultTy.getPointer() == function->getResult().getPointer())
-      return *this;
+    if (resultTy.getPointer() != function->getResult().getPointer())
+      isUnchanged = false;
 
-    // If no generic parameters remain, this is a non-generic function type.
-    if (genericParams.empty())
-      return FunctionType::get(inputTy, resultTy, function->getExtInfo());
+    if (auto genericFnType = dyn_cast<GenericFunctionType>(base)) {
+#ifndef NDEBUG
+      // Check that generic parameters won't be trasnformed.
+      // Transform generic parameters.
+      for (auto param : genericFnType->getGenericParams()) {
+        assert(Type(param).transformRec(fn).getPointer() == param &&
+               "GenericFunctionType transform() changes type parameter");
+      }
+#endif
 
-    // Produce the new generic function type.
-    
-    return GenericFunctionType::get(sig, inputTy, resultTy,
-                                    function->getExtInfo());
+      if (isUnchanged) return *this;
+
+      auto genericSig = genericFnType->getGenericSignature();
+      return GenericFunctionType::get(genericSig, substParams, resultTy,
+                                      function->getExtInfo());
+    }
+
+    if (isUnchanged) return *this;
+
+    return FunctionType::get(substParams, resultTy,
+                             function->getExtInfo());
   }
 
   case TypeKind::ArraySlice: {
     auto slice = cast<ArraySliceType>(base);
-    auto baseTy = slice->getBaseType().transform(fn);
+    auto baseTy = slice->getBaseType().transformRec(fn);
     if (!baseTy)
       return Type();
 
@@ -3452,7 +4109,7 @@ case TypeKind::Id:
 
   case TypeKind::Optional: {
     auto optional = cast<OptionalType>(base);
-    auto baseTy = optional->getBaseType().transform(fn);
+    auto baseTy = optional->getBaseType().transformRec(fn);
     if (!baseTy)
       return Type();
 
@@ -3462,25 +4119,13 @@ case TypeKind::Id:
     return OptionalType::get(baseTy);
   }
 
-  case TypeKind::ImplicitlyUnwrappedOptional: {
-    auto optional = cast<ImplicitlyUnwrappedOptionalType>(base);
-    auto baseTy = optional->getBaseType().transform(fn);
-    if (!baseTy)
-      return Type();
-
-    if (baseTy.getPointer() == optional->getBaseType().getPointer())
-      return *this;
-
-    return ImplicitlyUnwrappedOptionalType::get(baseTy);
-  }
-
   case TypeKind::Dictionary: {
     auto dict = cast<DictionaryType>(base);
-    auto keyTy = dict->getKeyType().transform(fn);
+    auto keyTy = dict->getKeyType().transformRec(fn);
     if (!keyTy)
       return Type();
 
-    auto valueTy = dict->getValueType().transform(fn);
+    auto valueTy = dict->getValueType().transformRec(fn);
     if (!valueTy)
       return Type();
 
@@ -3493,8 +4138,8 @@ case TypeKind::Id:
 
   case TypeKind::LValue: {
     auto lvalue = cast<LValueType>(base);
-    auto objectTy = lvalue->getObjectType().transform(fn);
-    if (!objectTy || objectTy->is<ErrorType>())
+    auto objectTy = lvalue->getObjectType().transformRec(fn);
+    if (!objectTy || objectTy->hasError())
       return objectTy;
 
     return objectTy.getPointer() == lvalue->getObjectType().getPointer() ?
@@ -3503,8 +4148,8 @@ case TypeKind::Id:
 
   case TypeKind::InOut: {
     auto inout = cast<InOutType>(base);
-    auto objectTy = inout->getObjectType().transform(fn);
-    if (!objectTy || objectTy->is<ErrorType>())
+    auto objectTy = inout->getObjectType().transformRec(fn);
+    if (!objectTy || objectTy->hasError())
       return objectTy;
     
     return objectTy.getPointer() == inout->getObjectType().getPointer() ?
@@ -3513,24 +4158,25 @@ case TypeKind::Id:
 
   case TypeKind::ProtocolComposition: {
     auto pc = cast<ProtocolCompositionType>(base);
-    SmallVector<Type, 4> protocols;
+    SmallVector<Type, 4> substMembers;
+    auto members = pc->getMembers();
     bool anyChanged = false;
     unsigned index = 0;
-    for (auto proto : pc->getProtocols()) {
-      auto substProto = proto.transform(fn);
-      if (!substProto)
+    for (auto member : members) {
+      auto substMember = member.transformRec(fn);
+      if (!substMember)
         return Type();
       
       if (anyChanged) {
-        protocols.push_back(substProto);
+        substMembers.push_back(substMember);
         ++index;
         continue;
       }
       
-      if (substProto.getPointer() != proto.getPointer()) {
+      if (substMember.getPointer() != member.getPointer()) {
         anyChanged = true;
-        protocols.append(protocols.begin(), protocols.begin() + index);
-        protocols.push_back(substProto);
+        substMembers.append(members.begin(), members.begin() + index);
+        substMembers.push_back(substMember);
       }
       
       ++index;
@@ -3539,7 +4185,9 @@ case TypeKind::Id:
     if (!anyChanged)
       return *this;
     
-    return ProtocolCompositionType::get(Ptr->getASTContext(), protocols);
+    return ProtocolCompositionType::get(Ptr->getASTContext(),
+                                        substMembers,
+                                        pc->hasExplicitAnyObject());
   }
   }
   
@@ -3553,7 +4201,7 @@ bool Type::findIf(llvm::function_ref<bool(Type)> pred) const {
   public:
     explicit Walker(llvm::function_ref<bool(Type)> pred) : Pred(pred) {}
 
-    virtual Action walkToTypePre(Type ty) override {
+    Action walkToTypePre(Type ty) override {
       if (Pred(ty))
         return Action::Stop;
       return Action::Continue;
@@ -3570,6 +4218,17 @@ TypeTraitResult TypeBase::canBeClass() {
 
   CanType self = getCanonicalType();
 
+  // Archetypes with a trivial layout constraint can never
+  // represent a class.
+  if (auto Archetype = dyn_cast<ArchetypeType>(self)) {
+    if (auto Layout = Archetype->getLayoutConstraint()) {
+      if (Layout->isTrivial())
+        return TypeTraitResult::IsNot;
+      if (Layout->isClass())
+        return TypeTraitResult::Is;
+    }
+  }
+
   // Dependent types might be bound to classes.
   if (isa<SubstitutableType>(self))
     return TypeTraitResult::CanBe;
@@ -3579,51 +4238,65 @@ TypeTraitResult TypeBase::canBeClass() {
   return TypeTraitResult::IsNot;
 }
 
-bool Type::isPrivateStdlibType(bool whitelistProtocols) const {
+bool Type::isPrivateStdlibType(bool treatNonBuiltinProtocolsAsPublic) const {
   Type Ty = *this;
   if (!Ty)
     return false;
 
   // A 'public' typealias can have an 'internal' type.
-  if (NameAliasType *NAT = dyn_cast<NameAliasType>(Ty.getPointer()))
-    return NAT->getDecl()->isPrivateStdlibDecl(whitelistProtocols);
+  if (auto *NAT = dyn_cast<TypeAliasType>(Ty.getPointer())) {
+    auto *AliasDecl = NAT->getDecl();
+    if (auto parent = NAT->getParent()) {
+      if (parent.isPrivateStdlibType(treatNonBuiltinProtocolsAsPublic))
+        return true;
+    }
 
-  if (auto Paren = dyn_cast<ParenType>(Ty.getPointer()))
-    return Paren->getUnderlyingType().isPrivateStdlibType(whitelistProtocols);
+    if (AliasDecl->isPrivateStdlibDecl(treatNonBuiltinProtocolsAsPublic))
+      return true;
 
-  if (Type Unwrapped = Ty->getAnyOptionalObjectType())
-    return Unwrapped.isPrivateStdlibType(whitelistProtocols);
+    return Type(NAT->getSinglyDesugaredType()).isPrivateStdlibType(
+                                            treatNonBuiltinProtocolsAsPublic);
+  }
+
+  if (auto Paren = dyn_cast<ParenType>(Ty.getPointer())) {
+    Type Underlying = Paren->getUnderlyingType();
+    return Underlying.isPrivateStdlibType(treatNonBuiltinProtocolsAsPublic);
+  }
+
+  if (Type Unwrapped = Ty->getOptionalObjectType())
+    return Unwrapped.isPrivateStdlibType(treatNonBuiltinProtocolsAsPublic);
 
   if (auto TyD = Ty->getAnyNominal())
-    if (TyD->isPrivateStdlibDecl(whitelistProtocols))
+    if (TyD->isPrivateStdlibDecl(treatNonBuiltinProtocolsAsPublic))
       return true;
 
   return false;
 }
 
+// NOTE: If you add a new SOMETIMES_LOADABLE_CHECKED_REF_STORAGE type, then you
+// may or may not want to emulate what 'unowned' does.
 bool UnownedStorageType::isLoadable(ResilienceExpansion resilience) const {
-  return getReferentType()->usesNativeReferenceCounting(resilience);
+  auto ty = getReferentType();
+  if (auto underlyingTy = ty->getOptionalObjectType())
+    ty = underlyingTy;
+  return ty->getReferenceCounting() == ReferenceCounting::Native;
 }
 
-static bool doesOpaqueClassUseNativeReferenceCounting(const ASTContext &ctx) {
-  return !ctx.LangOpts.EnableObjCInterop;
+static ReferenceCounting getClassReferenceCounting(ClassDecl *theClass) {
+  return (theClass->checkAncestry(AncestryFlags::ClangImported)
+          ? ReferenceCounting::ObjC
+          : ReferenceCounting::Native);
 }
 
-static bool usesNativeReferenceCounting(ClassDecl *theClass,
-                                        ResilienceExpansion resilience) {
-  // NOTE: if you change this, change irgen::getReferenceCountingForClass.
-  // TODO: Resilience? there might be some legal avenue of changing this.
-  while (Type supertype = theClass->getSuperclass()) {
-    theClass = supertype->getClassOrBoundGenericClass();
-    assert(theClass);
-  }
-  return !theClass->hasClangNode();
-}
-
-bool TypeBase::usesNativeReferenceCounting(ResilienceExpansion resilience) {
-  assert(allowsOwnership());
-
+ReferenceCounting TypeBase::getReferenceCounting() {
   CanType type = getCanonicalType();
+  ASTContext &ctx = type->getASTContext();
+
+  // In the absence of Objective-C interoperability, everything uses native
+  // reference counting.
+  if (!ctx.LangOpts.EnableObjCInterop)
+    return ReferenceCounting::Native;
+
   switch (type->getKind()) {
 #define SUGARED_TYPE(id, parent) case TypeKind::id:
 #define TYPE(id, parent)
@@ -3632,45 +4305,58 @@ bool TypeBase::usesNativeReferenceCounting(ResilienceExpansion resilience) {
 
   case TypeKind::BuiltinNativeObject:
   case TypeKind::SILBox:
-    return true;
+    return ReferenceCounting::Native;
+
+  case TypeKind::BuiltinBridgeObject:
+    return ReferenceCounting::Bridge;
 
   case TypeKind::BuiltinUnknownObject:
-  case TypeKind::BuiltinBridgeObject:
-    return ::doesOpaqueClassUseNativeReferenceCounting(type->getASTContext());
+    return ReferenceCounting::Unknown;
 
   case TypeKind::Class:
-    return ::usesNativeReferenceCounting(cast<ClassType>(type)->getDecl(),
-                                         resilience);
+    return getClassReferenceCounting(cast<ClassType>(type)->getDecl());
   case TypeKind::BoundGenericClass:
-    return ::usesNativeReferenceCounting(
-                                  cast<BoundGenericClassType>(type)->getDecl(),
-                                         resilience);
+    return getClassReferenceCounting(
+                                  cast<BoundGenericClassType>(type)->getDecl());
+  case TypeKind::UnboundGeneric:
+    return getClassReferenceCounting(
+                    cast<ClassDecl>(cast<UnboundGenericType>(type)->getDecl()));
 
   case TypeKind::DynamicSelf:
     return cast<DynamicSelfType>(type).getSelfType()
-             ->usesNativeReferenceCounting(resilience);
+        ->getReferenceCounting();
 
-  case TypeKind::Archetype: {
+  case TypeKind::PrimaryArchetype:
+  case TypeKind::OpenedArchetype:
+  case TypeKind::NestedArchetype:
+  case TypeKind::OpaqueTypeArchetype: {
     auto archetype = cast<ArchetypeType>(type);
-    assert(archetype->requiresClass());
+    auto layout = archetype->getLayoutConstraint();
+    (void)layout;
+    assert(archetype->requiresClass() ||
+           (layout && layout->isRefCounted()));
     if (auto supertype = archetype->getSuperclass())
-      return supertype->usesNativeReferenceCounting(resilience);
-    return ::doesOpaqueClassUseNativeReferenceCounting(type->getASTContext());
+      return supertype->getReferenceCounting();
+    return ReferenceCounting::Unknown;
   }
 
   case TypeKind::Protocol:
-  case TypeKind::ProtocolComposition:
-    return ::doesOpaqueClassUseNativeReferenceCounting(type->getASTContext());
+  case TypeKind::ProtocolComposition: {
+    auto layout = type->getExistentialLayout();
+    assert(layout.requiresClass() && "Opaque existentials don't use refcounting");
+    if (auto superclass = layout.getSuperclass())
+      return superclass->getReferenceCounting();
+    return ReferenceCounting::Unknown;
+  }
 
-  case TypeKind::UnboundGeneric:
   case TypeKind::Function:
-  case TypeKind::PolymorphicFunction:
   case TypeKind::GenericFunction:
   case TypeKind::SILFunction:
   case TypeKind::SILBlockStorage:
   case TypeKind::Error:
   case TypeKind::Unresolved:
   case TypeKind::BuiltinInteger:
+  case TypeKind::BuiltinIntegerLiteral:
   case TypeKind::BuiltinFloat:
   case TypeKind::BuiltinRawPointer:
   case TypeKind::BuiltinUnsafeValueBuffer:
@@ -3686,13 +4372,60 @@ bool TypeBase::usesNativeReferenceCounting(ResilienceExpansion resilience) {
   case TypeKind::TypeVariable:
   case TypeKind::BoundGenericEnum:
   case TypeKind::BoundGenericStruct:
-  case TypeKind::UnownedStorage:
-  case TypeKind::UnmanagedStorage:
-  case TypeKind::WeakStorage:
+  case TypeKind::SILToken:
   case TypeKind::GenericTypeParam:
   case TypeKind::DependentMember:
+#define REF_STORAGE(Name, ...) \
+  case TypeKind::Name##Storage:
+#include "swift/AST/ReferenceStorage.def"
     llvm_unreachable("type is not a class reference");
   }
 
   llvm_unreachable("Unhandled type kind!");
+}
+
+//
+// SILBoxType implementation
+//
+
+void SILBoxType::Profile(llvm::FoldingSetNodeID &id, SILLayout *Layout,
+                         SubstitutionMap Substitutions) {
+  id.AddPointer(Layout);
+  Substitutions.profile(id);
+}
+
+static RecursiveTypeProperties getBoxRecursiveProperties(
+    SILLayout *Layout, SubstitutionMap subMap) {
+  RecursiveTypeProperties props;
+  for (auto &field : Layout->getFields()) {
+    auto fieldProps = field.getLoweredType()->getRecursiveProperties();
+    fieldProps.removeHasTypeParameter();
+    fieldProps.removeHasDependentMember();
+    props |= fieldProps;
+  }
+  for (auto replacementType : subMap.getReplacementTypes()) {
+    if (replacementType) props |= replacementType->getRecursiveProperties();
+  }
+  return props;
+}
+
+SILBoxType::SILBoxType(ASTContext &C,
+                       SILLayout *Layout, SubstitutionMap Substitutions)
+  : TypeBase(TypeKind::SILBox, &C,
+             getBoxRecursiveProperties(Layout, Substitutions)),
+    Layout(Layout), Substitutions(Substitutions) {
+  assert(Substitutions.isCanonical());
+}
+
+Type TypeBase::openAnyExistentialType(OpenedArchetypeType *&opened) {
+  assert(isAnyExistentialType());
+  if (auto metaty = getAs<ExistentialMetatypeType>()) {
+    opened = OpenedArchetypeType::get(metaty->getInstanceType());
+    if (metaty->hasRepresentation())
+      return MetatypeType::get(opened, metaty->getRepresentation());
+    else
+      return MetatypeType::get(opened);
+  }
+  opened = OpenedArchetypeType::get(this);
+  return opened;
 }

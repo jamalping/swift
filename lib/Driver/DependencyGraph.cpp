@@ -2,16 +2,18 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
+#include "swift/Basic/ReferenceDependencyKeys.h"
+#include "swift/Basic/Statistic.h"
 #include "swift/Driver/DependencyGraph.h"
-#include "swift/Basic/DemangleWrappers.h"
+#include "swift/Demangling/Demangle.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -41,7 +43,8 @@ public:
   DependencyMaskTy KindMask;
 };
 
-DependencyGraphImpl::MarkTracerImpl::MarkTracerImpl() = default;
+DependencyGraphImpl::MarkTracerImpl::MarkTracerImpl(UnifiedStatsReporter *Stats)
+  : Stats(Stats) {}
 DependencyGraphImpl::MarkTracerImpl::~MarkTracerImpl() = default;
 
 using LoadResult = DependencyGraphImpl::LoadResult;
@@ -97,7 +100,9 @@ parseDependencyFile(llvm::MemoryBuffer &buffer,
       return LoadResult::HadError;
     StringRef keyString = key->getValue(scratch);
 
-    if (keyString == "interface-hash") {
+    using namespace reference_dependency_keys;
+
+    if (keyString == interfaceHash) {
       auto *value = dyn_cast<yaml::ScalarNode>(i->getValue());
       if (!value)
         return LoadResult::HadError;
@@ -113,31 +118,31 @@ parseDependencyFile(llvm::MemoryBuffer &buffer,
       using KindPair = std::pair<DependencyKind, DependencyDirection>;
 
       KindPair dirAndKind = llvm::StringSwitch<KindPair>(key->getValue(scratch))
-        .Case("depends-top-level",
+        .Case(dependsTopLevel,
               std::make_pair(DependencyKind::TopLevelName,
                              DependencyDirection::Depends))
-        .Case("depends-nominal",
+        .Case(dependsNominal,
               std::make_pair(DependencyKind::NominalType,
                              DependencyDirection::Depends))
-        .Case("depends-member",
+        .Case(dependsMember,
               std::make_pair(DependencyKind::NominalTypeMember,
                              DependencyDirection::Depends))
-        .Case("depends-dynamic-lookup",
+        .Case(dependsDynamicLookup,
               std::make_pair(DependencyKind::DynamicLookupName,
                              DependencyDirection::Depends))
-        .Case("depends-external",
+        .Case(dependsExternal,
               std::make_pair(DependencyKind::ExternalFile,
                              DependencyDirection::Depends))
-        .Case("provides-top-level",
+        .Case(providesTopLevel,
               std::make_pair(DependencyKind::TopLevelName,
                              DependencyDirection::Provides))
-        .Case("provides-nominal",
+        .Case(providesNominal,
               std::make_pair(DependencyKind::NominalType,
                              DependencyDirection::Provides))
-        .Case("provides-member",
+        .Case(providesMember,
               std::make_pair(DependencyKind::NominalTypeMember,
                              DependencyDirection::Provides))
-        .Case("provides-dynamic-lookup",
+        .Case(providesDynamicLookup,
               std::make_pair(DependencyKind::DynamicLookupName,
                              DependencyDirection::Provides))
         .Default(std::make_pair(DependencyKind(),
@@ -251,7 +256,7 @@ LoadResult DependencyGraphImpl::loadFromBuffer(const void *node,
   };
 
   auto providesCallback =
-      [this, node, &provides](StringRef name, DependencyKind kind,
+      [&provides](StringRef name, DependencyKind kind,
                               bool isCascading) -> LoadResult {
     assert(isCascading);
     auto iter = std::find_if(provides.begin(), provides.end(),
@@ -350,6 +355,7 @@ DependencyGraphImpl::markTransitive(SmallVectorImpl<const void *> &visited,
 
         MutableArrayRef<MarkTracerImpl::Entry> newReason;
         if (tracer) {
+          tracer->countStatsForNodeMarking(intersectingKinds, isCascading);
           newReason = {scratchAlloc.Allocate(reason.size()+1), reason.size()+1};
           std::uninitialized_copy(reason.begin(), reason.end(),
                                   newReason.begin());
@@ -393,6 +399,38 @@ DependencyGraphImpl::markTransitive(SmallVectorImpl<const void *> &visited,
   }
 }
 
+void DependencyGraphImpl::MarkTracerImpl::countStatsForNodeMarking(
+  const OptionSet<DependencyKind> &Kind, bool IsCascading) const {
+
+  if (!Stats)
+    return;
+
+  auto &D = Stats->getDriverCounters();
+  if (IsCascading) {
+    if (Kind & DependencyKind::TopLevelName)
+      D.DriverDepCascadingTopLevel++;
+    if (Kind & DependencyKind::DynamicLookupName)
+      D.DriverDepCascadingDynamic++;
+    if (Kind & DependencyKind::NominalType)
+      D.DriverDepCascadingNominal++;
+    if (Kind & DependencyKind::NominalTypeMember)
+      D.DriverDepCascadingMember++;
+    if (Kind & DependencyKind::NominalTypeMember)
+      D.DriverDepCascadingExternal++;
+  } else {
+    if (Kind & DependencyKind::TopLevelName)
+      D.DriverDepTopLevel++;
+    if (Kind & DependencyKind::DynamicLookupName)
+      D.DriverDepDynamic++;
+    if (Kind & DependencyKind::NominalType)
+      D.DriverDepNominal++;
+    if (Kind & DependencyKind::NominalTypeMember)
+      D.DriverDepMember++;
+    if (Kind & DependencyKind::NominalTypeMember)
+      D.DriverDepExternal++;
+  }
+}
+
 void DependencyGraphImpl::MarkTracerImpl::printPath(
     raw_ostream &out,
     const void *item,
@@ -408,7 +446,7 @@ void DependencyGraphImpl::MarkTracerImpl::printPath(
       if (name.front() == 'P')
         name.push_back('_');
       out << " provides type '"
-          << swift::demangle_wrappers::demangleTypeAsString(name.str())
+          << swift::Demangle::demangleTypeAsString(name.str())
           << "'\n";
 
     } else if (entry.KindMask.contains(DependencyKind::NominalTypeMember)) {
@@ -425,10 +463,15 @@ void DependencyGraphImpl::MarkTracerImpl::printPath(
       }
       StringRef memberPart = name.str().substr(splitPoint+1);
 
-      out << " provides member '" << memberPart << "' of type '"
-          << swift::demangle_wrappers::demangleTypeAsString(typePart)
-          << "'\n";
-
+      if (memberPart.empty()) {
+        out << " provides non-private members of type '"
+            << swift::Demangle::demangleTypeAsString(typePart)
+            << "'\n";
+      } else {
+        out << " provides member '" << memberPart << "' of type '"
+            << swift::Demangle::demangleTypeAsString(typePart)
+            << "'\n";
+      }
     } else if (entry.KindMask.contains(DependencyKind::DynamicLookupName)) {
       out << " provides AnyObject member '" << entry.Name << "'\n";
 

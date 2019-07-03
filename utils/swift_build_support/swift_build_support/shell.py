@@ -2,11 +2,11 @@
 #
 # This source file is part of the Swift.org open source project
 #
-# Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+# Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 # Licensed under Apache License v2.0 with Runtime Library Exception
 #
-# See http://swift.org/LICENSE.txt for license information
-# See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+# See https://swift.org/LICENSE.txt for license information
+# See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 # ----------------------------------------------------------------------------
 """
 Centralized command line and file system interface for the build script.
@@ -17,10 +17,12 @@ from __future__ import print_function
 
 import os
 import pipes
+import platform
 import shutil
 import subprocess
 import sys
 from contextlib import contextmanager
+from multiprocessing import Lock, Pool, cpu_count
 
 from . import diagnostics
 
@@ -53,7 +55,8 @@ def _coerce_dry_run(dry_run_override):
 def _echo_command(dry_run, command, env=None, prompt="+ "):
     output = []
     if env is not None:
-        output += ['env'] + [_quote("%s=%s" % (k, v)) for k, v in env]
+        output += ['env'] + [_quote("%s=%s" % (k, v))
+                             for (k, v) in sorted(env.items())]
     output += [_quote(arg) for arg in command]
     file = sys.stderr
     if dry_run:
@@ -91,6 +94,21 @@ def call(command, stderr=None, env=None, dry_run=None, echo=True):
             "': " + e.strerror)
 
 
+def call_without_sleeping(command, env=None, dry_run=False, echo=False):
+    """
+    Execute a command during which system sleep is disabled.
+
+    By default, this ignores the state of the `shell.dry_run` flag.
+    """
+
+    # Disable system sleep, if possible.
+    if platform.system() == 'Darwin':
+        # Don't mutate the caller's copy of the arguments.
+        command = ["caffeinate"] + list(command)
+
+    call(command, env=env, dry_run=dry_run, echo=echo)
+
+
 def capture(command, stderr=None, env=None, dry_run=None, echo=True,
             optional=False, allow_non_zero_exit=False):
     """
@@ -122,6 +140,8 @@ def capture(command, stderr=None, env=None, dry_run=None, echo=True,
             "command terminated with a non-zero exit status " +
             str(e.returncode) + ", aborting")
     except OSError as e:
+        if optional:
+            return None
         diagnostics.fatal(
             "could not execute '" + quote_command(command) +
             "': " + e.strerror)
@@ -169,3 +189,78 @@ def copytree(src, dest, dry_run=None, echo=True):
     if dry_run:
         return
     shutil.copytree(src, dest)
+
+
+# Initialized later
+lock = None
+
+
+def run(*args, **kwargs):
+    repo_path = os.getcwd()
+    echo_output = kwargs.pop('echo', False)
+    dry_run = kwargs.pop('dry_run', False)
+    env = kwargs.pop('env', None)
+    if dry_run:
+        _echo_command(dry_run, *args, env=env)
+        return(None, 0, args)
+
+    my_pipe = subprocess.Popen(
+        *args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs)
+    (stdout, stderr) = my_pipe.communicate()
+    ret = my_pipe.wait()
+
+    if lock:
+        lock.acquire()
+    if echo_output:
+        print(repo_path)
+        _echo_command(dry_run, *args, env=env)
+        if stdout:
+            print(stdout, end="")
+        if stderr:
+            print(stderr, end="")
+        print()
+    if lock:
+        lock.release()
+
+    if ret != 0:
+        eout = Exception()
+        eout.ret = ret
+        eout.args = args
+        eout.repo_path = repo_path
+        eout.stderr = stderr
+        raise eout
+    return (stdout, 0, args)
+
+
+def init(l):
+    global lock
+    lock = l
+
+
+def run_parallel(fn, pool_args, n_processes=0):
+    if n_processes == 0:
+        n_processes = cpu_count() * 2
+
+    lk = Lock()
+    print("Running ``%s`` with up to %d processes." %
+          (fn.__name__, n_processes))
+    pool = Pool(processes=n_processes, initializer=init, initargs=(lk,))
+    results = pool.map_async(func=fn, iterable=pool_args).get(999999)
+    pool.close()
+    pool.join()
+    return results
+
+
+def check_parallel_results(results, op):
+    fail_count = 0
+    if results is None:
+        return 0
+    for r in results:
+        if r is not None:
+            if fail_count == 0:
+                print("======%s FAILURES======" % op)
+            print("%s failed (ret=%d): %s" % (r.repo_path, r.ret, r))
+            fail_count += 1
+            if r.stderr:
+                print(r.stderr)
+    return fail_count

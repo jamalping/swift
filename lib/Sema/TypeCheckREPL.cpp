@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -20,6 +20,7 @@
 #include "swift/AST/DiagnosticsFrontend.h"
 #include "swift/AST/Expr.h"
 #include "swift/AST/NameLookup.h"
+#include "swift/AST/ParameterList.h"
 #include "swift/AST/Stmt.h"
 #include "swift/Parse/LocalContext.h"
 #include "llvm/ADT/SmallString.h"
@@ -49,7 +50,7 @@ struct REPLContext {
       if (!lookup)
         return true;
       for (auto result : lookup)
-        PrintDecls.push_back(result.Decl);
+        PrintDecls.push_back(result.getValueDecl());
     }
     {
       Identifier Id(Context.getIdentifier("_replDebugPrintln"));
@@ -58,7 +59,7 @@ struct REPLContext {
       if (!lookup)
         return true;
       for (auto result : lookup)
-        DebugPrintlnDecls.push_back(result.Decl);
+        DebugPrintlnDecls.push_back(result.getValueDecl());
     }
 
     return false;
@@ -96,13 +97,13 @@ public:
   Expr *buildPrintRefExpr(SourceLoc loc) {
     assert(!C.PrintDecls.empty());
     return TC.buildRefExpr(C.PrintDecls, DC, DeclNameLoc(loc),
-                           /*Implicit=*/true);
+                           /*Implicit=*/true, FunctionRefKind::Compound);
   }
 
   Expr *buildDebugPrintlnRefExpr(SourceLoc loc) {
     assert(!C.DebugPrintlnDecls.empty());
     return TC.buildRefExpr(C.DebugPrintlnDecls, DC, DeclNameLoc(loc),
-                           /*Implicit=*/true);
+                           /*Implicit=*/true, FunctionRefKind::Compound);
   }
 };
 } // unnamed namespace
@@ -110,13 +111,14 @@ public:
 void StmtBuilder::printLiteralString(StringRef Str, SourceLoc Loc) {
   Expr *PrintFn = buildPrintRefExpr(Loc);
   Expr *PrintStr = new (Context) StringLiteralExpr(Str, Loc);
-  addToBody(new (Context) CallExpr(PrintFn, PrintStr, /*Implicit=*/true));
+  addToBody(CallExpr::createImplicit(Context, PrintFn, { PrintStr }, { }));
 }
 
 void StmtBuilder::printReplExpr(VarDecl *Arg, SourceLoc Loc) {
   Expr *DebugPrintlnFn = buildDebugPrintlnRefExpr(Loc);
-  Expr *ArgRef = TC.buildRefExpr(Arg, DC, DeclNameLoc(Loc), /*Implicit=*/true);
-  addToBody(new (Context) CallExpr(DebugPrintlnFn, ArgRef, /*Implicit=*/true));
+  Expr *ArgRef = TC.buildRefExpr(Arg, DC, DeclNameLoc(Loc), /*Implicit=*/true,
+                                 FunctionRefKind::Compound);
+  addToBody(CallExpr::createImplicit(Context, DebugPrintlnFn, { ArgRef }, { }));
 }
 
 Identifier TypeChecker::getNextResponseVariableName(DeclContext *DC) {
@@ -195,7 +197,7 @@ struct PatternBindingPrintLHS : public ASTVisitor<PatternBindingPrintLHS> {
 #define REFUTABLE_PATTERN(Id, Parent) INVALID_PATTERN(Id, Parent)
 #include "swift/AST/PatternNodes.def"
 };
-} // end anonymous namespace.
+} // end anonymous namespace
 
 namespace {
   class REPLChecker : public REPLContext {
@@ -209,13 +211,13 @@ namespace {
   private:
     void generatePrintOfExpression(StringRef name, Expr *E);
   };
-}
+} // end anonymous namespace
 
 /// Emit logic to print the specified expression value with the given
 /// description of the pattern involved.
 void REPLChecker::generatePrintOfExpression(StringRef NameStr, Expr *E) {
   // Always print rvalues, not lvalues.
-  E = TC.coerceToMaterializable(E);
+  E = TC.coerceToRValue(E);
 
   SourceLoc Loc = E->getStartLoc();
   SourceLoc EndLoc = E->getEndLoc();
@@ -227,10 +229,11 @@ void REPLChecker::generatePrintOfExpression(StringRef NameStr, Expr *E) {
   TopLevelCodeDecl *newTopLevel = new (Context) TopLevelCodeDecl(&SF);
 
   // Build function of type T->() which prints the operand.
-  auto *Arg = new (Context) ParamDecl(/*isLet=*/true, SourceLoc(),
-                                         SourceLoc(), Identifier(),
-                                         Loc, Context.getIdentifier("arg"),
-                                         E->getType(), /*DC*/ newTopLevel);
+  auto *Arg = new (Context) ParamDecl(
+      VarDecl::Specifier::Default, SourceLoc(), SourceLoc(), Identifier(), Loc,
+      Context.getIdentifier("arg"), /*DC*/ newTopLevel);
+  Arg->setType(E->getType());
+  Arg->setInterfaceType(E->getType());
   auto params = ParameterList::createWithoutLoc(Arg);
 
   unsigned discriminator = TLC.claimNextClosureDiscriminator();
@@ -239,8 +242,10 @@ void REPLChecker::generatePrintOfExpression(StringRef NameStr, Expr *E) {
       new (Context) ClosureExpr(params, SourceLoc(), SourceLoc(), SourceLoc(),
                                 TypeLoc(), discriminator, newTopLevel);
 
-  CE->setType(ParameterList::getFullType(TupleType::getEmpty(Context), params));
-  
+  SmallVector<AnyFunctionType::Param, 1> args;
+  params->getParams(args);
+  CE->setType(FunctionType::get(args, TupleType::getEmpty(Context)));
+
   // Convert the pattern to a string we can print.
   llvm::SmallString<16> PrefixString;
   PrefixString += "// ";
@@ -265,16 +270,9 @@ void REPLChecker::generatePrintOfExpression(StringRef NameStr, Expr *E) {
   CE->setBody(Body, false);
   TC.typeCheckClosureBody(CE);
 
-  // If the caller didn't wrap the argument in parentheses or make it a tuple,
-  // add the extra parentheses now.
-  Expr *TheArg = E;
-  Type Ty = ParenType::get(TC.Context, TheArg->getType());
-  TheArg = new (TC.Context) ParenExpr(SourceLoc(), TheArg, SourceLoc(), false,
-                                      Ty);
-
-  Expr *TheCall = new (Context) CallExpr(CE, TheArg, /*Implicit=*/true);
-  if (TC.typeCheckExpressionShallow(TheCall, Arg->getDeclContext()))
-    return ;
+  auto *TheCall = CallExpr::createImplicit(Context, CE, { E }, { });
+  TheCall->getArg()->setType(AnyFunctionType::composeInput(Context, args, false));
+  TheCall->setType(Context.TheEmptyTupleType);
 
   // Inject the call into the top level stream by wrapping it with a TLCD.
   auto *BS = BraceStmt::create(Context, Loc, ASTNode(TheCall),
@@ -291,7 +289,7 @@ void REPLChecker::processREPLTopLevelExpr(Expr *E) {
   CanType T = E->getType()->getCanonicalType();
 
   // Don't try to print invalid expressions, module exprs, or void expressions.
-  if (isa<ErrorType>(T) || isa<ModuleType>(T) || T->isVoid())
+  if (T->hasError() || isa<ModuleType>(T) || T->isVoid())
     return;
 
   // Okay, we need to print this expression.  We generally do this by creating a
@@ -307,22 +305,26 @@ void REPLChecker::processREPLTopLevelExpr(Expr *E) {
   // going to reparent it.
   auto TLCD = cast<TopLevelCodeDecl>(SF.Decls.back());
 
-  E = TC.coerceToMaterializable(E);
+  E = TC.coerceToRValue(E);
 
   // Create the meta-variable, let the typechecker name it.
-  Identifier name = TC.getNextResponseVariableName(SF.getParentModule());
-  VarDecl *vd = new (Context) VarDecl(/*static*/ false, /*IsLet*/true,
-                                      E->getStartLoc(), name,
-                                      E->getType(), &SF);
+  Identifier name = TC.getNextResponseVariableName(&SF);
+  VarDecl *vd = new (Context) VarDecl(/*IsStatic*/false,
+                                      VarDecl::Specifier::Let,
+                                      /*IsCaptureList*/false, E->getStartLoc(),
+                                      name, &SF);
+  vd->setType(E->getType());
+  vd->setInterfaceType(E->getType());
   SF.Decls.push_back(vd);
 
   // Create a PatternBindingDecl to bind the expression into the decl.
   Pattern *metavarPat = new (Context) NamedPattern(vd);
   metavarPat->setType(E->getType());
 
-  PatternBindingDecl *metavarBinding
-    = PatternBindingDecl::create(Context, SourceLoc(), StaticSpellingKind::None,
-                                 E->getStartLoc(), metavarPat, E, TLCD);
+  PatternBindingDecl *metavarBinding = PatternBindingDecl::create(
+      Context, /*StaticLoc*/ SourceLoc(), StaticSpellingKind::None,
+      /*VarLoc*/ E->getStartLoc(), metavarPat, /*EqualLoc*/ SourceLoc(), E,
+      TLCD);
 
   // Overwrite the body of the existing TopLevelCodeDecl.
   TLCD->setBody(BraceStmt::create(Context,
@@ -383,21 +385,22 @@ void REPLChecker::processREPLTopLevelPatternBinding(PatternBindingDecl *PBD) {
 
     // Create the meta-variable, let the typechecker name it.
     Identifier name = TC.getNextResponseVariableName(SF.getParentModule());
-    VarDecl *vd = new (Context) VarDecl(/*static*/ false, /*IsLet*/true,
-                                        PBD->getStartLoc(), name,
-                                        pattern->getType(), &SF);
+    VarDecl *vd = new (Context) VarDecl(/*IsStatic*/false,
+                                        VarDecl::Specifier::Let,
+                                        /*IsCaptureList*/false,
+                                        PBD->getStartLoc(), name, &SF);
+    vd->setType(pattern->getType());
+    vd->setInterfaceType(pattern->getType());
     SF.Decls.push_back(vd);
-    
 
     // Create a PatternBindingDecl to bind the expression into the decl.
     Pattern *metavarPat = new (Context) NamedPattern(vd);
     metavarPat->setType(vd->getType());
-    PatternBindingDecl *metavarBinding
-      = PatternBindingDecl::create(Context, SourceLoc(),
-                                   StaticSpellingKind::None,
-                                   PBD->getStartLoc(), metavarPat,
-                                   patternEntry.getInit(), &SF);
-    
+    PatternBindingDecl *metavarBinding = PatternBindingDecl::create(
+        Context, /*StaticLoc*/ SourceLoc(), StaticSpellingKind::None,
+        /*VarLoc*/ PBD->getStartLoc(), metavarPat, /*EqualLoc*/ SourceLoc(),
+        patternEntry.getInit(), &SF);
+
     auto MVBrace = BraceStmt::create(Context, metavarBinding->getStartLoc(),
                                      ASTNode(metavarBinding),
                                      metavarBinding->getEndLoc());
@@ -409,7 +412,7 @@ void REPLChecker::processREPLTopLevelPatternBinding(PatternBindingDecl *PBD) {
     // Replace the initializer of PBD with a reference to our repl temporary.
     Expr *E = TC.buildCheckedRefExpr(vd, &SF, DeclNameLoc(vd->getStartLoc()),
                                      /*Implicit=*/true);
-    E = TC.coerceToMaterializable(E);
+    E = TC.coerceToRValue(E);
     PBD->setInit(entryIdx, E);
     SF.Decls.push_back(PBTLCD);
     
@@ -438,20 +441,21 @@ void TypeChecker::processREPLTopLevel(SourceFile &SF, TopLevelContext &TLC,
   for (Decl *D : NewDecls) {
     SF.Decls.push_back(D);
 
-    TopLevelCodeDecl *TLCD = dyn_cast<TopLevelCodeDecl>(D);
+    auto *TLCD = dyn_cast<TopLevelCodeDecl>(D);
     if (!TLCD || TLCD->getBody()->getElements().empty())
       continue;
 
     auto Entry = TLCD->getBody()->getElement(0);
 
     // Check to see if the TLCD has an expression that we have to transform.
-    if (Expr *E = Entry.dyn_cast<Expr*>())
+    if (auto *E = Entry.dyn_cast<Expr*>())
       RC.processREPLTopLevelExpr(E);
-    else if (Decl *D = Entry.dyn_cast<Decl*>())
-      if (PatternBindingDecl *PBD = dyn_cast<PatternBindingDecl>(D))
+    else if (auto *D = Entry.dyn_cast<Decl*>())
+      if (auto *PBD = dyn_cast<PatternBindingDecl>(D))
         RC.processREPLTopLevelPatternBinding(PBD);
+
+    contextualizeTopLevelCode(TLC, TLCD);
   }
 
-  contextualizeTopLevelCode(TLC, llvm::makeArrayRef(SF.Decls).slice(FirstDecl));
+  SF.clearLookupCache();
 }
-

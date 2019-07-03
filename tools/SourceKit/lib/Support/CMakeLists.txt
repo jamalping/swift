@@ -1,4 +1,5 @@
 set(SourceKitSupport_sources
+  Concurrency-libdispatch.cpp
   FuzzyStringMatcher.cpp
   Logging.cpp
   ImmutableTextBuffer.cpp
@@ -7,14 +8,11 @@ set(SourceKitSupport_sources
   UIDRegistry.cpp
 )
 
-set(SourceKitSupport_Darwin_sources
-  Concurrency-Mac.cpp)
-set(LLVM_OPTIONAL_SOURCES ${SourceKitSupport_Darwin_sources})
-if(APPLE)
-  list(APPEND SourceKitSupport_sources ${SourceKitSupport_Darwin_sources})
-endif()
-
 add_sourcekit_library(SourceKitSupport
   ${SourceKitSupport_sources}
-  DEPENDS swiftBasic clangBasic clangRewrite
+  LINK_LIBS swiftBasic swiftSyntax clangBasic clangRewrite
 )
+if(SWIFT_NEED_EXPLICIT_LIBDISPATCH)
+  target_link_libraries(SourceKitSupport INTERFACE dispatch BlocksRuntime)
+endif()
+

@@ -1,13 +1,14 @@
-// RUN: rm -rf %t
-// RUN: mkdir -p %t
+// RUN: %empty-directory(%t)
 //
 // RUN: %target-clang -fobjc-arc %S/Inputs/SlurpFastEnumeration/SlurpFastEnumeration.m -c -o %t/SlurpFastEnumeration.o
 // RUN: echo '#sourceLocation(file: "%s", line: 1)' > "%t/main.swift" && cat "%s" >> "%t/main.swift" && chmod -w "%t/main.swift"
-// RUN: %target-build-swift -Xfrontend -disable-access-control -I %S/Inputs/SlurpFastEnumeration/ %t/main.swift %S/Inputs/DictionaryKeyValueTypes.swift %S/Inputs/DictionaryKeyValueTypesObjC.swift -Xlinker %t/SlurpFastEnumeration.o -o %t.out -O
+// RUN: %target-build-swift -Xfrontend -disable-access-control -I %S/Inputs/SlurpFastEnumeration/ %t/main.swift %S/Inputs/DictionaryKeyValueTypes.swift %S/Inputs/DictionaryKeyValueTypesObjC.swift -Xlinker %t/SlurpFastEnumeration.o -o %t.out -O -swift-version 4.2
 // RUN: %target-run %t.out
 // REQUIRES: executable_test
+// REQUIRES: stress_test
 
 // REQUIRES: objc_interop
+// UNSUPPORTED: nonatomic_rc
 
 import StdlibUnittest
 import Foundation
@@ -41,7 +42,7 @@ struct DictionaryBridge_objectForKey_RaceTest : RaceTestWithPerTrialData {
     _ raceData: RaceData, _ threadLocalData: inout ThreadLocalData
   ) -> Observation {
     let nsd = raceData.nsd
-    let v: AnyObject? = nsd.object(forKey: key)
+    let v: AnyObject? = nsd.object(forKey: key).map { $0 as AnyObject }
     return Observation(unsafeBitCast(v, to: UInt.self))
   }
 
@@ -82,10 +83,10 @@ struct DictionaryBridge_KeyEnumerator_FastEnumeration_ObjC_RaceTest :
     let objcPairs = NSMutableArray()
     slurpFastEnumerationOfDictionaryFromObjCImpl(nsd, nsd, objcPairs)
     return Observation(
-      unsafeBitCast(objcPairs[0], to: UInt.self),
-      unsafeBitCast(objcPairs[1], to: UInt.self),
-      unsafeBitCast(objcPairs[2], to: UInt.self),
-      unsafeBitCast(objcPairs[3], to: UInt.self))
+      unsafeBitCast(objcPairs[0] as AnyObject, to: UInt.self),
+      unsafeBitCast(objcPairs[1] as AnyObject, to: UInt.self),
+      unsafeBitCast(objcPairs[2] as AnyObject, to: UInt.self),
+      unsafeBitCast(objcPairs[3] as AnyObject, to: UInt.self))
   }
 
   func evaluateObservations(

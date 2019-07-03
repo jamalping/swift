@@ -2,11 +2,11 @@
 #
 # This source file is part of the Swift.org open source project
 #
-# Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+# Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 # Licensed under Apache License v2.0 with Runtime Library Exception
 #
-# See http://swift.org/LICENSE.txt for license information
-# See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+# See https://swift.org/LICENSE.txt for license information
+# See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 #
 # -----------------------------------------------------------------------------
 #
@@ -42,6 +42,7 @@ def _darwin_system_memory():
                              dry_run=False, echo=False,
                              optional=False).strip().split(" ")[1])
 
+
 _PER_PLATFORM_SYSTEM_MEMORY = {
     ('Darwin', 'x86_64'): _darwin_system_memory
 }
@@ -62,7 +63,7 @@ def _darwin_max_num_llvm_parallel_lto_link_jobs():
     #
     # This is a bit conservative, but I have found that this number
     # prevents me from swapping on my test machine.
-    return int((_darwin_system_memory()/1000000000.0 - 3.0)/6.0)
+    return int((_darwin_system_memory() / 1000000000.0 - 3.0) / 6.0)
 
 
 def _darwin_max_num_swift_parallel_lto_link_jobs():
@@ -74,7 +75,8 @@ def _darwin_max_num_swift_parallel_lto_link_jobs():
     #
     # This is a bit conservative, but I have found that this number
     # prevents me from swapping on my test machine.
-    return int((_darwin_system_memory()/1000000000.0 - 3.0)/8.0)
+    return int((_darwin_system_memory() / 1000000000.0 - 3.0) / 8.0)
+
 
 _PER_PLATFORM_MAX_PARALLEL_LTO_JOBS = {
     ('Darwin', 'x86_64'): (_darwin_max_num_llvm_parallel_lto_link_jobs,

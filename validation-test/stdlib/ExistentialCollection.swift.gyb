@@ -2,16 +2,14 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
-// RUN: rm -rf %t && mkdir -p %t && %S/../../utils/gyb %s -o %t/ExistentialCollection.swift
-// RUN: %S/../../utils/line-directive %t/ExistentialCollection.swift -- %target-build-swift %t/ExistentialCollection.swift -o %t/a.out
-// RUN: %S/../../utils/line-directive %t/ExistentialCollection.swift -- %target-run %t/a.out
+// RUN: %target-run-simple-swiftgyb
 // REQUIRES: executable_test
 
 %{
@@ -59,6 +57,12 @@ extension AnyRandomAccessCollection where Element : TestProtocol1 {
   }
 }
 
+func storesSameUnderlyingCollection<
+  L: _AnyCollectionProtocol, R: _AnyCollectionProtocol
+>(_ lhs: L, _ rhs: R) -> Bool {
+  return lhs._boxID == rhs._boxID
+}
+
 var tests = TestSuite("ExistentialCollection")
 
 tests.test("AnyIterator") {
@@ -68,9 +72,9 @@ tests.test("AnyIterator") {
 
     // This is a really complicated type of no interest to our
     // clients.
-    let iterator: LazyMapIterator<
-        IndexingIterator<CountableRange<Int>>, OpaqueValue<Int>
-      > = lazyStrings.makeIterator()
+    let iterator: LazyMapSequence<
+      CountableRange<Int>, OpaqueValue<Int>
+    >.Iterator = lazyStrings.makeIterator()
     return AnyIterator(iterator)
   }
   expectEqual([0, 1, 2, 3, 4], Array(digits()).map { $0.value })
@@ -131,7 +135,7 @@ tests.test("AnySequence.init(() -> Generator)") {
 %     MinimalBase = 'Minimal' + collectionForTraversal(Traversal)
 %   end
 
-tests.test("${TestedType}: dispatch to wrapped") {
+tests.test("${TestedType}: dispatch to wrapped, SequenceLog") {
   typealias Base = ${LoggingWrapper}<${MinimalBase}<OpaqueValue<Int>>>
   typealias Log = SequenceLog
   let base = Base(wrapping:
@@ -147,58 +151,26 @@ tests.test("${TestedType}: dispatch to wrapped") {
     _ = s.underestimatedCount
   }
 
-  Log.map.expectIncrement(Base.self) {
-    _ = s.map { $0 }
+  Log._customContainsEquatableElement.expectIncrement(Base.self) {
+    _ = s._customContainsEquatableElement(OpaqueValue(42))
   }
 
-  Log.filter.expectIncrement(Base.self) {
-    _ = s.filter { (_) in true }
-  }
-
-  Log.forEach.expectIncrement(Base.self) {
-    _ = s.forEach { (_) in }
-  }
-
-  Log.dropFirst.expectIncrement(Base.self) {
-    _ = s.dropFirst(0)
-  }
-
-  Log.dropLast.expectIncrement(Base.self) {
-    _ = s.dropLast(0)
-  }
-
-  Log.prefixMaxLength.expectIncrement(Base.self) {
-    _ = s.prefix(0)
-  }
-
-  Log.suffixMaxLength.expectIncrement(Base.self) {
-    _ = s.suffix(0)
-  }
-
-  Log.split.expectIncrement(Base.self) {
-    _ = s.split { (_) in true }
-  }
-
-  Log._preprocessingPass.expectIncrement(Base.self) {
-    _ = s._preprocessingPass {}
-  }
-
-  Log._copyToNativeArrayBuffer.expectIncrement(Base.self) {
-    _ = s._copyToNativeArrayBuffer()
+  Log._copyToContiguousArray.expectIncrement(Base.self) {
+    _ = s._copyToContiguousArray()
   }
 
   do {
     var result = Array(repeating: OpaqueValue(0), count: 10)
     Log._copyContents.expectIncrement(Base.self) {
       result.withUnsafeMutableBufferPointer {
-        _ = s._copyContents(initializing: $0.baseAddress!)
+        _ = s._copyContents(initializing: $0)
       }
     }
   }
 }
 
 %   if Traversal != 'Sequence':
-tests.test("${TestedType}: dispatch to wrapped") {
+tests.test("${TestedType}: dispatch to wrapped, CollectionLog") {
   typealias Base = ${LoggingWrapper}<${MinimalBase}<OpaqueValue<Int>>>
   typealias Log = CollectionLog
   let base = Base(wrapping:
@@ -242,7 +214,7 @@ tests.test("${TestedType}: dispatch to wrapped") {
 %   end
 
   do {
-    var startIndex = c.startIndex
+    let startIndex = c.startIndex
     var badBounds = c.index(c.startIndex, offsetBy: 3)..<c.endIndex
 
     Log.subscriptIndex.expectIncrement(Base.self) {
@@ -315,23 +287,6 @@ tests.test("${TestedType}: dispatch to wrapped") {
     _blackHole(x)
   }
 %   end
-
-  Log.first.expectIncrement(Base.self) {
-    Log.startIndex.expectUnchanged(Base.self) {
-      Log.makeIterator.expectUnchanged(Base.self) {
-        _ = c.first
-      }
-    }
-  }
-
-%   if Traversal in ['Bidirectional', 'RandomAccess']:
-  BidirectionalCollectionLog.last.expectIncrement(Base.self) {
-    Log.endIndex.expectUnchanged(Base.self) {
-      _ = c.last
-    }
-  }
-%   end
-
 }
 %   end
 % end
@@ -342,8 +297,8 @@ tests.test("ForwardCollection") {
   let a1 = ContiguousArray(fc0)
   expectEqual(a0, a1)
   for e in a0 {
-    let i = fc0.index(of: e)
-    expectNotEmpty(i)
+    let i = fc0.firstIndex(of: e)
+    expectNotNil(i)
     expectEqual(e, fc0[i!])
   }
   for i in fc0.indices {
@@ -355,58 +310,58 @@ tests.test("ForwardCollection") {
 tests.test("BidirectionalCollection") {
   let a0: ContiguousArray = [1, 2, 3, 5, 8, 13, 21]
   let fc0 = AnyCollection(a0.lazy.reversed())
-  
+
   let bc0_ = AnyBidirectionalCollection(fc0)  // upgrade!
-  expectNotEmpty(bc0_)
+  expectNotNil(bc0_)
   let bc0 = bc0_!
-  expectTrue(fc0 === bc0)
+  expectTrue(storesSameUnderlyingCollection(fc0, bc0))
 
   let fc1 = AnyCollection(a0.lazy.reversed()) // new collection
-  expectFalse(fc1 === fc0)
+  expectFalse(storesSameUnderlyingCollection(fc1, fc0))
 
   let fc2 = AnyCollection(bc0)                // downgrade
-  expectTrue(fc2 === bc0)
-  
+  expectTrue(storesSameUnderlyingCollection(fc2, bc0))
+
   let a1 = ContiguousArray(bc0.lazy.reversed())
   expectEqual(a0, a1)
   for e in a0 {
-    let i = bc0.index(of: e)
-    expectNotEmpty(i)
+    let i = bc0.firstIndex(of: e)
+    expectNotNil(i)
     expectEqual(e, bc0[i!])
   }
   for i in bc0.indices {
     expectNotEqual(bc0.endIndex, i)
     expectEqual(1, bc0.indices.filter { $0 == i }.count)
   }
-  
+
   // Can't upgrade a non-random-access collection to random access
-  let s0 = "Hello, Woyld".characters
+  let s0 = "Hello, Woyld"
   let bc1 = AnyBidirectionalCollection(s0)
   let fc3 = AnyCollection(bc1)
-  expectTrue(fc3 === bc1)
-  expectEmpty(AnyRandomAccessCollection(bc1))
-  expectEmpty(AnyRandomAccessCollection(fc3))
+  expectTrue(storesSameUnderlyingCollection(fc3, bc1))
+  expectNil(AnyRandomAccessCollection(bc1))
+  expectNil(AnyRandomAccessCollection(fc3))
 }
 
 tests.test("RandomAccessCollection") {
   let a0: ContiguousArray = [1, 2, 3, 5, 8, 13, 21]
   let fc0 = AnyCollection(a0.lazy.reversed())
   let rc0_ = AnyRandomAccessCollection(fc0)         // upgrade!
-  expectNotEmpty(rc0_)
+  expectNotNil(rc0_)
   let rc0 = rc0_!
-  expectTrue(rc0 === fc0)
+  expectTrue(storesSameUnderlyingCollection(rc0, fc0))
 
   let bc1 = AnyBidirectionalCollection(rc0)         // downgrade
-  expectTrue(bc1 === rc0)
+  expectTrue(storesSameUnderlyingCollection(bc1, rc0))
 
   let fc1 = AnyBidirectionalCollection(rc0)         // downgrade
-  expectTrue(fc1 === rc0)
-  
+  expectTrue(storesSameUnderlyingCollection(fc1, rc0))
+
   let a1 = ContiguousArray(rc0.lazy.reversed())
   expectEqual(a0, a1)
   for e in a0 {
-    let i = rc0.index(of: e)
-    expectNotEmpty(i)
+    let i = rc0.firstIndex(of: e)
+    expectNotNil(i)
     expectEqual(e, rc0[i!])
   }
   for i in rc0.indices {

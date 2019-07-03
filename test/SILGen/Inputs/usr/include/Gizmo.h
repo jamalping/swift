@@ -5,6 +5,10 @@
 - (void) anse;
 @end
 
+__attribute__((swift_name("BetterAnsing")))
+@protocol NSBetterAnsing <NSAnsing>
+@end
+
 @interface NSObject (NSAnsing)
 @property Class<NSAnsing> qualifiedClassProp;
 @end
@@ -35,6 +39,7 @@ typedef long NSInteger;
 - (Gizmo*) init OBJC_DESIGNATED_INITIALIZER;
 - (Gizmo*) initWithBellsOn:(NSInteger)x OBJC_DESIGNATED_INITIALIZER;
 - (instancetype) initWithoutBells:(NSInteger)x;
++ (instancetype) gizmoWithWhistles:(NSInteger)x;
 - (void) fork NS_CONSUMES_SELF;
 - (void) enumerateSubGizmos: (void (^ _Nullable)(Gizmo*))f;
 + (void) consume: (NS_CONSUMED Gizmo*) gizmo;
@@ -48,6 +53,9 @@ typedef long NSInteger;
 - (void) foo;
 - (void* _Nonnull) getBytes NS_RETURNS_INNER_POINTER;
 
+- (void)doTheThingWithOptions:(nonnull NSDictionary *)options;
+- (void)doTheOtherThingWithOptionalOptions:(nullable NSDictionary *)options;
+
 @property (nonnull) void *innerProperty;
 - (void* _Nonnull) innerProperty NS_RETURNS_INNER_POINTER;
 - (void) setInnerProperty: (void*)p;
@@ -58,10 +66,7 @@ typedef long NSInteger;
 + (instancetype)gizmoWithStuff:(NSInteger)x;
 + (Gizmo*)gizmoWithExactlyStuff:(NSInteger)x;
 
-- (Gizmo*)nonNilGizmo __attribute__((swift_name("nonNilGizmo()")));
-+ (Gizmo*)nonNilGizmo __attribute__((swift_name("nonNilGizmo()")));
-@property Gizmo* nonNilGizmoProperty;
-@property (unsafe_unretained) Gizmo* unownedNonNilGizmoProperty;
+@property id originalName __attribute__((swift_name("renamedProp")));
 @end
 
 @interface Guisemeau : Gizmo

@@ -53,6 +53,9 @@ typedef struct {
   unsigned b[];
 } StructWithFlexibleArray;
 
+#include <stdarg.h>
+extern void hasVaList(va_list args);
+
 //===---
 // Tag decls and typedefs.
 //===---
@@ -120,6 +123,10 @@ struct FooStruct6 {
   double y;
 };
 
+struct StructWithForwardDeclaredStruct {
+  struct ForwardDeclaredStruct *ptr;
+};
+
 //===---
 // Typedefs.
 //===---
@@ -155,6 +162,10 @@ typedef SInt32 OSStatus;
 
 // Types from stdint.h.
 #include <stdint.h>
+#if defined(_WIN32)
+typedef __INTPTR_TYPE__ intptr_t;
+typedef __UINTPTR_TYPE__ uintptr_t;
+#endif
 STDLIB_TEST(__UINT8_TYPE__, uint8_t);
 STDLIB_TEST(__UINT16_TYPE__, uint16_t);
 STDLIB_TEST(__UINT32_TYPE__, uint32_t);
@@ -265,6 +276,19 @@ typedef struct ModRM {
 // Arrays
 //===---
 void useArray(char x[4], char y[], char z[][8]);
+void staticBoundsArray(const char x[static 4]);
+
+void useBigArray(char max_size[4096], char max_size_plus_one[4097]);
+void useBigArray2d(char max_size[][4096], char max_size_plus_one[][4097]);
+
+struct StructWithBigArray {
+  char max_size[4096];
+  char max_size_plus_one[4097];
+};
+
+typedef const int FourConstInts[4];
+void nonnullArrayParameters(const char x[_Nonnull], void * const _Nullable y[_Nonnull], _Nonnull FourConstInts z);
+void nullableArrayParameters(const char x[_Nullable], void * const _Nullable y[_Nullable], _Nullable FourConstInts z);
 
 typedef double real_t __attribute__((availability(swift,unavailable,message="use double")));
 

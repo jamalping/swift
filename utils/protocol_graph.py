@@ -2,11 +2,11 @@
 #
 # This source file is part of the Swift.org open source project
 #
-# Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+# Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 # Licensed under Apache License v2.0 with Runtime Library Exception
 #
-# See http://swift.org/LICENSE.txt for license information
-# See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+# See https://swift.org/LICENSE.txt for license information
+# See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 #
 # ===---------------------------------------------------------------------===//
 #
@@ -71,6 +71,7 @@ def body_lines(body_text):
             body_text, re_flags)
     ]
 
+
 # Mapping from protocol to associated type / operator requirements
 body = {}
 
@@ -129,6 +130,7 @@ def parse_protocol(m):
             if re.match(r'_Builtin.*Convertible', parent):
                 return
             graph.setdefault(parent.strip(), set()).add(child)
+
 
 protocols_and_operators = interpolate(r'''
 \bprotocol \s+ (%(identifier)s) \s*

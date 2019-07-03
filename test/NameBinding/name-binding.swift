@@ -1,4 +1,9 @@
-// RUN: %target-swift-frontend -parse %s -module-name themodule -enable-source-import -I %S/../decl/enum -sdk "" -verify -show-diagnostics-after-fatal
+// XFAIL: enable-astscope-lookup
+// RUN: %target-swift-frontend -typecheck %s -module-name themodule -enable-source-import -I %S/../decl/enum -sdk "" -verify -show-diagnostics-after-fatal -verify-ignore-unknown
+
+// -verify-ignore-unknown is for
+// <unknown>:0: error: unexpected note produced: did you forget to set an SDK using -sdk or SDKROOT?
+// <unknown>:0: error: unexpected note produced: use "xcrun swiftc" to select the default macOS SDK installed with Xcode
 
 import Swift
 import nonexistentimport  // expected-error {{no such module 'nonexistentimport'}}
@@ -100,9 +105,11 @@ func func3() {
 
 struct a_struct { var x : Int }
 
-infix operator *** {
-  associativity left
-  precedence 97
+infix operator *** : Starry
+precedencegroup Starry {
+  associativity: left
+  higherThan: AssignmentPrecedence
+  lowerThan: TernaryPrecedence
 }
 
 func ***(lhs: Int, rhs: Int) -> Int {
@@ -170,11 +177,11 @@ var qualifiedvalue : Int = themodule.importedtype
 var qualifiedtype : themodule.x_ty = 5
 
 
-prefix operator +++ {}
-postfix operator +++ {}
+prefix operator +++
+postfix operator +++
 
-prefix operator ++ {}
-postfix operator ++ {}
+prefix operator ++
+postfix operator ++
 
 prefix func +++(a: inout Int) { a += 2 }
 postfix func +++(a: inout Int) { a += 2 }
@@ -189,16 +196,16 @@ test+++
 //===----------------------------------------------------------------------===//
 
 func forwardReference() {
-  x = 0 // expected-error{{use of local variable 'x' before its declaration}}
-  var x: Float = 0.0 // expected-note{{'x' declared here}}
+  v = 0 // expected-error{{use of local variable 'v' before its declaration}}
+  var v: Float = 0.0 // expected-note{{'v' declared here}}
 }
 
 class ForwardReference {
   var x: Int = 0
 
   func test() {
-    x = 0 // expected-error{{use of local variable 'x' before its declaration}}
-    var x: Float = 0.0 // expected-note{{'x' declared here}}
+    x = 0
+    var x: Float = 0.0 // expected-warning{{variable 'x' was never used; consider replacing with '_' or removing it}}
   }
 }
 

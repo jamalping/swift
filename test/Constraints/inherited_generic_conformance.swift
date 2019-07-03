@@ -1,4 +1,4 @@
-// RUN: %target-swift-frontend -parse -verify %s
+// RUN: %target-typecheck-verify-swift
 
 protocol P {}
 

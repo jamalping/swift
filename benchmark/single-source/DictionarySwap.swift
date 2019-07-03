@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -14,30 +14,23 @@
 // rdar://problem/19804127
 import TestsUtils
 
-@inline(never)
-public func run_DictionarySwap(_ N: Int) {
-    let size = 100
-    var dict = [Int: Int](minimumCapacity: size)
+let size = 100
+let numberMap = Dictionary(uniqueKeysWithValues: zip(1...size, 1...size))
+let boxedNums = (1...size).lazy.map { Box($0) }
+let boxedNumMap = Dictionary(uniqueKeysWithValues: zip(boxedNums, boxedNums))
 
-    // Fill dictionary
-    for i in 1...size {
-        dict[i] = i
-    }
-    CheckResults(dict.count == size,
-                 "Incorrect dict count: \(dict.count) != \(size).")
+let t: [BenchmarkCategory] = [.validation, .api, .Dictionary]
 
-    var swapped = false
-    for _ in 1...10000*N {
-        swap(&dict[25]!, &dict[75]!)
-        swapped = !swapped
-        if !swappedCorrectly(swapped, dict[25]!, dict[75]!) {
-            break
-        }
-    }
-
-    CheckResults(swappedCorrectly(swapped, dict[25]!, dict[75]!),
-                 "Dictionary value swap failed")
-}
+public let DictionarySwap = [
+  BenchmarkInfo(name: "DictionarySwap",
+    runFunction: swap, tags: t, legacyFactor: 4),
+  BenchmarkInfo(name: "DictionarySwapOfObjects",
+    runFunction: swapObjects, tags: t, legacyFactor: 40),
+  BenchmarkInfo(name: "DictionarySwapAt",
+    runFunction: swapAt, tags: t, legacyFactor: 4),
+  BenchmarkInfo(name: "DictionarySwapAtOfObjects",
+    runFunction: swapAtObjects, tags: t, legacyFactor: 11),
+]
 
 // Return true if correctly swapped, false otherwise
 func swappedCorrectly(_ swapped: Bool, _ p25: Int, _ p75: Int) -> Bool {
@@ -45,46 +38,65 @@ func swappedCorrectly(_ swapped: Bool, _ p25: Int, _ p75: Int) -> Bool {
           !swapped && (p25 == 25 && p75 == 75)
 }
 
-class Box<T : Hashable where T : Equatable> : Hashable {
+class Box<T : Hashable> : Hashable {
   var value: T
 
   init(_ v: T) {
     value = v
   }
 
-  var hashValue : Int {
-    return value.hashValue
+  func hash(into hasher: inout Hasher) {
+    hasher.combine(value)
+  }
+
+  static func ==(lhs: Box, rhs: Box) -> Bool {
+    return lhs.value == rhs.value
   }
 }
 
-extension Box : Equatable {
-}
-
-func ==<T: Equatable>(lhs: Box<T>, rhs: Box<T>) -> Bool {
-  return lhs.value == rhs.value
-}
-
-@inline(never)
-public func run_DictionarySwapOfObjects(_ N: Int) {
-    let size = 100
-    var dict = Dictionary<Box<Int>, Box<Int>>(minimumCapacity: size)
-
-    // Fill dictionary
-    for i in 1...size {
-        dict[Box(i)] = Box(i)
+func swap(N: Int) {
+  var dict = numberMap
+  var swapped = false
+  for _ in 1...2500*N {
+      (dict[25], dict[75]) = (dict[75]!, dict[25]!)
+      swapped = !swapped
+      CheckResults(swappedCorrectly(swapped, dict[25]!, dict[75]!))
     }
-    CheckResults(dict.count == size,
-                 "Incorrect dict count: \(dict.count) != \(size).")
-
-    var swapped = false
-    for _ in 1...10000*N {
-        swap(&dict[Box(25)]!, &dict[Box(75)]!)
-        swapped = !swapped
-        if !swappedCorrectly(swapped, dict[Box(25)]!.value, dict[Box(75)]!.value) {
-            break
-        }
-    }
-
-    CheckResults(swappedCorrectly(swapped, dict[Box(25)]!.value, dict[Box(75)]!.value),
-                 "Dictionary value swap failed")
 }
+
+func swapObjects(N: Int) {
+  var dict = boxedNumMap
+  var swapped = false
+  for _ in 1...250*N {
+    let b1 = Box(25)
+    let b2 = Box(75)
+    (dict[b1], dict[b2]) = (dict[b2]!, dict[b1]!)
+    swapped = !swapped
+    CheckResults(swappedCorrectly(swapped,
+      dict[Box(25)]!.value, dict[Box(75)]!.value))
+  }
+}
+
+func swapAt(N: Int) {
+  var dict = numberMap
+  var swapped = false
+  for _ in 1...2500*N {
+    let i25 = dict.index(forKey: 25)!
+    let i75 = dict.index(forKey: 75)!
+    dict.values.swapAt(i25, i75)
+    swapped = !swapped
+    CheckResults(swappedCorrectly(swapped, dict[25]!, dict[75]!))
+  }
+}
+
+func swapAtObjects(N: Int) {
+  var dict = boxedNumMap
+  var swapped = false
+  for _ in 1...1000*N {
+    let i25 = dict.index(forKey: Box(25))!
+    let i75 = dict.index(forKey: Box(75))!
+    dict.values.swapAt(i25, i75)
+    swapped = !swapped
+    CheckResults(swappedCorrectly(swapped,
+      dict[Box(25)]!.value, dict[Box(75)]!.value))
+}}

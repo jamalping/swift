@@ -1,13 +1,10 @@
-// RUN: rm -rf %t && mkdir -p %t
+// RUN: %empty-directory(%t)
 // RUN: cp %s %t/main.swift
 
-// RUN: %target-swift-frontend -parse -primary-file %t/main.swift %S/Inputs/accessibility_other.swift -module-name accessibility -enable-source-import -I %S/Inputs -sdk "" -enable-access-control -verify
-// RUN: %target-swift-frontend -parse -primary-file %t/main.swift %S/Inputs/accessibility_other.swift -module-name accessibility -enable-source-import -I %S/Inputs -sdk "" -disable-access-control -D DEFINE_VAR_FOR_SCOPED_IMPORT -D ACCESS_DISABLED
-
 // RUN: %target-swift-frontend -emit-module -o %t %S/Inputs/has_accessibility.swift -D DEFINE_VAR_FOR_SCOPED_IMPORT -enable-testing
-// RUN: %target-swift-frontend -parse -primary-file %t/main.swift %S/Inputs/accessibility_other.swift -module-name accessibility -I %t -sdk "" -enable-access-control -verify
-// RUN: %target-swift-frontend -parse -primary-file %t/main.swift %S/Inputs/accessibility_other.swift -module-name accessibility -I %t -sdk "" -disable-access-control -D ACCESS_DISABLED
-// RUN: not %target-swift-frontend -parse -primary-file %t/main.swift %S/Inputs/accessibility_other.swift -module-name accessibility -I %t -sdk "" -D TESTABLE 2>&1 | FileCheck -check-prefix=TESTABLE %s
+// RUN: %target-swift-frontend -typecheck -primary-file %t/main.swift %S/Inputs/accessibility_other.swift -module-name accessibility -I %t -sdk "" -enable-access-control -verify -verify-ignore-unknown
+// RUN: %target-swift-frontend -typecheck -primary-file %t/main.swift %S/Inputs/accessibility_other.swift -module-name accessibility -I %t -sdk "" -disable-access-control -D ACCESS_DISABLED
+// RUN: not %target-swift-frontend -typecheck -primary-file %t/main.swift %S/Inputs/accessibility_other.swift -module-name accessibility -I %t -sdk "" -D TESTABLE 2>&1 | %FileCheck -check-prefix=TESTABLE %s
 
 #if TESTABLE
 @testable import has_accessibility
@@ -16,7 +13,7 @@ import has_accessibility
 #endif
 
 // This deliberately has the wrong import kind.
-import var has_accessibility.zz // expected-error {{no such decl in module}}
+import var has_accessibility.zz // expected-error {{variable 'zz' does not exist in module 'has_accessibility'}}
 
 func markUsed<T>(_ t: T) {}
 
@@ -53,6 +50,15 @@ Foo.b()
 Foo.c() // expected-error {{'c' is inaccessible due to 'private' protection level}}
 
 _ = Foo() // expected-error {{'Foo' initializer is inaccessible due to 'internal' protection level}}
+
+// <rdar://problem/27982012> QoI: Poor diagnostic for inaccessible initializer
+struct rdar27982012 {
+  var x: Int
+  private init(_ x: Int) { self.x = x } // expected-note {{'init(_:)' declared here}}
+}
+
+_ = { rdar27982012($0.0) }((1, 2)) // expected-error {{initializer is inaccessible due to 'private' protection level}}
+
 // TESTABLE-NOT: :[[@LINE-1]]:{{[^:]+}}:
 _ = PrivateInit() // expected-error {{'PrivateInit' initializer is inaccessible due to 'private' protection level}}
 // TESTABLE: :[[@LINE-1]]:{{[^:]+}}: error: 'PrivateInit' initializer is inaccessible due to 'private' protection level
@@ -69,7 +75,7 @@ class Sub : Base {
     // TESTABLE-NOT: :[[@LINE-3]]:{{[^:]+}}:
     // TESTABLE-NOT: :[[@LINE-3]]:{{[^:]+}}:
 
-    method() // expected-error {{use of unresolved identifier 'method'}}
+    method() // expected-error {{'method' is inaccessible due to 'internal' protection level}}
     self.method() // expected-error {{'method' is inaccessible due to 'internal' protection level}}
     super.method() // expected-error {{'method' is inaccessible due to 'internal' protection level}}
     // TESTABLE-NOT: :[[@LINE-3]]:{{[^:]+}}:
@@ -96,9 +102,10 @@ protocol MethodProto {
 }
 
 extension OriginallyEmpty : MethodProto {}
+#if !ACCESS_DISABLED
 extension HiddenMethod : MethodProto {} // expected-error {{type 'HiddenMethod' does not conform to protocol 'MethodProto'}}
 // TESTABLE-NOT: :[[@LINE-1]]:{{[^:]+}}:
-#if !ACCESS_DISABLED
+
 extension Foo : MethodProto {} // expected-error {{type 'Foo' does not conform to protocol 'MethodProto'}}
 #endif
 
@@ -108,9 +115,10 @@ protocol TypeProto {
 }
 
 extension OriginallyEmpty {}
+#if !ACCESS_DISABLED
 extension HiddenType : TypeProto {} // expected-error {{type 'HiddenType' does not conform to protocol 'TypeProto'}}
 // TESTABLE-NOT: :[[@LINE-1]]:{{[^:]+}}:
-#if !ACCESS_DISABLED
+
 extension Foo : TypeProto {} // expected-error {{type 'Foo' does not conform to protocol 'TypeProto'}}
 #endif
 
@@ -118,33 +126,53 @@ extension Foo : TypeProto {} // expected-error {{type 'Foo' does not conform to 
 #if !ACCESS_DISABLED
 private func privateInBothFiles() {} // no-warning
 private func privateInPrimaryFile() {} // expected-error {{invalid redeclaration}}
-func privateInOtherFile() {} // expected-note {{previously declared here}}
-#endif
-
-
-#if !ACCESS_DISABLED
-// rdar://problem/21408035
-private class PrivateBox<T> { // expected-note 2 {{type declared here}}
-  typealias ValueType = T
-  typealias AlwaysFloat = Float
-}
-
-let boxUnboxInt: PrivateBox<Int>.ValueType = 0 // expected-error {{constant must be declared private because its type uses a private type}}
-let boxFloat: PrivateBox<Int>.AlwaysFloat = 0 // expected-error {{constant must be declared private because its type uses a private type}}
+func privateInOtherFile() {}
 #endif
 
 
 #if !ACCESS_DISABLED
 struct ConformerByTypeAlias : TypeProto {
-  private typealias TheType = Int // expected-error {{type alias 'TheType' must be declared internal because it matches a requirement in internal protocol 'TypeProto'}} {{3-10=internal}}
+  private typealias TheType = Int // expected-error {{type alias 'TheType' must be declared internal because it matches a requirement in internal protocol 'TypeProto'}} {{none}}
+  // expected-note@-1 {{mark the type alias as 'internal' to satisfy the requirement}} {{3-10=internal}}
 }
 
 struct ConformerByLocalType : TypeProto {
-  private struct TheType {} // expected-error {{struct 'TheType' must be declared internal because it matches a requirement in internal protocol 'TypeProto'}} {{3-10=internal}}
+  private struct TheType {} // expected-error {{struct 'TheType' must be declared internal because it matches a requirement in internal protocol 'TypeProto'}} {{none}}
+  // expected-note@-1 {{mark the struct as 'internal' to satisfy the requirement}} {{3-10=internal}}
 }
 
 private struct PrivateConformerByLocalType : TypeProto {
-  private struct TheType {} // okay
+  struct TheType {} // okay
+}
+
+private struct PrivateConformerByLocalTypeBad : TypeProto {
+  private struct TheType {} // expected-error {{struct 'TheType' must be as accessible as its enclosing type because it matches a requirement in protocol 'TypeProto'}} {{none}}
+  // expected-note@-1 {{mark the struct as 'fileprivate' to satisfy the requirement}} {{3-10=fileprivate}}
 }
 #endif
 
+public protocol Fooable {
+  func foo() // expected-note * {{protocol requires function 'foo()'}}
+}
+
+#if !ACCESS_DISABLED
+internal struct FooImpl: Fooable, HasDefaultImplementation {} // expected-error {{type 'FooImpl' does not conform to protocol 'Fooable'}}
+public struct PublicFooImpl: Fooable, HasDefaultImplementation {} // expected-error {{type 'PublicFooImpl' does not conform to protocol 'Fooable'}}
+// TESTABLE-NOT: method 'foo()'
+
+internal class TestableSub: InternalBase {} // expected-error {{undeclared type 'InternalBase'}}
+public class TestablePublicSub: InternalBase {} // expected-error {{undeclared type 'InternalBase'}}
+// TESTABLE-NOT: undeclared type 'InternalBase'
+#endif
+
+// FIXME: Remove -verify-ignore-unknown.
+// <unknown>:0: error: unexpected note produced: 'y' declared here
+// <unknown>:0: error: unexpected note produced: 'z' declared here
+// <unknown>:0: error: unexpected note produced: 'init()' declared here
+// <unknown>:0: error: unexpected note produced: 'method()' declared here
+// <unknown>:0: error: unexpected note produced: 'method' declared here
+// <unknown>:0: error: unexpected note produced: 'method' declared here
+
+class AccessMemberOfInternalProtocol : ImplementsInternalProtocol {
+  func testProperty() { let _ = i } // expected-error {{'i' is inaccessible due to 'internal' protection level}}
+}

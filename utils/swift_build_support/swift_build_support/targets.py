@@ -2,76 +2,185 @@
 #
 # This source file is part of the Swift.org open source project
 #
-# Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+# Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 # Licensed under Apache License v2.0 with Runtime Library Exception
 #
-# See http://swift.org/LICENSE.txt for license information
-# See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+# See https://swift.org/LICENSE.txt for license information
+# See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 
 import os
 import platform
 
 
+class Platform(object):
+    """
+    Abstract representation of a platform Swift can run on.
+    """
+
+    def __init__(self, name, archs, sdk_name=None):
+        """
+        Create a platform with the given name and list of architectures.
+        """
+        self.name = name
+        self.targets = [Target(self, arch) for arch in archs]
+        # FIXME: Eliminate this argument; apparently the SDK names are
+        # internally a private implementation detail of the build script, so we
+        # should just make them the same as the platform name.
+        self.sdk_name = name.upper() if sdk_name is None else sdk_name
+
+        # Add a property for each arch.
+        for target in self.targets:
+            setattr(self, target.arch, target)
+
+    @property
+    def is_darwin(self):
+        """Convenience function for checking if this is a Darwin platform."""
+        return isinstance(self, DarwinPlatform)
+
+    @property
+    def supports_benchmark(self):
+        # By default, we don't support benchmarks on most platforms.
+        return False
+
+    @property
+    def uses_host_tests(self):
+        """
+        Check if this is a Darwin platform that needs a connected device
+        for tests.
+        """
+        # By default, we don't use connected devices on most platforms.
+        return False
+
+    def contains(self, target_name):
+        """
+        Returns True if the given target name belongs to a one of this
+        platform's targets.
+        """
+        for target in self.targets:
+            if target.name == target_name:
+                return True
+        return False
+
+
+class DarwinPlatform(Platform):
+    def __init__(self, name, archs, sdk_name=None, is_simulator=False):
+        self.is_simulator = is_simulator
+        super(DarwinPlatform, self).__init__(name, archs, sdk_name)
+
+    @property
+    def is_embedded(self):
+        """Check if this is a Darwin platform for embedded devices."""
+        return self.name != "macosx"
+
+    @property
+    def supports_benchmark(self):
+        # By default, on Darwin we support benchmarks on all non-simulator
+        # platforms.
+        return not self.is_simulator
+
+    @property
+    def uses_host_tests(self):
+        """
+        Check if this is a Darwin platform that needs a connected device
+        for tests.
+        """
+        return self.is_embedded and not self.is_simulator
+
+
+class AndroidPlatform(Platform):
+    @property
+    def uses_host_tests(self):
+        """
+        Check if this is a Darwin platform that needs a connected device
+        for tests.
+        """
+        return True
+
+
+class Target(object):
+    """
+    Abstract representation of a target Swift can run on.
+    """
+
+    def __init__(self, platform, arch):
+        self.platform = platform
+        self.arch = arch
+        # Delegate to the platform, this is usually not arch specific.
+        self.supports_benchmark = self.platform.supports_benchmark
+
+    @property
+    def name(self):
+        return "{}-{}".format(self.platform.name, self.arch)
+
+
 class StdlibDeploymentTarget(object):
+    OSX = DarwinPlatform("macosx", archs=["x86_64"],
+                         sdk_name="OSX")
 
-    class OSX(object):
-        x86_64 = 'macosx-x86_64'
-        allArchs = [x86_64]
+    iOS = DarwinPlatform("iphoneos", archs=["armv7", "armv7s", "arm64"],
+                         sdk_name="IOS")
+    iOSSimulator = DarwinPlatform("iphonesimulator", archs=["i386", "x86_64"],
+                                  sdk_name="IOS_SIMULATOR",
+                                  is_simulator=True)
 
-    class iOS(object):  # noqa
-        armv7 = 'iphoneos-armv7'
-        armv7s = 'iphoneos-armv7s'
-        arm64 = 'iphoneos-arm64'
-        allArchs = [armv7, armv7s, arm64]
+    # Never build/test benchmarks on iOS armv7s.
+    iOS.armv7s.supports_benchmark = False
 
-    class iOSSimulator(object):  # noqa
-        i386 = 'iphonesimulator-i386'
-        x86_64 = 'iphonesimulator-x86_64'
-        allArchs = [i386, x86_64]
+    AppleTV = DarwinPlatform("appletvos", archs=["arm64"],
+                             sdk_name="TVOS")
+    AppleTVSimulator = DarwinPlatform("appletvsimulator", archs=["x86_64"],
+                                      sdk_name="TVOS_SIMULATOR",
+                                      is_simulator=True)
 
-    class AppleTV(object):
-        arm64 = 'appletvos-arm64'
-        allArchs = [arm64]
+    AppleWatch = DarwinPlatform("watchos", archs=["armv7k"],
+                                sdk_name="WATCHOS")
+    AppleWatchSimulator = DarwinPlatform("watchsimulator", archs=["i386"],
+                                         sdk_name="WATCHOS_SIMULATOR",
+                                         is_simulator=True)
 
-    class AppleTVSimulator(object):
-        x86_64 = 'appletvsimulator-x86_64'
-        allArchs = [x86_64]
+    Linux = Platform("linux", archs=[
+        "x86_64",
+        "i686",
+        "armv6",
+        "armv7",
+        "aarch64",
+        "powerpc64",
+        "powerpc64le",
+        "s390x"])
 
-    class AppleWatch(object):
-        armv7k = 'watchos-armv7k'
-        allArchs = [armv7k]
+    FreeBSD = Platform("freebsd", archs=["x86_64"])
 
-    class AppleWatchSimulator(object):
-        i386 = 'watchsimulator-i386'
-        allArchs = [i386]
+    Cygwin = Platform("cygwin", archs=["x86_64"])
 
-    class Linux(object):
-        x86_64 = 'linux-x86_64'
-        armv6 = 'linux-armv6'
-        armv7 = 'linux-armv7'
-        aarch64 = 'linux-aarch64'
-        ppc64 = 'linux-ppc64'
-        ppc64le = 'linux-ppc64le'
-        s390x = 'linux-s390x'
-        allArchs = [x86_64, armv6, armv7, aarch64, ppc64, ppc64le, s390x]
+    Android = AndroidPlatform("android", archs=["armv7", "aarch64"])
 
-    class FreeBSD(object):
-        amd64 = 'freebsd-x86_64'
-        allArchs = [amd64]
+    Windows = Platform("windows", archs=["x86_64"])
 
-    class Cygwin(object):
-        x86_64 = 'cygwin-x86_64'
-        allArchs = [x86_64]
+    Haiku = Platform("haiku", archs=["x86_64"])
 
-    class Android(object):
-        armv7 = 'android-armv7'
-        allArchs = [armv7]
+    # The list of known platforms.
+    known_platforms = [
+        OSX,
+        iOS, iOSSimulator,
+        AppleTV, AppleTVSimulator,
+        AppleWatch, AppleWatchSimulator,
+        Linux,
+        FreeBSD,
+        Cygwin,
+        Android,
+        Windows,
+        Haiku]
+
+    # Cache of targets by name.
+    _targets_by_name = dict((target.name, target)
+                            for platform in known_platforms
+                            for target in platform.targets)
 
     @staticmethod
     def host_target():
         """
         Return the host target for the build machine, if it is one of
-        the recognized targets. Otherwise, return None.
+        the recognized targets. Otherwise, throw a NotImplementedError.
         """
         system = platform.system()
         machine = platform.machine()
@@ -79,6 +188,8 @@ class StdlibDeploymentTarget(object):
         if system == 'Linux':
             if machine == 'x86_64':
                 return StdlibDeploymentTarget.Linux.x86_64
+            elif machine == 'i686':
+                return StdlibDeploymentTarget.Linux.i686
             elif machine.startswith('armv7'):
                 # linux-armv7* is canonicalized to 'linux-armv7'
                 return StdlibDeploymentTarget.Linux.armv7
@@ -88,9 +199,9 @@ class StdlibDeploymentTarget(object):
             elif machine == 'aarch64':
                 return StdlibDeploymentTarget.Linux.aarch64
             elif machine == 'ppc64':
-                return StdlibDeploymentTarget.Linux.ppc64
+                return StdlibDeploymentTarget.Linux.powerpc64
             elif machine == 'ppc64le':
-                return StdlibDeploymentTarget.Linux.ppc64le
+                return StdlibDeploymentTarget.Linux.powerpc64le
             elif machine == 's390x':
                 return StdlibDeploymentTarget.Linux.s390x
 
@@ -100,13 +211,22 @@ class StdlibDeploymentTarget(object):
 
         elif system == 'FreeBSD':
             if machine == 'amd64':
-                return StdlibDeploymentTarget.FreeBSD.amd64
+                return StdlibDeploymentTarget.FreeBSD.x86_64
 
         elif system == 'CYGWIN_NT-10.0':
             if machine == 'x86_64':
                 return StdlibDeploymentTarget.Cygwin.x86_64
 
-        return None
+        elif system == 'Windows':
+            if machine == "AMD64":
+                return StdlibDeploymentTarget.Windows.x86_64
+
+        elif system == 'Haiku':
+            if machine == 'x86_64':
+                return StdlibDeploymentTarget.Haiku.x86_64
+
+        raise NotImplementedError('System "%s" with architecture "%s" is not '
+                                  'supported' % (system, machine))
 
     @staticmethod
     def default_stdlib_deployment_targets():
@@ -124,15 +244,23 @@ class StdlibDeploymentTarget(object):
         # (it takes a long time).
         if host_target == StdlibDeploymentTarget.OSX.x86_64:
             return [host_target] + \
-                StdlibDeploymentTarget.iOSSimulator.allArchs + \
-                StdlibDeploymentTarget.AppleTVSimulator.allArchs + \
-                StdlibDeploymentTarget.AppleWatchSimulator.allArchs + \
-                StdlibDeploymentTarget.iOS.allArchs + \
-                StdlibDeploymentTarget.AppleTV.allArchs + \
-                StdlibDeploymentTarget.AppleWatch.allArchs
+                StdlibDeploymentTarget.iOSSimulator.targets + \
+                StdlibDeploymentTarget.AppleTVSimulator.targets + \
+                StdlibDeploymentTarget.AppleWatchSimulator.targets + \
+                StdlibDeploymentTarget.iOS.targets + \
+                StdlibDeploymentTarget.AppleTV.targets + \
+                StdlibDeploymentTarget.AppleWatch.targets
         else:
             # All other machines only configure their host stdlib by default.
             return [host_target]
+
+    @classmethod
+    def get_target_for_name(cls, name):
+        return cls._targets_by_name.get(name)
+
+    @classmethod
+    def get_targets_by_name(cls, names):
+        return [cls.get_target_for_name(name) for name in names]
 
 
 def install_prefix():

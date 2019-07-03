@@ -2,23 +2,26 @@ if(SWIFT_BUILD_STDLIB OR SWIFT_BUILD_SDK_OVERLAY)
   add_subdirectory(SwiftPrivate)
 endif()
 
-if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-  if(SWIFT_BUILD_SDK_OVERLAY)
-    # FIXME: there is nothing Darwin-specific in StdlibUnittest, but to use
-    # POSIX APIs it imports the Darwin module on Apple platforms, so it can't
-    # be built separately from the SDK overlay.
-    add_subdirectory(StdlibUnittest)
-    add_subdirectory(StdlibCollectionUnittest)
-    add_subdirectory(StdlibUnittestFoundationExtras)
-    add_subdirectory(SwiftPrivateLibcExtras)
-    add_subdirectory(SwiftPrivatePthreadExtras)
-    add_subdirectory(SwiftReflectionTest)
-  endif()
-endif()
-
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
-  add_subdirectory(StdlibUnittest)
+if(SWIFT_BUILD_SDK_OVERLAY)
+  # SwiftPrivateThreadExtras makes use of Darwin/Glibc, which is part of the
+  # SDK overlay. It can't be built separately from the SDK overlay.
+  add_subdirectory(RuntimeUnittest)
+  add_subdirectory(StdlibUnicodeUnittest)
   add_subdirectory(StdlibCollectionUnittest)
   add_subdirectory(SwiftPrivateLibcExtras)
-  add_subdirectory(SwiftPrivatePthreadExtras)
+  add_subdirectory(SwiftPrivateThreadExtras)
+
+  # NOTE(compnerd) this must come after SwiftPrivateLibcExtras and
+  # SwiftPrivateThreadExtras to ensure that the dependency targets are setup in
+  # the correct order for Windows.
+  add_subdirectory(StdlibUnittest)
+
+  add_subdirectory(OSLog)
+
+  if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    add_subdirectory(StdlibUnittestFoundationExtras)
+    if (SWIFT_INCLUDE_TESTS)
+      add_subdirectory(SwiftReflectionTest)
+    endif()
+  endif()
 endif()

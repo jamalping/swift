@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -17,11 +17,13 @@
 
 #define DEBUG_TYPE "sil-generic-specializer"
 
+#include "swift/SIL/OptimizationRemark.h"
 #include "swift/SIL/SILFunction.h"
 #include "swift/SIL/SILInstruction.h"
 #include "swift/SILOptimizer/Utils/Generics.h"
 #include "swift/SILOptimizer/Utils/Local.h"
 #include "swift/SILOptimizer/PassManager/Transforms.h"
+#include "swift/SILOptimizer/Utils/SILOptFunctionBuilder.h"
 #include "llvm/ADT/SmallVector.h"
 
 using namespace swift;
@@ -35,21 +37,27 @@ class GenericSpecializer : public SILFunctionTransform {
   /// The entry point to the transformation.
   void run() override {
     SILFunction &F = *getFunction();
-    DEBUG(llvm::dbgs() << "***** GenericSpecializer on function:" << F.getName()
-                       << " *****\n");
+
+    // TODO: We should be able to handle ownership.
+    if (F.hasOwnership())
+      return;
+
+    LLVM_DEBUG(llvm::dbgs() << "***** GenericSpecializer on function:"
+                            << F.getName() << " *****\n");
 
     if (specializeAppliesInFunction(F))
       invalidateAnalysis(SILAnalysis::InvalidationKind::Everything);
   }
 
-  StringRef getName() override { return "Generic Specializer"; }
 };
 
 } // end anonymous namespace
 
 bool GenericSpecializer::specializeAppliesInFunction(SILFunction &F) {
+  SILOptFunctionBuilder FunctionBuilder(*this);
   DeadInstructionSet DeadApplies;
   llvm::SmallSetVector<SILInstruction *, 8> Applies;
+  OptRemark::Emitter ORE(DEBUG_TYPE, F.getModule());
 
   bool Changed = false;
   for (auto &BB : F) {
@@ -67,9 +75,18 @@ bool GenericSpecializer::specializeAppliesInFunction(SILFunction &F) {
       if (!Apply || !Apply.hasSubstitutions())
         continue;
 
-      auto *Callee = Apply.getReferencedFunction();
-      if (!Callee || !Callee->isDefinition())
+      auto *Callee = Apply.getReferencedFunctionOrNull();
+      if (!Callee)
         continue;
+      if (!Callee->isDefinition()) {
+        ORE.emit([&]() {
+          using namespace OptRemark;
+          return RemarkMissed("NoDef", *I)
+                 << "Unable to specialize generic function "
+                 << NV("Callee", Callee) << " since definition is not visible";
+        });
+        continue;
+      }
 
       Applies.insert(Apply.getInstruction());
     }
@@ -82,11 +99,17 @@ bool GenericSpecializer::specializeAppliesInFunction(SILFunction &F) {
       auto *I = Applies.pop_back_val();
       auto Apply = ApplySite::isa(I);
       assert(Apply && "Expected an apply!");
+      SILFunction *Callee = Apply.getReferencedFunctionOrNull();
+      assert(Callee && "Expected to have a known callee");
+
+      if (!Apply.canOptimize() || !Callee->shouldOptimize())
+        continue;
 
       // We have a call that can potentially be specialized, so
       // attempt to do so.
       llvm::SmallVector<SILFunction *, 2> NewFunctions;
-      trySpecializeApplyOfGeneric(Apply, DeadApplies, NewFunctions);
+      trySpecializeApplyOfGeneric(FunctionBuilder, Apply, DeadApplies,
+                                  NewFunctions, ORE);
 
       // Remove all the now-dead applies. We must do this immediately
       // rather than defer it in order to avoid problems with cloning
@@ -106,7 +129,7 @@ bool GenericSpecializer::specializeAppliesInFunction(SILFunction &F) {
       // (as opposed to returning a previous specialization), we need to notify
       // the pass manager so that the new functions get optimized.
       for (SILFunction *NewF : reverse(NewFunctions)) {
-        notifyPassManagerOfFunction(NewF);
+        addFunctionToPassManagerWorklist(NewF, Callee);
       }
     }
   }

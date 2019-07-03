@@ -2,36 +2,37 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
-/// A type that presents a mathematical set interface to a bit mask.
+/// A type that presents a mathematical set interface to a bit set.
 ///
-/// You use the `OptionSet` protocol to represent bit mask types, where
-/// individual bits represent members of the set. Adopting this protocol in
+/// You use the `OptionSet` protocol to represent bitset types, where
+/// individual bits represent members of a set. Adopting this protocol in
 /// your custom types lets you perform set-related operations such as
 /// membership tests, unions, and intersections on those types. What's more,
 /// when implemented using specific criteria, adoption of this protocol
 /// requires no extra work on your part.
 ///
 /// When creating an option set, include a `rawValue` property in your type
-/// declaration. The `rawValue` property must be of a type that conforms to
-/// the `BitwiseOperations` protocol, such as `Int` or `UInt8`. Next, create
-/// unique options as static properties of your custom type using unique
-/// powers of two (1, 2, 4, 8, 16, and so forth) for each individual
+/// declaration. For your type to automatically receive default implementations
+/// for set-related operations, the `rawValue` property must be of a type that
+/// conforms to the `FixedWidthInteger` protocol, such as `Int` or `UInt8`.
+/// Next, create unique options as static properties of your custom type using
+/// unique powers of two (1, 2, 4, 8, 16, and so forth) for each individual
 /// property's raw value so that each property can be represented by a single
 /// bit of the type's raw value.
 ///
 /// For example, consider a custom type called `ShippingOptions` that is an
 /// option set of the possible ways to ship a customer's purchase.
 /// `ShippingOptions` includes a `rawValue` property of type `Int` that stores
-/// the bit mask of available shipping options. The static members `NextDay`,
-/// `SecondDay`, `Priority`, and `Standard` are unique, individual options.
+/// the bit mask of available shipping options. The static members `nextDay`,
+/// `secondDay`, `priority`, and `standard` are unique, individual options.
 ///
 ///     struct ShippingOptions: OptionSet {
 ///         let rawValue: Int
@@ -55,10 +56,10 @@
 /// ========================
 ///
 /// When you need to create an instance of an option set, assign one of the
-/// type's static members to your variable or constant. Alternately, to create
-/// an option set instance with multiple members, assign an array literal with
-/// multiple static members of the option set. To create an empty instance,
-/// assign an empty array literal to your variable.
+/// type's static members to your variable or constant. Alternatively, to
+/// create an option set instance with multiple members, assign an array
+/// literal with multiple static members of the option set. To create an empty
+/// instance, assign an empty array literal to your variable.
 ///
 ///     let singleOption: ShippingOptions = .priority
 ///     let multipleOptions: ShippingOptions = [.nextDay, .secondDay, .priority]
@@ -82,8 +83,6 @@
 ///         print("Add more to your cart for free priority shipping!")
 ///     }
 ///     // Prints "You've earned free priority shipping!"
-///
-/// - SeeAlso: `BitwiseOperations`, `SetAlgebra`
 public protocol OptionSet : SetAlgebra, RawRepresentable {
   // We can't constrain the associated Element type to be the same as
   // Self, but we can do almost as well with a default and a
@@ -143,6 +142,7 @@ extension OptionSet {
   /// - Parameter other: An option set.
   /// - Returns: A new option set made up of the elements contained in this
   ///   set, in `other`, or in both.
+  @inlinable // generic-performance
   public func union(_ other: Self) -> Self {
     var r: Self = Self(rawValue: self.rawValue)
     r.formUnion(other)
@@ -169,6 +169,7 @@ extension OptionSet {
   /// - Parameter other: An option set.
   /// - Returns: A new option set with only the elements contained in both this
   ///   set and `other`.
+  @inlinable // generic-performance
   public func intersection(_ other: Self) -> Self {
     var r = Self(rawValue: self.rawValue)
     r.formIntersection(other)
@@ -181,6 +182,7 @@ extension OptionSet {
   /// - Parameter other: An option set.
   /// - Returns: A new option set with only the elements contained in either
   ///   this set or `other`, but not in both.
+  @inlinable // generic-performance
   public func symmetricDifference(_ other: Self) -> Self {
     var r = Self(rawValue: self.rawValue)
     r.formSymmetricDifference(other)
@@ -210,14 +212,17 @@ extension OptionSet where Element == Self {
   /// - Parameter member: The element to look for in the option set.
   /// - Returns: `true` if the option set contains `member`; otherwise,
   ///   `false`.
+  @inlinable // generic-performance
   public func contains(_ member: Self) -> Bool {
     return self.isSuperset(of: member)
   }
   
-  /// Inserts the given element into the option set if it is not already a
-  /// member.
+  /// Adds the given element to the option set if it is not already a member.
   ///
-  /// For example:
+  /// In the following example, the `.secondDay` shipping option is added to
+  /// the `freeOptions` option set if `purchasePrice` is greater than 50.0. For
+  /// the `ShippingOptions` declaration, see the `OptionSet` protocol
+  /// discussion.
   ///
   ///     let purchasePrice = 87.55
   ///
@@ -232,6 +237,8 @@ extension OptionSet where Element == Self {
   /// - Returns: `(true, newMember)` if `newMember` was not contained in
   ///   `self`. Otherwise, returns `(false, oldMember)`, where `oldMember` is
   ///   the member of the set equal to `newMember`.
+  @inlinable // generic-performance
+  @discardableResult
   public mutating func insert(
     _ newMember: Element
   ) -> (inserted: Bool, memberAfterInsert: Element) {
@@ -246,9 +253,12 @@ extension OptionSet where Element == Self {
     return result
   }
   
-  /// Removes the given element and all elements subsumed by the given element.
+  /// Removes the given element and all elements subsumed by it.
   ///
-  /// For example:
+  /// In the following example, the `.priority` shipping option is removed from
+  /// the `options` option set. Attempting to remove the same shipping option
+  /// a second time results in `nil`, because `options` no longer contains
+  /// `.priority` as a member.
   ///
   ///     var options: ShippingOptions = [.secondDay, .priority]
   ///     let priorityOption = options.remove(.priority)
@@ -258,11 +268,11 @@ extension OptionSet where Element == Self {
   ///     print(options.remove(.priority))
   ///     // Prints "nil"
   ///
-  /// In the following example, the `.express` element is passed to
-  /// `remove(_:)`. Although `.express` is not a member of `options`,
-  /// `.express` subsumes the remaining `.secondDay` element of the option
-  /// set. Therefore, `options` is emptied and the intersection between
-  /// `.express` and `options` is returned.
+  /// In the next example, the `.express` element is passed to `remove(_:)`.
+  /// Although `.express` is not a member of `options`, `.express` subsumes
+  /// the remaining `.secondDay` element of the option set. Therefore,
+  /// `options` is emptied and the intersection between `.express` and
+  /// `options` is returned.
   ///
   ///     let expressOption = options.remove(.express)
   ///     print(expressOption == .express)
@@ -271,8 +281,9 @@ extension OptionSet where Element == Self {
   ///     // Prints "true"
   ///
   /// - Parameter member: The element of the set to remove.
-  /// - Returns: The intersection of `[member]` and the set if the intersection
-  ///   was nonempty; otherwise, `nil`.
+  /// - Returns: The intersection of `[member]` and the set, if the
+  ///   intersection was nonempty; otherwise, `nil`.
+  @inlinable // generic-performance
   @discardableResult
   public mutating func remove(_ member: Element) -> Element? {
     let r = isSuperset(of: member) ? Optional(member) : nil
@@ -292,6 +303,7 @@ extension OptionSet where Element == Self {
   ///
   /// - Returns: The intersection of `[newMember]` and the set if the
   ///   intersection was nonempty; otherwise, `nil`.
+  @inlinable // generic-performance
   @discardableResult
   public mutating func update(with newMember: Element) -> Element? {
     let r = self.intersection(newMember)
@@ -301,7 +313,7 @@ extension OptionSet where Element == Self {
 }
 
 /// `OptionSet` requirements for which default implementations are
-/// supplied when `RawValue` conforms to `BitwiseOperations`,
+/// supplied when `RawValue` conforms to `FixedWidthInteger`,
 /// which is the usual case.  Each distinct bit of an option set's
 /// `.rawValue` corresponds to a disjoint value of the `OptionSet`.
 ///
@@ -314,12 +326,13 @@ extension OptionSet where Element == Self {
 /// - Note: A type conforming to `OptionSet` can implement any of
 ///   these initializers or methods, and those implementations will be
 ///   used in lieu of these defaults.
-extension OptionSet where RawValue : BitwiseOperations {
+extension OptionSet where RawValue : FixedWidthInteger {
   /// Creates an empty option set.
   ///
   /// This initializer creates an option set with a raw value of zero.
+  @inlinable // generic-performance
   public init() {
-    self.init(rawValue: .allZeros)
+    self.init(rawValue: 0)
   }
 
   /// Inserts the elements of another set into this option set.
@@ -328,6 +341,7 @@ extension OptionSet where RawValue : BitwiseOperations {
   /// two sets' raw values.
   ///
   /// - Parameter other: An option set.
+  @inlinable // generic-performance
   public mutating func formUnion(_ other: Self) {
     self = Self(rawValue: self.rawValue | other.rawValue)
   }
@@ -339,6 +353,7 @@ extension OptionSet where RawValue : BitwiseOperations {
   /// two sets' raw values.
   ///
   /// - Parameter other: An option set.
+  @inlinable // generic-performance
   public mutating func formIntersection(_ other: Self) {
     self = Self(rawValue: self.rawValue & other.rawValue)
   }
@@ -350,11 +365,8 @@ extension OptionSet where RawValue : BitwiseOperations {
   /// sets' raw values.
   ///
   /// - Parameter other: An option set.
+  @inlinable // generic-performance
   public mutating func formSymmetricDifference(_ other: Self) {
     self = Self(rawValue: self.rawValue ^ other.rawValue)
   }
 }
-
-@available(*, unavailable, renamed: "OptionSet")
-public typealias OptionSetType = OptionSet
-

@@ -1,14 +1,13 @@
-// RUN: rm -rf %t
-// RUN: mkdir -p %t
+// RUN: %empty-directory(%t)
 // RUN: %target-swift-frontend -emit-module-path %t/Mod.swiftmodule -module-name Mod %s
-// RUN: %target-swift-frontend -parse -verify -I %t %S/Inputs/inheritance_protocol_multi_module_2.swift
+// RUN: %target-swift-frontend -typecheck -verify -I %t %S/Inputs/inheritance_protocol_multi_module_2.swift
 
 /* module Mod */
 
 public protocol MyProtocol  {}
-public class ClassLevel1: MyProtocol {
+open class ClassLevel1: MyProtocol {
     public init() {}
 }
-public class ClassLevel2: ClassLevel1 {
+open class ClassLevel2: ClassLevel1 {
     public override init () {}
 }

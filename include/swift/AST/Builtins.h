@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -24,6 +24,10 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/ErrorHandling.h"
 
+namespace llvm {
+enum class AtomicOrdering;
+}
+
 namespace swift {
   class ASTContext;
   class Identifier;
@@ -35,7 +39,7 @@ namespace swift {
 Type getBuiltinType(ASTContext &Context, StringRef Name);
 
 /// OverloadedBuiltinKind - Whether and how a builtin is overloaded.
-enum class OverloadedBuiltinKind : unsigned char {
+enum class OverloadedBuiltinKind : uint8_t {
   /// The builtin is not overloaded.
   None,
 
@@ -76,9 +80,9 @@ StringRef getBuiltinBaseName(ASTContext &C, StringRef Name,
                              SmallVectorImpl<Type> &Types);
 
 /// Given an LLVM IR intrinsic name with argument types remove (e.g. like
-/// "bswap") return the LLVM IR IntrinsicID for the intrinsic or 0 if the
-/// intrinsic name doesn't match anything.
-unsigned getLLVMIntrinsicID(StringRef Name, bool HasArgTypes);
+/// "bswap") return the LLVM IR IntrinsicID for the intrinsic or not_intrinsic
+/// (0) if the intrinsic name doesn't match anything.
+llvm::Intrinsic::ID getLLVMIntrinsicID(StringRef Name);
 
 /// Get the LLVM intrinsic ID that corresponds to the given builtin with
 /// overflow.
@@ -86,28 +90,35 @@ llvm::Intrinsic::ID
 getLLVMIntrinsicIDForBuiltinWithOverflow(BuiltinValueKind ID);
 
 
-/// \brief Create a ValueDecl for the builtin with the given name.
+/// Create a ValueDecl for the builtin with the given name.
 ///
 /// Returns null if the name does not identifier a known builtin value.
 ValueDecl *getBuiltinValueDecl(ASTContext &Context, Identifier Name);
   
-/// \brief Returns the name of a builtin declaration given a builtin ID.
+/// Returns the name of a builtin declaration given a builtin ID.
 StringRef getBuiltinName(BuiltinValueKind ID);
   
-/// \brief The information identifying the builtin - its kind and types.
-struct BuiltinInfo {
+/// The information identifying the builtin - its kind and types.
+class BuiltinInfo {
+public:
   BuiltinValueKind ID;
   SmallVector<Type, 4> Types;
   bool isReadNone() const;
 };
 
-/// \brief The information identifying the llvm intrinsic - its id and types.
-struct IntrinsicInfo {
+/// The information identifying the llvm intrinsic - its id and types.
+class IntrinsicInfo {
+  mutable llvm::AttributeList Attrs =
+      llvm::DenseMapInfo<llvm::AttributeList>::getEmptyKey();
+public:
   llvm::Intrinsic::ID ID;
   SmallVector<Type, 4> Types;
   bool hasAttribute(llvm::Attribute::AttrKind Kind) const;
 };
 
+/// Turn a string like "release" into the LLVM enum.
+llvm::AtomicOrdering decodeLLVMAtomicOrdering(StringRef O);
+  
 }
 
 #endif

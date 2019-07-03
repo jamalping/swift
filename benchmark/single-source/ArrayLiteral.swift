@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -14,6 +14,14 @@
 // propagation.
 // It is reported to be slow: <rdar://problem/17297449>
 import TestsUtils
+
+public let ArrayLiteral = [
+  BenchmarkInfo(name: "ArrayLiteral2", runFunction: run_ArrayLiteral, tags: [.validation, .api, .Array]),
+  BenchmarkInfo(name: "ArrayValueProp", runFunction: run_ArrayValueProp, tags: [.validation, .api, .Array]),
+  BenchmarkInfo(name: "ArrayValueProp2", runFunction: run_ArrayValueProp2, tags: [.validation, .api, .Array]),
+  BenchmarkInfo(name: "ArrayValueProp3", runFunction: run_ArrayValueProp3, tags: [.validation, .api, .Array]),
+  BenchmarkInfo(name: "ArrayValueProp4", runFunction: run_ArrayValueProp4, tags: [.validation, .api, .Array]),
+]
 
 @inline(never)
 func makeArray() -> [Int] {
@@ -23,7 +31,7 @@ func makeArray() -> [Int] {
 @inline(never)
 public func run_ArrayLiteral(_ N: Int) {
   for _ in 1...10000*N {
-    _ = makeArray()
+    blackHole(makeArray())
   }
 }
 
@@ -40,7 +48,7 @@ public func run_ArrayValueProp(_ N: Int) {
     res += addLiteralArray()
     res -= addLiteralArray()
   }
-  CheckResults(res == 123, "Wrong result in ArrayValueProp 123 != \(res)")
+  CheckResults(res == 123)
 }
 
 
@@ -81,7 +89,7 @@ public func run_ArrayValueProp2(_ N: Int) {
     res += addLiteralArray2()
     res -= addLiteralArray2()
   }
-  CheckResults(res == 123, "Wrong result in ArrayValueProp 123 != \(res)")
+  CheckResults(res == 123)
 }
 
 @inline(never)
@@ -91,7 +99,7 @@ public func run_ArrayValueProp3(_ N: Int) {
     res += addLiteralArray3()
     res -= addLiteralArray3()
   }
-  CheckResults(res == 123, "Wrong result in ArrayValueProp 123 != \(res)")
+  CheckResults(res == 123)
 }
 
 @inline(never)
@@ -101,5 +109,5 @@ public func run_ArrayValueProp4(_ N: Int) {
     res += addLiteralArray4()
     res -= addLiteralArray4()
   }
-  CheckResults(res == 123, "Wrong result in ArrayValueProp 123 != \(res)")
+  CheckResults(res == 123)
 }

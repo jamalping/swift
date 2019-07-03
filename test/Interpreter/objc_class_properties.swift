@@ -1,7 +1,8 @@
-// RUN: rm -rf %t && mkdir -p %t
+// RUN: %empty-directory(%t)
 
 // RUN: %clang %target-cc-options -isysroot %sdk -fobjc-arc %S/Inputs/ObjCClasses/ObjCClasses.m -c -o %t/ObjCClasses.o
 // RUN: %target-build-swift -I %S/Inputs/ObjCClasses/ %t/ObjCClasses.o %s -o %t/a.out
+// RUN: %target-codesign %t/a.out
 // RUN: %target-run %t/a.out
 
 // REQUIRES: executable_test
@@ -155,44 +156,44 @@ ClassProperties.test("inheritance/generic") {
 
 ClassProperties.test("optionalProp") {
   let noProp: ProtoWithClassProperty.Type = ClassWithClassProperty.self
-  expectEmpty(noProp.optionalClassProp)
+  expectNil(noProp.optionalClassProp)
 
   let hasProp: ProtoWithClassProperty.Type = Subclass.self
-  expectNotEmpty(hasProp.optionalClassProp)
+  expectNotNil(hasProp.optionalClassProp)
   expectEqual(true, hasProp.optionalClassProp!)
 
   let hasOwnProp: ProtoWithClassProperty.Type = SwiftClass.self
-  expectNotEmpty(hasOwnProp.optionalClassProp)
+  expectNotNil(hasOwnProp.optionalClassProp)
   expectEqual(true, hasOwnProp.optionalClassProp!)
 
   let hasPropObjC: ProtoWithClassProperty.Type = ObjCSubclassWithClassProperty.self
-  expectNotEmpty(hasPropObjC.optionalClassProp)
+  expectNotNil(hasPropObjC.optionalClassProp)
   expectEqual(true, hasPropObjC.optionalClassProp!)
 }
 
 class NamingConflictSubclass : PropertyNamingConflict {
-  override var prop: AnyObject? { return nil }
-  override class var prop: AnyObject? { return NamingConflictSubclass() }
+  override var prop: Any? { return nil }
+  override class var prop: Any? { return NamingConflictSubclass() }
 }
 
 ClassProperties.test("namingConflict") {
   let obj = PropertyNamingConflict()
-  expectTrue(obj === obj.prop)
-  expectEmpty(obj.dynamicType.prop)
-  expectEmpty(PropertyNamingConflict.prop)
+  expectTrue(obj === obj.prop.map { $0 as AnyObject })
+  expectNil(type(of: obj).prop)
+  expectNil(PropertyNamingConflict.prop)
 
   let sub = NamingConflictSubclass()
-  expectEmpty(sub.prop)
-  expectNotEmpty(sub.dynamicType.prop)
-  expectNotEmpty(NamingConflictSubclass.prop)
+  expectNil(sub.prop)
+  expectNotNil(type(of: sub).prop)
+  expectNotNil(NamingConflictSubclass.prop)
 }
 
 extension NamingConflictSubclass : PropertyNamingConflictProto {
-  var protoProp: AnyObject? {
+  var protoProp: Any? {
     get { return self }
     set {}
   }
-  class var protoProp: AnyObject? {
+  class var protoProp: Any? {
     get { return nil }
     set {}
   }
@@ -200,11 +201,42 @@ extension NamingConflictSubclass : PropertyNamingConflictProto {
 
 ClassProperties.test("namingConflict/protocol") {
   let obj: PropertyNamingConflictProto = NamingConflictSubclass()
-  expectTrue(obj === obj.protoProp)
-  expectEmpty(obj.dynamicType.protoProp)
+  expectTrue(obj === obj.protoProp.map { $0 as AnyObject })
+  expectNil(type(of: obj).protoProp)
 
   let type: PropertyNamingConflictProto.Type = NamingConflictSubclass.self
-  expectEmpty(type.protoProp)
+  expectNil(type.protoProp)
+}
+
+var global1: Int = 0
+
+var global2: Int = 0
+
+class Steak : NSObject {
+  @objc override var thickness: Int {
+    get { return global1 } set { global1 = newValue }
+  }
+}
+
+extension NSObject : HasThickness {
+  @objc var thickness: Int { get { return global2 } set { global2 = newValue } }
+}
+
+protocol HasThickness : class {
+  var thickness: Int { get set }
+}
+
+ClassProperties.test("dynamicOverride") {
+  // Calls NSObject.thickness
+  NSObject().thickness += 1
+
+  // Calls Steak.thickness
+  (Steak() as NSObject).thickness += 1
+  Steak().thickness += 1
+  (Steak() as HasThickness).thickness += 1
+
+  expectEqual(3, global1)
+  expectEqual(1, global2)
 }
 
 runAllTests()

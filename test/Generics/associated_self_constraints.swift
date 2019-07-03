@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 protocol Observer {
     associatedtype Value
@@ -11,7 +11,7 @@ protocol Observer {
 protocol Observable {
     associatedtype Value
 
-    func subscribe<O: Observer where O.Value == Value>(_ observer: O) -> Any
+    func subscribe<O: Observer>(_ observer: O) -> Any where O.Value == Value
 }
 
 class Subject<T>: Observer, Observable {
@@ -19,9 +19,9 @@ class Subject<T>: Observer, Observable {
     
     // Observer implementation
     
-    var onNextFunc: ((T) -> Void)? = nil
-    var onCompletedFunc: (() -> Void)? = nil
-    var onErrorFunc: ((String) -> Void)? = nil
+    var onNextFunc: ((T) -> Void)?
+    var onCompletedFunc: (() -> Void)?
+    var onErrorFunc: ((String) -> Void)?
     
     func onNext(_ item: T) -> Void {
         onNextFunc?(item)
@@ -37,7 +37,7 @@ class Subject<T>: Observer, Observable {
     
     // Observable implementation
     
-    func subscribe<O: Observer where O.Value == T>(_ observer: O) -> Any {
+    func subscribe<O: Observer>(_ observer: O) -> Any where O.Value == T {
         self.onNextFunc = { (item: T) -> Void in
             observer.onNext(item)
         }

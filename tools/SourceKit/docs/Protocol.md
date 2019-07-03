@@ -16,6 +16,20 @@ The protocol is documented in the following format:
 - `"[opt]"` indicates an optional key.
 - Specific UIDs are written as `<UID string>`.
 
+# Table of Contents
+
+| Request Name | Request Key |
+| -------------:|:------------|
+| [Code Completion](#code-completion) | source.request.codecomplete |
+| [Cursor Info](#cursor-info) | source.request.cursorinfo |
+| [Demangling](#demangling) | source.request.demangle |
+| [Mangling](#simple-class-mangling) | source.request.mangle_simple_class |
+| [Documentation](#documentation) | source.request.docinfo |
+| [Module interface generation](#module-interface-generation) | source.request.editor.open.interface |
+| [Indexing](#indexing) | source.request.indexsource  |
+| [Protocol Version](#protocol-version) | source.request.protocol_version |
+| [Compiler Version](#compiler-version) | source.request.compiler_version |
+
 
 # Requests
 
@@ -26,6 +40,11 @@ must be given either the path to a file (`key.sourcefile`), or some text
 (`key.sourcetext`). `key.sourcefile` is ignored when `key.sourcetext` is also
 provided.
 
+| Request Name | Request Key | Description |
+| -------------:|:------------|:------------|
+| `codecomplete` | `codecomplete` | Returns a list of completions. |
+| `open` | `codecomplete.open` | Given a file will open a code-completion session which can be filtered using `codecomplete.update`. Each session must be closed using `codecomplete.close`. |
+
 ### Request
 
 ```
@@ -34,6 +53,22 @@ provided.
     [opt] <key.sourcetext>: (string)   // Source contents.
     [opt] <key.sourcefile>: (string)   // Absolute path to the file.
     <key.offset>:           (int64)    // Byte offset of code-completion point inside the source contents.
+    [opt] <key.compilerargs> [string*] // Array of zero or more strings for the compiler arguments,
+                                       // e.g ["-sdk", "/path/to/sdk"]. If key.sourcefile is provided,
+                                       // these must include the path to that file.
+    [opt] <key.not_recommended> [bool] // True if this result is to be avoided, e.g. because
+                                       // the declaration is unavailable.
+}
+```
+
+`codecomplete.open`
+```
+{
+    <key.request>:          (UID) <source.request.codecomplete.open>
+    [opt] <key.sourcetext>: (string)   // Source contents.
+    [opt] <key.sourcefile>: (string)   // Absolute path to the file.
+    <key.offset>:           (int64)    // Byte offset of code-completion point inside the source contents.
+    [opt] <key.codecomplete.options>:    (dict)     // An options dictionary containing keys.
     [opt] <key.compilerargs> [string*] // Array of zero or more strings for the compiler arguments,
                                        // e.g ["-sdk", "/path/to/sdk"]. If key.sourcefile is provided,
                                        // these must include the path to that file.
@@ -60,6 +95,24 @@ completion-result ::=
   <key.doc.brief>:      (string)    // Brief documentation comment attached to the entity.
   <key.context>:        (UID)       // Semantic context of the code completion result.
   <key.num_bytes_to_erase>: (int64) // Number of bytes to the left of the cursor that should be erased before inserting this completion result.
+}
+```
+
+```
+completion.open-result ::=
+{
+  <key.kind>:           (UID)         // UID for the declaration kind (function, class, etc.).
+  <key.name>:           (string)      // Name of the word being completed
+  <key.sourcetext>:     (string)      // Text to be inserted in source.
+  <key.description>:    (string)      // Text to be displayed in code-completion window.
+  <key.typename>:       (string)      // Text describing the type of the result.
+  <key.context>:        (UID)         // Semantic context of the code completion result.
+  <key.num_bytes_to_erase>: (int64)   // Number of bytes to the left of the cursor that should be erased before inserting this completion result.
+  <key.substructure>:   (dictionary)  // Contains an array of dictionaries representing ranges of structural elements in the result description, such as the parameters of a function
+      - <key.nameoffset>  (int64)     // The offset location of the given parameter
+      - <key.namelength>  (int64)     // The length of the given parameter
+      - <key.bodyoffset>  (int64)     // The `nameoffset` + the indentation inside the body of the file
+      - <key.bodylength>  (int64)     // The `namelength` + the indentation inside the body of the file
 }
 ```
 
@@ -393,6 +446,340 @@ range ::=
 
 Sub-diagnostics are only diagnostic notes currently.
 
+## Demangling
+
+SourceKit is capable of "demangling" mangled Swift symbols. In other words,
+it's capable of taking the symbol `_TF13MyCoolPackageg6raichuVS_7Pokemon` as
+input, and returning the human-readable
+`MyCoolPackage.raichu.getter : MyCoolPackage.Pokemon`.
+
+### Request
+
+```
+{
+    <key.request>: (UID) <source.request.demangle>,
+    <key.names>:   [string*] // An array of names to demangle.
+}
+```
+
+### Response
+
+```
+{
+    <key.results>: (array) [demangle-result+] // The results for each
+                                              // demangling, in the order in
+                                              // which they were requested.
+}
+```
+
+```
+demangle-result ::=
+{
+    <key.name>: (string) // The demangled name.
+}
+```
+
+### Testing
+
+```
+$ sourcekitd-test -req=demangle [<names>]
+```
+
+For example, to demangle the symbol `_TF13MyCoolPackageg6raichuVS_7Pokemon`:
+
+```
+$ sourcekitd-test -req=demangle _TF13MyCoolPackageg6raichuVS_7Pokemon
+```
+
+Note that when using `sourcekitd-test`, the output is output in an ad hoc text
+format, not JSON.
+
+You could also issue the following request in the `sourcekitd-repl`, which
+produces JSON:
+
+```
+$ sourcekitd-repl
+Welcome to SourceKit.  Type ':help' for assistance.
+(SourceKit) {
+    key.request: source.request.demangle,
+    key.names: [
+      "_TF13MyCoolPackageg6raichuVS_7Pokemon"
+    ]
+}
+```
+
+## Simple Class Mangling
+
+SourceKit is capable of "mangling" Swift class names. In other words,
+it's capable of taking the human-readable `UIKit.ViewController` as input and returning the symbol `_TtC5UIKit14ViewController`.
+
+### Request
+
+```
+{
+    <key.request>: (UID) <source.request.mangle_simple_class>,
+    <key.names>:   [mangle-request*] // An array of requests to mangle.
+}
+```
+
+```
+mangle-request ::=
+{
+    <key.modulename>: (string)  // The Swift module name
+    <key.name>: (string)        // The class name
+}
+```
+
+### Response
+
+```
+{
+    <key.results>: (array) [mangle-result+]   // The results for each
+                                              // mangling, in the order in
+                                              // which they were requested.
+}
+```
+
+```
+mangle-result ::=
+{
+    <key.name>: (string) // The mangled name.
+}
+```
+
+### Testing
+
+```
+$ sourcekitd-test -req=mangle [<names>]
+```
+
+For example, to mangle the name `UIKit.ViewController`:
+
+```
+$ sourcekitd-test -req=mangle UIKit.ViewController
+```
+
+Note that when using `sourcekitd-test`, the output is output in an ad hoc text
+format, not JSON.
+
+You could also issue the following request in the `sourcekitd-repl`, which
+produces JSON:
+
+```
+$ sourcekitd-repl
+Welcome to SourceKit.  Type ':help' for assistance.
+(SourceKit) {
+    key.request: source.request.mangle_simple_class,
+    key.names: [
+      {
+          key.modulename: "UIKit",
+          key.name: "ViewController"
+      }
+    ]
+}
+```
+
+## Protocol Version
+
+SourceKit can provide information about the version of the protocol that is being used.
+
+### Request
+
+```
+{
+    <key.request>: (UID) <source.request.protocol_version>
+}
+```
+
+### Response
+
+```
+{
+    <key.version_major>: (int64) // The major version number in a version string
+    <key.version_minor>: (int64) // The minor version number in a version string
+}
+```
+
+### Testing
+
+```
+$ sourcekitd-test -req=version
+```
+
+or
+
+```
+$ sourcekitd-repl
+Welcome to SourceKit.  Type ':help' for assistance.
+(SourceKit) {
+    key.request: source.request.protocol_version
+}
+```
+
+## Compiler Version
+
+SourceKit can provide information about the version of the compiler version that is being used.
+
+### Request
+
+```
+{
+    <key.request>: (UID) <source.request.compiler_version>
+}
+```
+
+### Response
+
+```
+{
+    <key.version_major>: (int64) // The major version number in a version string
+    <key.version_minor>: (int64) // The minor version number in a version string
+    <key.version_patch>: (int64) // The patch version number in a version string
+}
+```
+
+### Testing
+
+```
+$ sourcekitd-test -req=compiler-version
+```
+
+or
+
+```
+$ sourcekitd-repl
+Welcome to SourceKit.  Type ':help' for assistance.
+(SourceKit) {
+    key.request: source.request.compiler_version
+}
+```
+
+
+## Cursor Info
+
+SourceKit is capable of providing information about a specific symbol at a specific cursor, or offset, position in a document.
+
+To gather documentation, SourceKit must be given either the name of a module (key.modulename), the path to a file (key.sourcefile), or some text (key.sourcetext). key.sourcefile is ignored when key.sourcetext is also provided, and both of those keys are ignored if key.modulename is provided.
+
+### Request
+
+```
+{
+    <key.request>:            (UID)     <source.request.cursorinfo>,
+    [opt] <key.sourcetext>:   (string)  // Source contents.
+    [opt] <key.sourcefile>:   (string)  // Absolute path to the file.
+                                        // **Require**: key.sourcetext or key.sourcefile
+    [opt] <key.offset>:       (int64)   // Byte offset of code point inside the source contents.
+    [opt] <key.usr>:          (string)  // USR string for the entity.
+                                        // **Require**: key.offset or key.usr
+    [opt] <key.compilerargs>: [string*] // Array of zero or more strings for the compiler arguments,
+                                        // e.g ["-sdk", "/path/to/sdk"]. If key.sourcefile is provided,
+                                        // these must include the path to that file.
+    [opt] <key.cancel_on_subsequent_request>: (int64) // Whether this request should be canceled if a
+                                        // new cursor-info request is made that uses the same AST.
+                                        // This behavior is a workaround for not having first-class
+                                        // cancelation. For backwards compatibility, the default is 1.
+}
+```
+
+### Response
+
+```
+{
+    <key.kind>:                  (UID)    // UID for the declaration or reference kind (function, class, etc.).
+    <key.name>:                  (string) // Displayed name for the token.
+    <key.usr>:                   (string) // USR string for the token.
+    <key.filepath>:              (string) // Path to the file.
+    <key.offset>:                (int64)  // Byte offset of the token inside the source contents.
+    <key.length>:                (ist64)  // Length of the token.
+    <key.typename>:              (string) // Text describing the type of the result.
+    <key.annotated_decl>:        (string) // XML representing how the token was declared.
+    <key.fully_annotated_decl>:  (string) // XML representing the token.
+    [opt] <key.doc.full_as_xml>: (string) // XML representing the token and its documentation.
+    <key.typeusr>:               (string) // USR string for the type.
+}
+```
+
+### Testing
+
+```
+$ sourcekitd-test -req=cursor -offset=<offset> <file> [-- <compiler args>]
+$ sourcekitd-test -req=cursor -pos=<line>:<column> <file> [-- <compiler args>]
+```
+
+For example, using a document containing:
+
+```
+struct Foo {
+    let bar: String
+}
+```
+
+To get the information about the type `Foo` you would make one of the following requests:
+
+```
+$ sourcekitd-test -req=cursor -offset=7 /path/to/file.swift -- /path/to/file.swift
+$ sourcekitd-test -req=cursor -pos=1:8 /path/to/file.swift -- /path/to/file.swift
+```
+
+Note that when using `sourcekitd-test`, the output is output in an ad hoc text format, not JSON.
+
+You could also issue the following request in the `sourcekitd-repl`, which produces JSON:
+
+```
+$ sourcekitd-repl
+Welcome to SourceKit.  Type ':help' for assistance.
+(SourceKit) {
+  key.request: source.request.cursorinfo,
+  key.sourcefile: "/path/to/file.swift",
+  key.offset: 7,
+  key.compilerargs: ["/path/to/file.swift"]
+}
+```
+
+## Expression Type
+This request collects the types of all expressions in a source file after type checking.
+To fulfill this task, the client must provide the path to the Swift source file under
+type checking and the necessary compiler arguments to help resolve all dependencies.
+
+### Request
+
+```
+{
+    <key.request>:            (UID)     <source.request.expression.type>,
+    <key.sourcefile>:         (string)  // Absolute path to the file.
+    <key.compilerargs>:       [string*] // Array of zero or more strings for the compiler arguments,
+                                        // e.g ["-sdk", "/path/to/sdk"]. If key.sourcefile is provided,
+                                        // these must include the path to that file.
+    <key.expectedtypes>:      [string*] // A list of interested protocol USRs.
+                                        // When empty, we report all expressions in the file.
+                                        // When non-empty, we report expressions whose types conform to any of the give protocols.
+}
+```
+
+### Response
+```
+{
+    <key.expression_type_list>:       (array) [expr-type-info*]   // A list of expression and type
+}
+```
+
+```
+expr-type-info ::=
+{
+  <key.expression_offset>:    (int64)    // Offset of an expression in the source file
+  <key.expression_length>:    (int64)    // Length of an expression in the source file
+  <key.expression_type>:      (string)   // Printed type of this expression
+  <key.expectedtypes>:        [string*]  // A list of interested protocol USRs this expression conforms to
+}
+```
+
+### Testing
+
+```
+$ sourcekitd-test -req=collect-type /path/to/file.swift -- /path/to/file.swift
+```
+
 # UIDs
 
 ## Keys
@@ -410,4 +797,9 @@ Sub-diagnostics are only diagnostic notes currently.
 - `key.sourcetext`
 - `key.typename`
 - `key.usr`
-
+- `key.version_major`
+- `key.version_minor`
+- `key.annotated_decl`
+- `key.fully_annotated_decl`
+- `key.doc.full_as_xml`
+- `key.typeusr`

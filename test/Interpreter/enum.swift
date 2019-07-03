@@ -1,6 +1,7 @@
-// RUN: rm -rf %t  &&  mkdir %t
-// RUN: %target-build-swift -Xfrontend -enable-experimental-patterns %s -o %t/a.out
-// RUN: %target-run %t/a.out | FileCheck %s
+// RUN: %empty-directory(%t)
+// RUN: %target-build-swift %s -o %t/a.out
+// RUN: %target-codesign %t/a.out
+// RUN: %target-run %t/a.out | %FileCheck %s
 // REQUIRES: executable_test
 
 enum Singleton {
@@ -286,7 +287,7 @@ func print(_ suit: Suit) {
 }
 
 func optionableSuits() {
-  var optionables: [Optionable<Suit>] = [
+  let optionables: [Optionable<Suit>] = [
     .Mere(.Spades),
     .Mere(.Diamonds),
     .Nought,
@@ -295,7 +296,7 @@ func optionableSuits() {
 
   for o in optionables {
     switch o {
-    case .Mere(var x):
+    case .Mere(let x):
       print(x)
     case .Nought:
       print("---")
@@ -414,8 +415,8 @@ func test_spare_bit_aggregate(_ x: MultiPayloadSpareBitAggregates) {
     print(".x(\(i32), \(i64))")
   case .y(let a, let b):
     print(".y(\(a.id), \(b.id))")
-  case .z(S(a: let a, b: let b)):
-    print(".z(\(a), \(b))")
+  case .z(let s):
+    print(".z(\(s))")
   }
 }
 
@@ -428,7 +429,7 @@ test_spare_bit_aggregate(.x(22, 44))
 // CHECK-DAG: ~X(222)
 // CHECK-DAG: ~X(444)
 test_spare_bit_aggregate(.y(Rdar15383966(222), Rdar15383966(444)))
-// CHECK: .z(333, 666)
+// CHECK: .z(S(a: 333, b: 666))
 test_spare_bit_aggregate(.z(S(333, 666)))
 
 print("---")
@@ -440,7 +441,7 @@ struct OptionalTuple<T> {
   }
 }
 func test_optional_generic_tuple<T>(_ a: OptionalTuple<T>) -> T {
-  print("optional pair is same size as pair: \(sizeofValue(a) == sizeof(T)*2)")
+  print("optional pair is same size as pair: \(MemoryLayout.size(ofValue: a) == MemoryLayout<T>.size*2)")
   return a.value!.0
 }
 print("Int result: \(test_optional_generic_tuple(OptionalTuple<Int>((5, 6))))")
@@ -467,13 +468,13 @@ print((NoPayload.x as NoPayload?) == NoPayload.y)
 class Foo {}
 
 struct Oof {
-  weak var foo: Foo? = nil
+  weak var foo: Foo?
 }
 
 protocol Boo {}
 
 struct Goof {
-  var boo: Boo? = nil
+  var boo: Boo?
 }
 
 let oofs = [Oof()]
@@ -513,17 +514,17 @@ func presentEitherOr<T, U>(_ e: EitherOr<T, U>) {
 }
 
 @inline(never)
-func presentEitherOrsOf<T, U>(t t: T, u: U) {
+func presentEitherOrsOf<T, U>(t: T, u: U) {
   presentEitherOr(EitherOr<T, U>.Left(t))
   presentEitherOr(EitherOr<T, U>.Middle)
   presentEitherOr(EitherOr<T, U>.Center)
   presentEitherOr(EitherOr<T, U>.Right(u))
 }
 
-presentEitherOr(EitherOr<(), ()>.Left())  // CHECK-NEXT: Left(())
+presentEitherOr(EitherOr<(), ()>.Left(()))  // CHECK-NEXT: Left(())
 presentEitherOr(EitherOr<(), ()>.Middle)  // CHECK-NEXT: Middle
 presentEitherOr(EitherOr<(), ()>.Center)  // CHECK-NEXT: Center
-presentEitherOr(EitherOr<(), ()>.Right()) // CHECK-NEXT: Right(())
+presentEitherOr(EitherOr<(), ()>.Right(())) // CHECK-NEXT: Right(())
 
 // CHECK-NEXT: Left(())
 // CHECK-NEXT: Middle
@@ -542,7 +543,7 @@ presentEitherOr(EitherOr<Int, String>.Right("foo")) // CHECK-NEXT: Right(foo)
 // CHECK-NEXT: Right(foo)
 presentEitherOrsOf(t: 1, u: "foo")
 
-presentEitherOr(EitherOr<(), String>.Left())       // CHECK-NEXT: Left(())
+presentEitherOr(EitherOr<(), String>.Left(()))       // CHECK-NEXT: Left(())
 presentEitherOr(EitherOr<(), String>.Middle)       // CHECK-NEXT: Middle
 presentEitherOr(EitherOr<(), String>.Center)       // CHECK-NEXT: Center
 presentEitherOr(EitherOr<(), String>.Right("foo")) // CHECK-NEXT: Right(foo)
@@ -553,5 +554,147 @@ presentEitherOr(EitherOr<(), String>.Right("foo")) // CHECK-NEXT: Right(foo)
 // CHECK-NEXT: Right(foo)
 presentEitherOrsOf(t: (), u: "foo")
 
+// SR-5148
+enum Payload {
+    case email
+}
+enum Test {
+    case a
+    indirect case b(Payload)
+}
+
+@inline(never)
+func printA() {
+    print("an a")
+}
+
+@inline(never)
+func printB() {
+    print("an b")
+}
+
+@inline(never)
+func testCase(_ testEmail: Test) {
+  switch testEmail {
+    case .a:
+      printA()
+    case .b:
+      printB()
+  }
+}
+
+@inline(never)
+func createTestB() -> Test  {
+  return Test.b(.email)
+}
+
+@inline(never)
+func createTestA() -> Test  {
+  return Test.a
+}
+
+// CHECK-NEXT: an b
+testCase(createTestB())
+// CHECK-NEXT: b(a.Payload.email)
+print(createTestB())
+// CHECK-NEXT: a
+print(createTestA())
 // CHECK-NEXT: done
 print("done")
+
+public enum MyOptional<T> {
+  case Empty
+  case SecondEmpty
+  case Some(T)
+}
+
+public class StopSpecialization {
+  public func generate<T>(_ e: T) -> MyOptional<T> {
+    return MyOptional.Some(e)
+  }
+  public func generate2<T>(_ e: T) -> MyOptional<T> {
+    return MyOptional.Empty
+  }
+}
+
+@inline(never)
+func test(_ s : StopSpecialization, _ N: Int) -> Bool {
+  let x = s.generate(N)
+  switch x {
+    case .SecondEmpty:
+      return false
+    case .Empty:
+      return false
+    case .Some(_):
+      return true
+  }
+}
+
+@inline(never)
+func test2(_ s : StopSpecialization, _ N: Int) -> Bool {
+  let x = s.generate2(N)
+  switch x {
+    case .SecondEmpty:
+      return false
+    case .Empty:
+      return true
+    case .Some(_):
+      return false
+  }
+}
+
+@inline(never)
+func run() {
+// CHECK: true
+  print(test(StopSpecialization(), 12))
+// CHECK: true
+  print(test2(StopSpecialization(), 12))
+}
+
+run()
+
+public enum Indirect<T> {
+  indirect case payload((T, other: T))
+  case none
+}
+
+public func testIndirectEnum<T>(_ payload: T) -> Indirect<T> {
+  return Indirect.payload((payload, other: payload))
+}
+
+public func testCase(_ closure: @escaping (Int) -> ()) -> Indirect<(Int) -> ()> {
+  return testIndirectEnum(closure)
+}
+
+// CHECK: payload((Function), other: (Function))
+print(testCase({ _ in }))
+
+
+enum MultiIndirectRef {
+  case empty
+  indirect case ind(Int)
+  case collection([Int])
+}
+
+struct Container {
+  var storage : MultiIndirectRef = .empty
+
+  mutating func adoptStyle(_ s: Int) {
+    storage = .ind(s)
+  }
+}
+
+func copyStorage(_ s: Int, _ x : Container) -> Container {
+  var c = x
+  c.adoptStyle(s)
+  return c
+}
+
+func testCase() {
+  let l = Container()
+  let c = copyStorage(5, l)
+  print(c)
+}
+
+// CHECK: Container(storage: a.MultiIndirectRef.ind(5))
+testCase()

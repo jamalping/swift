@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -24,27 +24,66 @@
 extern "C" {
 #endif
 
-typedef uintptr_t swift_typeref_t;
+// Pointers used here need to be pointer-sized on watchOS for binary
+// compatibility. Everywhere else, they are 64-bit so 32-bit processes can
+// potentially read from 64-bit processes.
+#if defined(__APPLE__) && defined(__MACH__)
+#include <TargetConditionals.h>
+#if TARGET_OS_WATCH
+#define SWIFT_REFLECTION_NATIVE_POINTERS 1
+#endif
+#endif
 
-/// \brief Represents one of the Swift reflection sections of an image.
+#if SWIFT_REFLECTION_NATIVE_POINTERS
+typedef uintptr_t swift_reflection_ptr_t;
+#else
+typedef uint64_t swift_reflection_ptr_t;
+#endif
+
+typedef swift_reflection_ptr_t swift_typeref_t;
+
+/// Represents one of the Swift reflection sections of an image.
 typedef struct swift_reflection_section {
   void *Begin;
   void *End;
 } swift_reflection_section_t;
 
-/// \brief Represents the set of Swift reflection sections of an image.
+/// Represents the set of Swift reflection sections of an image.
 /// Not all sections may be present.
 typedef struct swift_reflection_info {
-  swift_reflection_section_t fieldmd;
-  swift_reflection_section_t assocty;
-  swift_reflection_section_t builtin;
-  swift_reflection_section_t capture;
-  swift_reflection_section_t typeref;
-  swift_reflection_section_t reflstr;
+  struct {
+    swift_reflection_section_t section;
+    swift_reflection_ptr_t offset;
+  } field;
+
+  struct {
+    swift_reflection_section_t section;
+    swift_reflection_ptr_t offset;
+  } associated_types;
+
+  struct {
+    swift_reflection_section_t section;
+    swift_reflection_ptr_t offset;
+  } builtin_types;
+
+  struct {
+    swift_reflection_section_t section;
+    swift_reflection_ptr_t offset;
+  } capture;
+
+  struct {
+    swift_reflection_section_t section;
+    swift_reflection_ptr_t offset;
+  } type_references;
+
+  struct {
+    swift_reflection_section_t section;
+    swift_reflection_ptr_t offset;
+  } reflection_strings;
 
   // Start address in local and remote address spaces.
-  uintptr_t LocalStartAddress;
-  uintptr_t RemoteStartAddress;
+  swift_reflection_ptr_t LocalStartAddress;
+  swift_reflection_ptr_t RemoteStartAddress;
 } swift_reflection_info_t;
 
 /// The layout kind of a Swift type.
@@ -63,7 +102,21 @@ typedef enum swift_layout_kind {
   // Value types consisting of zero or more fields.
   SWIFT_TUPLE,
   SWIFT_STRUCT,
+
+  // An enum with no payload cases. The record will have no fields, but
+  // will have the correct size.
+  SWIFT_NO_PAYLOAD_ENUM,
+
+  // An enum with a single payload case. The record consists of a single
+  // field, being the enum payload.
+  SWIFT_SINGLE_PAYLOAD_ENUM,
+
+  // An enum with multiple payload cases. The record consists of a multiple
+  // fields, one for each enum payload.
+  SWIFT_MULTI_PAYLOAD_ENUM,
+
   SWIFT_THICK_FUNCTION,
+
   SWIFT_OPAQUE_EXISTENTIAL,
   SWIFT_CLASS_EXISTENTIAL,
   SWIFT_ERROR_EXISTENTIAL,
@@ -103,7 +156,7 @@ typedef struct swift_childinfo {
   swift_typeref_t TR;
 } swift_childinfo_t;
 
-/// \brief An opaque pointer to a context which maintains state and
+/// An opaque pointer to a context which maintains state and
 /// caching of reflection structure for heap instances.
 typedef struct SwiftReflectionContext *SwiftReflectionContextRef;
 

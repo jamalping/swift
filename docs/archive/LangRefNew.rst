@@ -1,7 +1,5 @@
 :orphan:
 
-.. @raise litre.TestsAreMissing
-
 ===============================
 Swift Language Reference Manual
 ===============================
@@ -494,7 +492,7 @@ The Swift compiler does not normalize Unicode source code, and matches
 identifiers by code points only.  Source code must be normalized to a consistent
 normalization form before being submitted to the compiler.
 
-::
+.. code-block:: none
 
   // Valid identifiers
   foo

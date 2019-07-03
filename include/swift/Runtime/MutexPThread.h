@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -26,19 +26,19 @@ typedef pthread_cond_t ConditionHandle;
 typedef pthread_mutex_t MutexHandle;
 typedef pthread_rwlock_t ReadWriteLockHandle;
 
-#if defined(__CYGWIN__) || defined(__ANDROID__)
+#if defined(__CYGWIN__) || defined(__ANDROID__) || defined(__HAIKU__)
 // At the moment CYGWIN pthreads implementation doesn't support the use of
 // constexpr for static allocation versions. The way they define things
 // results in a reinterpret_cast which violates constexpr. Similarly, Android's
 // pthread implementation makes use of volatile attributes that prevent it from
 // being marked as constexpr.
-#define CONDITION_SUPPORTS_CONSTEXPR 0
-#define MUTEX_SUPPORTS_CONSTEXPR 0
-#define READWRITELOCK_SUPPORTS_CONSTEXPR 0
+#define SWIFT_CONDITION_SUPPORTS_CONSTEXPR 0
+#define SWIFT_MUTEX_SUPPORTS_CONSTEXPR 0
+#define SWIFT_READWRITELOCK_SUPPORTS_CONSTEXPR 0
 #else
-#define CONDITION_SUPPORTS_CONSTEXPR 1
-#define MUTEX_SUPPORTS_CONSTEXPR 1
-#define READWRITELOCK_SUPPORTS_CONSTEXPR 1
+#define SWIFT_CONDITION_SUPPORTS_CONSTEXPR 1
+#define SWIFT_MUTEX_SUPPORTS_CONSTEXPR 1
+#define SWIFT_READWRITELOCK_SUPPORTS_CONSTEXPR 1
 #endif
 
 /// PThread low-level implementation that supports ConditionVariable
@@ -46,7 +46,7 @@ typedef pthread_rwlock_t ReadWriteLockHandle;
 ///
 /// See ConditionVariable
 struct ConditionPlatformHelper {
-#if CONDITION_SUPPORTS_CONSTEXPR
+#if SWIFT_CONDITION_SUPPORTS_CONSTEXPR
   static constexpr
 #else
   static
@@ -67,7 +67,7 @@ struct ConditionPlatformHelper {
 ///
 /// See Mutex
 struct MutexPlatformHelper {
-#if MUTEX_SUPPORTS_CONSTEXPR
+#if SWIFT_MUTEX_SUPPORTS_CONSTEXPR
   static constexpr
 #else
   static
@@ -96,7 +96,7 @@ struct MutexPlatformHelper {
 ///
 /// See ReadWriteLock
 struct ReadWriteLockPlatformHelper {
-#if READWRITELOCK_SUPPORTS_CONSTEXPR
+#if SWIFT_READWRITELOCK_SUPPORTS_CONSTEXPR
   static constexpr
 #else
   static

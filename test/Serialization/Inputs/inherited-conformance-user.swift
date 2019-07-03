@@ -20,5 +20,8 @@ public struct OneToAThousand : ProtoUser {
   public init() {}
 }
 
-public protocol SpecialProto : IntegerLiteralConvertible {}
+public protocol SpecialProto : ExpressibleByIntegerLiteral {}
 extension Int : SpecialProto {}
+
+// Subclass a class with private conformances.
+open class SubclassConformsToPrivateProto : ConformsToPrivateProto {}

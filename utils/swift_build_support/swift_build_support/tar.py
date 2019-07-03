@@ -2,11 +2,11 @@
 #
 # This source file is part of the Swift.org open source project
 #
-# Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+# Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 # Licensed under Apache License v2.0 with Runtime Library Exception
 #
-# See http://swift.org/LICENSE.txt for license information
-# See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+# See https://swift.org/LICENSE.txt for license information
+# See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 
 from __future__ import absolute_import
 
@@ -25,7 +25,7 @@ def tar(source, destination):
     #  - We wish to explicitly set the owner and group of the archive.
     args = ['tar', '-c', '-z', '-f', destination]
 
-    if platform.system() != 'Darwin':
+    if platform.system() != 'Darwin' and platform.system() != 'Windows':
         args += ['--owner=0', '--group=0']
 
     # Discard stderr output such as 'tar: Failed to open ...'. We'll detect

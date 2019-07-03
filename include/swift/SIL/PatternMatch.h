@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -77,7 +77,7 @@ struct bind_ty {
 
   template<typename ITy>
   bool match(ITy *V) {
-    if (Class *CV = dyn_cast<Class>(V)) {
+    if (auto *CV = dyn_cast<Class>(V)) {
       VR = CV;
       return true;
     }
@@ -140,17 +140,17 @@ struct OneOf_match;
 
 template <typename T0>
 struct OneOf_match<T0> {
-  typedef T0 Ty;
+  using Ty = T0;
 };
 
 template <typename T0, typename T1>
 struct OneOf_match<T0, T1> {
-  typedef match_combine_or<T0, T1> Ty;
+  using Ty = match_combine_or<T0, T1>;
 };
 
 template <typename T0, typename T1, typename ...Arguments>
 struct OneOf_match<T0, T1, Arguments ...> {
-  typedef typename OneOf_match<match_combine_or<T0, T1>, Arguments ...>::Ty Ty;
+  using Ty = typename OneOf_match<match_combine_or<T0, T1>, Arguments...>::Ty;
 };
 
 /// This is a vararg version of m_CombineOr. It is a boolean "or" of
@@ -296,19 +296,24 @@ using m_One = match_integer<1>;
 //                             Unary Instructions
 //===----------------------------------------------------------------------===//
 
-template<typename OpMatchTy, ValueKind Kind>
+template<typename OpMatchTy, SILInstructionKind Kind>
 struct UnaryOp_match {
   OpMatchTy OpMatch;
 
   UnaryOp_match(const OpMatchTy &Op) : OpMatch(Op) { }
 
-  template<typename OpTy>
-  bool match(OpTy *V) {
-    if (V->getKind() != Kind)
+  bool match(SILNode *node) {
+    if (node->getKind() != SILNodeKind(Kind))
       return false;
 
-    auto *I = dyn_cast<SILInstruction>(V);
-    if (!I || I->getNumOperands() != 1)
+    return match(cast<SILInstruction>(node));
+  }
+
+  bool match(SILInstruction *I) {
+    if (I->getKind() != Kind)
+      return false;
+
+    if (I->getNumOperands() != 1)
       return false;
 
     return OpMatch.match(I->getOperand(0));
@@ -319,12 +324,11 @@ struct UnaryOp_match {
 // further matchers to the operands of the unary operation.
 #define UNARY_OP_MATCH_WITH_ARG_MATCHER(Class)        \
   template <typename Ty>                              \
-  UnaryOp_match<Ty, ValueKind::Class>                 \
+  UnaryOp_match<Ty, SILInstructionKind::Class>        \
   m_##Class(const Ty &T) {                            \
     return T;                                         \
   }
 UNARY_OP_MATCH_WITH_ARG_MATCHER(AllocRefDynamicInst)
-UNARY_OP_MATCH_WITH_ARG_MATCHER(LoadWeakInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(ConvertFunctionInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(UpcastInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(PointerToAddressInst)
@@ -334,18 +338,15 @@ UNARY_OP_MATCH_WITH_ARG_MATCHER(UncheckedAddrCastInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(UncheckedTrivialBitCastInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(UncheckedBitwiseCastInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(RawPointerToRefInst)
-UNARY_OP_MATCH_WITH_ARG_MATCHER(RefToUnownedInst)
-UNARY_OP_MATCH_WITH_ARG_MATCHER(UnownedToRefInst)
-UNARY_OP_MATCH_WITH_ARG_MATCHER(RefToUnmanagedInst)
-UNARY_OP_MATCH_WITH_ARG_MATCHER(UnmanagedToRefInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(ThinToThickFunctionInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(ThickToObjCMetatypeInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(ObjCToThickMetatypeInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(ObjCMetatypeToObjectInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(ObjCExistentialMetatypeToObjectInst)
-UNARY_OP_MATCH_WITH_ARG_MATCHER(IsNonnullInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(RetainValueInst)
+UNARY_OP_MATCH_WITH_ARG_MATCHER(RetainValueAddrInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(ReleaseValueInst)
+UNARY_OP_MATCH_WITH_ARG_MATCHER(ReleaseValueAddrInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(AutoreleaseValueInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(UncheckedEnumDataInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(InitEnumDataAddrInst)
@@ -360,19 +361,22 @@ UNARY_OP_MATCH_WITH_ARG_MATCHER(StructElementAddrInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(LoadInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(RefElementAddrInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(ClassMethodInst)
+UNARY_OP_MATCH_WITH_ARG_MATCHER(ObjCMethodInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(SuperMethodInst)
-UNARY_OP_MATCH_WITH_ARG_MATCHER(DynamicMethodInst)
+UNARY_OP_MATCH_WITH_ARG_MATCHER(ObjCSuperMethodInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(OpenExistentialAddrInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(OpenExistentialRefInst)
+UNARY_OP_MATCH_WITH_ARG_MATCHER(OpenExistentialValueInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(InitExistentialAddrInst)
+UNARY_OP_MATCH_WITH_ARG_MATCHER(InitExistentialValueInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(InitExistentialRefInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(DeinitExistentialAddrInst)
+UNARY_OP_MATCH_WITH_ARG_MATCHER(DeinitExistentialValueInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(ProjectBlockStorageInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(StrongRetainInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(StrongReleaseInst)
-UNARY_OP_MATCH_WITH_ARG_MATCHER(StrongRetainUnownedInst)
-UNARY_OP_MATCH_WITH_ARG_MATCHER(UnownedRetainInst)
-UNARY_OP_MATCH_WITH_ARG_MATCHER(UnownedReleaseInst)
+UNARY_OP_MATCH_WITH_ARG_MATCHER(ClassifyBridgeObjectInst)
+UNARY_OP_MATCH_WITH_ARG_MATCHER(ValueToBridgeObjectInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(FixLifetimeInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(CopyBlockInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(DeallocStackInst)
@@ -382,26 +386,49 @@ UNARY_OP_MATCH_WITH_ARG_MATCHER(DeallocBoxInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(DestroyAddrInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(CondFailInst)
 UNARY_OP_MATCH_WITH_ARG_MATCHER(ReturnInst)
+#define LOADABLE_REF_STORAGE_HELPER(Name) \
+  UNARY_OP_MATCH_WITH_ARG_MATCHER(RefTo##Name##Inst) \
+  UNARY_OP_MATCH_WITH_ARG_MATCHER(Name##ToRefInst)
+#define NEVER_LOADABLE_CHECKED_REF_STORAGE(Name, ...) \
+  UNARY_OP_MATCH_WITH_ARG_MATCHER(Load##Name##Inst)
+#define ALWAYS_LOADABLE_CHECKED_REF_STORAGE(Name, ...) \
+  LOADABLE_REF_STORAGE_HELPER(Name) \
+  UNARY_OP_MATCH_WITH_ARG_MATCHER(Name##RetainInst) \
+  UNARY_OP_MATCH_WITH_ARG_MATCHER(Name##ReleaseInst) \
+  UNARY_OP_MATCH_WITH_ARG_MATCHER(StrongRetain##Name##Inst)
+#define SOMETIMES_LOADABLE_CHECKED_REF_STORAGE(Name, ...) \
+  NEVER_LOADABLE_CHECKED_REF_STORAGE(Name, "...") \
+  ALWAYS_LOADABLE_CHECKED_REF_STORAGE(Name, "...")
+#define UNCHECKED_REF_STORAGE(Name, ...) \
+  LOADABLE_REF_STORAGE_HELPER(Name)
+#include "swift/AST/ReferenceStorage.def"
+#undef LOADABLE_REF_STORAGE_HELPER
+
 #undef UNARY_OP_MATCH_WITH_ARG_MATCHER
 
 //===----------------------------------------------------------------------===//
 //                            Binary Instructions
 //===----------------------------------------------------------------------===//
 
-template<typename LHSTy, typename RHSTy, ValueKind Kind>
+template<typename LHSTy, typename RHSTy, SILInstructionKind Kind>
 struct BinaryOp_match {
   LHSTy L;
   RHSTy R;
 
   BinaryOp_match(const LHSTy &LHS, const RHSTy &RHS) : L(LHS), R(RHS) {}
 
-  template<typename OpTy>
-  bool match(OpTy *V) {
-    if (V->getKind() != Kind)
+  bool match(SILNode *node) {
+    if (node->getKind() != SILNodeKind(Kind))
       return false;
 
-    auto *I = dyn_cast<SILInstruction>(V);
-    if (!I || I->getNumOperands() != 2)
+    return match(cast<SILInstruction>(node));
+  }
+
+  bool match(SILInstruction *I) {
+    if (I->getKind() != Kind)
+      return false;
+
+    if (I->getNumOperands() != 2)
       return false;
 
     return L.match((ValueBase *)I->getOperand(0)) &&
@@ -410,7 +437,7 @@ struct BinaryOp_match {
 };
 
 template <typename LTy, typename RTy>
-BinaryOp_match<LTy, RTy, ValueKind::IndexRawPointerInst>
+BinaryOp_match<LTy, RTy, SILInstructionKind::IndexRawPointerInst>
 m_IndexRawPointerInst(const LTy &Left, const RTy &Right) {
   return {Left, Right};
 }
@@ -440,6 +467,34 @@ tupleextract_ty<LTy> m_TupleExtractInst(const LTy &Left, unsigned Index) {
   return tupleextract_ty<LTy>(Left, Index);
 }
 
+/// Match either a tuple_extract that the index field from a tuple or the
+/// indexth destructure_tuple result.
+template <typename LTy> struct tupleextractoperation_ty {
+  LTy L;
+  unsigned index;
+  tupleextractoperation_ty(const LTy &Left, unsigned i) : L(Left), index(i) {}
+
+  template <typename ITy> bool match(ITy *V) {
+    if (auto *TEI = dyn_cast<TupleExtractInst>(V)) {
+      return TEI->getFieldNo() == index &&
+             L.match((ValueBase *)TEI->getOperand());
+    }
+
+    if (auto *DTR = dyn_cast<DestructureTupleResult>(V)) {
+      return DTR->getIndex() == index &&
+             L.match((ValueBase *)DTR->getParent()->getOperand());
+    }
+
+    return false;
+  }
+};
+
+template <typename LTy>
+tupleextractoperation_ty<LTy> m_TupleExtractOperation(const LTy &Left,
+                                                      unsigned Index) {
+  return tupleextractoperation_ty<LTy>(Left, Index);
+}
+
 //===----------------------------------------------------------------------===//
 //              Function/Builtin/Intrinsic Application Matchers
 //===----------------------------------------------------------------------===//
@@ -463,7 +518,7 @@ struct Callee_match<SILFunction &> {
     if (!AI)
       return false;
 
-    return AI->getReferencedFunction() == &Fun;
+    return AI->getReferencedFunctionOrNull() == &Fun;
   }
 };
 
@@ -567,18 +622,18 @@ struct Apply_match;
 
 template <typename CalleeTy>
 struct Apply_match<CalleeTy> {
-  typedef Callee_match<CalleeTy> Ty;
+  using Ty = Callee_match<CalleeTy>;
 };
 
 template <typename CalleeTy, typename T0>
 struct Apply_match<CalleeTy, T0> {
-  typedef match_combine_and<Callee_match<CalleeTy>, Argument_match<T0>> Ty;
+  using Ty = match_combine_and<Callee_match<CalleeTy>, Argument_match<T0>>;
 };
 
 template <typename CalleeTy, typename T0, typename ...Arguments>
 struct Apply_match<CalleeTy, T0, Arguments ...> {
-  typedef match_combine_and<typename Apply_match<CalleeTy, Arguments ...>::Ty,
-                            Argument_match<T0> > Ty;
+  using Ty = match_combine_and<typename Apply_match<CalleeTy, Arguments...>::Ty,
+                               Argument_match<T0>>;
 };
 
 /// Match only an ApplyInst's Callee.
@@ -687,13 +742,6 @@ using BuiltinApplyTy = typename Apply_match<BuiltinValueKind, Tys...>::Ty;
 // Convenience compound builtin instructions matchers that succeed
 // if any of the sub-matchers succeed.
 //
-
-/// Matcher for any of the builtin checked conversions.
-template <typename T0>
-inline typename OneOf_match<BuiltinApplyTy<T0>, BuiltinApplyTy<T0>>::Ty
-m_CheckedConversion(const T0 &Op0) {
-  return m_USCheckedConversion(Op0) || m_SUCheckedConversion(Op0);
-}
 
 /// Matcher for any of the builtin ExtOrBitCast instructions.
 template <typename T0>

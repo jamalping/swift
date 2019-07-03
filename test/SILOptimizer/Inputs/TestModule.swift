@@ -1,9 +1,11 @@
 
-private protocol Proto {
+@usableFromInline
+protocol Proto {
   func confx()
 }
 
 public struct MyStruct : Proto {
+  @usableFromInline
   func confx() {
   }
 
@@ -12,7 +14,8 @@ public struct MyStruct : Proto {
 }
 
 @inline(never)
-private func callit(_ p: Proto) {
+@usableFromInline
+func callit(_ p: Proto) {
 }
 
 @_transparent

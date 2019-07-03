@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -22,6 +22,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Compiler.h"
 #include <functional>
@@ -104,7 +105,7 @@ private:
   /// directly. If the adjacency becomes empty afterward, it will be
   /// removed.
   void modifyAdjacency(TypeVariableType *typeVar,
-                       std::function<void(Adjacency& adj)> modify);
+                       llvm::function_ref<void(Adjacency &adj)> modify);
 
   /// Add an adjacency to the list of adjacencies.
   void addAdjacency(TypeVariableType *typeVar);
@@ -121,16 +122,6 @@ private:
   
   /// Remove a type variable from the fixed-binding relationship.
   void removeFixedBinding(TypeVariableType *typeVar);
-
-  /// Retrieves the member type of this type variable that corresponds
-  /// to the given name.
-  ///
-  /// \param name The name of the type member.
-  ///
-  /// \param create If the member does not already exist, this
-  /// callback will be invoked to create it.
-  TypeVariableType *getMemberType(Identifier name,
-                                  std::function<TypeVariableType *()> create);
 
   /// The type variable this node represents.
   TypeVariableType *TypeVar;
@@ -157,14 +148,6 @@ private:
   /// Note that this field is only valid for type variables that
   /// are representatives of their equivalence classes.
   mutable SmallVector<TypeVariableType *, 2> EquivalenceClass;
-
-  /// A set of (name, type variable) pairs representing the member types of 
-  /// the given type variable.
-  llvm::SmallVector<std::pair<Identifier, TypeVariableType *>, 2> MemberTypes;
-
-  /// A mapping from the names of members of this type variable to an
-  /// index into the \c MemberTypes vector.
-  llvm::SmallDenseMap<Identifier, unsigned> MemberTypeIndex;
 
   /// Print this graph node.
   void print(llvm::raw_ostream &out, unsigned indent);
@@ -217,22 +200,6 @@ public:
   /// Remove a constraint from the graph.
   void removeConstraint(Constraint *constraint);
 
-  /// Retrieves the member type of a type variable that corresponds to
-  /// the given name.
-  ///
-  /// \param typeVar The type variable.
-  ///
-  /// \param name The name of the type member.
-  ///
-  /// \param create If the member does not already exist, this
-  /// callback will be invoked to create it.
-  ///
-  /// \returns the type variable representing the named member of the
-  /// given type variable.
-  TypeVariableType *getMemberType(TypeVariableType *typeVar,
-                                  Identifier name,
-                                  std::function<TypeVariableType *()> create);
-
   /// Merge the two nodes for the two given type variables.
   ///
   /// The type variables must actually have been merged already; this
@@ -242,13 +209,25 @@ public:
   /// Bind the given type variable to the given fixed type.
   void bindTypeVariable(TypeVariableType *typeVar, Type fixedType);
 
+  /// Describes which constraints \c gatherConstraints should gather.
+  enum class GatheringKind {
+    /// Gather constraints associated with all of the variables within the
+    /// same equivalence class as the given type variable.
+    EquivalenceClass,
+    /// Gather all constraints that mention this type variable or type variables
+    /// that it is equivalent to.
+    AllMentions,
+  };
+
   /// Gather the set of constraints that involve the given type variable,
   /// i.e., those constraints that will be affected when the type variable
   /// gets merged or bound to a fixed type.
-  ///
-  /// The resulting set of constraints may contain duplicates.
-  void gatherConstraints(TypeVariableType *typeVar,
-                         SmallVectorImpl<Constraint *> &constraints);
+  void
+  gatherConstraints(TypeVariableType *typeVar,
+                    llvm::SetVector<Constraint *> &constraints,
+                    GatheringKind kind,
+                    llvm::function_ref<bool(Constraint *)> acceptConstraint =
+                        [](Constraint *constraint) { return true; });
 
   /// Retrieve the type variables that correspond to nodes in the graph.
   ///
@@ -260,17 +239,46 @@ public:
 
   /// Compute the connected components of the graph.
   ///
-  /// \param typeVars The type variables that occur within the
-  /// connected components. If a non-empty vector is passed in, the algorithm
-  /// will only consider type variables reachable from the initial set.
+  /// \param typeVars The type variables that should be included in the
+  /// set of connected components that are returned.
   ///
   /// \param components Receives the component numbers for each type variable
   /// in \c typeVars.
   ///
-  /// \returns the number of connected components in the graph.
+  /// \returns the number of connected components in the graph, which includes
+  /// one component for each of the constraints produced by
+  /// \c getOrphanedConstraints().
   unsigned computeConnectedComponents(
-             SmallVectorImpl<TypeVariableType *> &typeVars,
-             SmallVectorImpl<unsigned> &components);
+             std::vector<TypeVariableType *> &typeVars,
+             std::vector<unsigned> &components);
+
+  /// Retrieve the set of "orphaned" constraints, which are known to the
+  /// constraint graph but have no type variables to anchor them.
+  ArrayRef<Constraint *> getOrphanedConstraints() const {
+    return OrphanedConstraints;
+  }
+
+  /// Replace the orphaned constraints with the constraints in the given list,
+  /// returning the old set of orphaned constraints.
+  SmallVector<Constraint *, 4> takeOrphanedConstraints() {
+    auto result = std::move(OrphanedConstraints);
+    OrphanedConstraints.clear();
+    return result;
+  }
+
+  /// Set the orphaned constraints.
+  void setOrphanedConstraints(SmallVector<Constraint *, 4> &&newConstraints) {
+    OrphanedConstraints = std::move(newConstraints);
+  }
+
+  /// Set the list of orphaned constraints to a single constraint.
+  ///
+  /// If \c orphaned is null, just clear out the list.
+  void setOrphanedConstraint(Constraint *orphaned) {
+    OrphanedConstraints.clear();
+    if (orphaned)
+      OrphanedConstraints.push_back(orphaned);
+  }
 
   /// Print the graph.
   void print(llvm::raw_ostream &out);
@@ -323,6 +331,13 @@ private:
   /// The type variables in this graph, in stable order.
   SmallVector<TypeVariableType *, 4> TypeVariables;
 
+  /// Constraints that are "orphaned" because they contain no type variables.
+  SmallVector<Constraint *, 4> OrphanedConstraints;
+
+  /// Increment the number of constraints considered per attempt
+  /// to contract constrant graph edges.
+  void incrementConstraintsPerContractionCounter();
+
   /// The kind of change made to the graph.
   enum class ChangeKind {
     /// Added a type variable.
@@ -335,8 +350,6 @@ private:
     ExtendedEquivalenceClass,
     /// Added a fixed binding for a type variable.
     BoundTypeVariable,
-    /// Added a member type.
-    AddedMemberType
   };
 
   /// A change made to the constraint graph.
@@ -366,14 +379,6 @@ private:
         /// The fixed type to which the type variable was bound.
         TypeBase *FixedType;
       } Binding;
-
-      struct {
-        /// The type variable whose member type was created.
-        TypeVariableType *TypeVar;
-
-        /// The name of the member.
-        Identifier Name;
-      } MemberType;
     };
 
   public:
@@ -395,9 +400,6 @@ private:
     /// Create a change that bound a type variable to a fixed type.
     static Change boundTypeVariable(TypeVariableType *typeVar, Type fixed);
 
-    /// Create a change that added a member type with the given name.
-    static Change addedMemberType(TypeVariableType *typeVar, Identifier name);
-
     /// Undo this change, reverting the constraint graph to the state it
     /// had prior to this change.
     ///
@@ -418,7 +420,7 @@ private:
   friend class ConstraintGraphScope;
 };
 
-} // end namespace swift::constraints
+} // end namespace constraints
 
 } // end namespace swift
 

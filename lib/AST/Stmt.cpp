@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -19,9 +19,15 @@
 #include "swift/AST/Decl.h"
 #include "swift/AST/Expr.h"
 #include "swift/AST/Pattern.h"
+#include "swift/Basic/Statistic.h"
 #include "llvm/ADT/PointerUnion.h"
 
 using namespace swift;
+
+#define STMT(Id, _) \
+  static_assert(IsTriviallyDestructible<Id##Stmt>::value, \
+                "Stmts are BumpPtrAllocated; the destructor is never called");
+#include "swift/AST/StmtNodes.def"
 
 //===----------------------------------------------------------------------===//
 // Stmt methods.
@@ -81,7 +87,7 @@ namespace {
       return { S->getStartLoc(), S->getEndLoc() };
     }
   };
-}
+} // end anonymous namespace
 
 template <class T> static SourceRange getSourceRangeImpl(const T *S) {
   static_assert(isOverriddenFromStmt(&T::getSourceRange) ||
@@ -130,8 +136,9 @@ SourceLoc Stmt::getEndLoc() const {
 BraceStmt::BraceStmt(SourceLoc lbloc, ArrayRef<ASTNode> elts,
                      SourceLoc rbloc, Optional<bool> implicit)
   : Stmt(StmtKind::Brace, getDefaultImplicitFlag(implicit, lbloc)),
-    NumElements(elts.size()), LBLoc(lbloc), RBLoc(rbloc)
+    LBLoc(lbloc), RBLoc(rbloc)
 {
+  Bits.BraceStmt.NumElements = elts.size();
   std::uninitialized_copy(elts.begin(), elts.end(),
                           getTrailingObjects<ASTNode>());
 }
@@ -153,7 +160,21 @@ SourceLoc ReturnStmt::getStartLoc() const {
   return ReturnLoc;
 }
 SourceLoc ReturnStmt::getEndLoc() const {
-  return (Result ? Result->getEndLoc() : ReturnLoc);
+  if (Result && Result->getEndLoc().isValid())
+    return Result->getEndLoc();
+  return ReturnLoc;
+}
+
+YieldStmt *YieldStmt::create(const ASTContext &ctx, SourceLoc yieldLoc,
+                             SourceLoc lpLoc, ArrayRef<Expr*> yields,
+                             SourceLoc rpLoc, Optional<bool> implicit) {
+  void *buffer = ctx.Allocate(totalSizeToAlloc<Expr*>(yields.size()),
+                              alignof(YieldStmt));
+  return ::new(buffer) YieldStmt(yieldLoc, lpLoc, yields, rpLoc, implicit);
+}
+
+SourceLoc YieldStmt::getEndLoc() const {
+  return RPLoc.isInvalid() ? getYields()[0]->getEndLoc() : RPLoc;
 }
 
 SourceLoc ThrowStmt::getEndLoc() const { return SubExpr->getEndLoc(); }
@@ -185,7 +206,6 @@ bool LabeledStmt::isPossibleContinueTarget() const {
   case StmtKind::Do:
   case StmtKind::DoCatch:
   case StmtKind::RepeatWhile:
-  case StmtKind::For:
   case StmtKind::ForEach:
   case StmtKind::While:
     return true;
@@ -207,7 +227,6 @@ bool LabeledStmt::requiresLabelOnJump() const {
     return true;
 
   case StmtKind::RepeatWhile:
-  case StmtKind::For:
   case StmtKind::ForEach:
   case StmtKind::Switch:
   case StmtKind::While:
@@ -281,30 +300,6 @@ SourceLoc PoundAvailableInfo::getEndLoc() const {
   return RParenLoc;
 }
 
-void PoundAvailableInfo::
-getPlatformKeywordRanges(SmallVectorImpl<CharSourceRange> &PlatformRanges) {
-  for (unsigned i = 0; i < NumQueries; i++) {
-    auto *VersionSpec =
-      dyn_cast<VersionConstraintAvailabilitySpec>(getQueries()[i]);
-    if (!VersionSpec)
-      continue;
-    
-    auto Loc = VersionSpec->getPlatformLoc();
-    auto Platform = VersionSpec->getPlatform();
-    switch (Platform) {
-    case PlatformKind::none:
-      break;
-#define AVAILABILITY_PLATFORM(X, PrettyName)                          \
-  case PlatformKind::X:                                               \
-    PlatformRanges.push_back(CharSourceRange(Loc, strlen(#X)));       \
-    break;
-#include "swift/AST/PlatformKinds.def"
-    }
-  }
-}
-
-
-
 SourceRange StmtConditionElement::getSourceRange() const {
   switch (getKind()) {
   case StmtConditionElement::CK_Boolean:
@@ -317,9 +312,16 @@ SourceRange StmtConditionElement::getSourceRange() const {
       Start = IntroducerLoc;
     else
       Start = getPattern()->getStartLoc();
-
-    return SourceRange(Start, getInitializer()->getEndLoc());
+    
+    SourceLoc End = getInitializer()->getEndLoc();
+    if (Start.isValid() && End.isValid()) {
+      return SourceRange(Start, End);
+    } else {
+      return SourceRange();
+    }
   }
+
+  llvm_unreachable("Unhandled StmtConditionElement in switch.");
 }
 
 SourceLoc StmtConditionElement::getStartLoc() const {
@@ -329,10 +331,10 @@ SourceLoc StmtConditionElement::getStartLoc() const {
   case StmtConditionElement::CK_Availability:
     return getAvailability()->getStartLoc();
   case StmtConditionElement::CK_PatternBinding:
-    if (IntroducerLoc.isValid())
-      return IntroducerLoc;
-    return getPattern()->getStartLoc();
+    return getSourceRange().Start;
   }
+
+  llvm_unreachable("Unhandled StmtConditionElement in switch.");
 }
 
 SourceLoc StmtConditionElement::getEndLoc() const {
@@ -342,8 +344,10 @@ SourceLoc StmtConditionElement::getEndLoc() const {
   case StmtConditionElement::CK_Availability:
     return getAvailability()->getEndLoc();
   case StmtConditionElement::CK_PatternBinding:
-    return getInitializer()->getEndLoc();
+    return getSourceRange().End;
   }
+
+  llvm_unreachable("Unhandled StmtConditionElement in switch.");
 }
 
 static StmtCondition exprToCond(Expr *C, ASTContext &Ctx) {
@@ -381,45 +385,101 @@ SourceLoc CaseLabelItem::getEndLoc() const {
   return CasePattern->getEndLoc();
 }
 
-CaseStmt::CaseStmt(SourceLoc CaseLoc, ArrayRef<CaseLabelItem> CaseLabelItems,
-                   bool HasBoundDecls, SourceLoc ColonLoc, Stmt *Body,
-                   Optional<bool> Implicit)
-    : Stmt(StmtKind::Case, getDefaultImplicitFlag(Implicit, CaseLoc)),
-      CaseLoc(CaseLoc), ColonLoc(ColonLoc),
-      BodyAndHasBoundDecls(Body, HasBoundDecls),
-      NumPatterns(CaseLabelItems.size()) {
-  assert(NumPatterns > 0 && "case block must have at least one pattern");
-  MutableArrayRef<CaseLabelItem> Items{ getTrailingObjects<CaseLabelItem>(),
-                                        NumPatterns };
+CaseStmt::CaseStmt(SourceLoc caseLoc, ArrayRef<CaseLabelItem> caseLabelItems,
+                   SourceLoc unknownAttrLoc, SourceLoc colonLoc, Stmt *body,
+                   Optional<MutableArrayRef<VarDecl *>> caseBodyVariables,
+                   Optional<bool> implicit,
+                   NullablePtr<FallthroughStmt> fallthroughStmt)
+    : Stmt(StmtKind::Case, getDefaultImplicitFlag(implicit, caseLoc)),
+      UnknownAttrLoc(unknownAttrLoc), CaseLoc(caseLoc), ColonLoc(colonLoc),
+      BodyAndHasFallthrough(body, fallthroughStmt.isNonNull()),
+      CaseBodyVariables(caseBodyVariables) {
+  Bits.CaseStmt.NumPatterns = caseLabelItems.size();
+  assert(Bits.CaseStmt.NumPatterns > 0 &&
+         "case block must have at least one pattern");
 
-  for (unsigned i = 0; i < NumPatterns; ++i) {
-    new (&Items[i]) CaseLabelItem(CaseLabelItems[i]);
-    Items[i].getPattern()->markOwnedByStatement(this);
+  if (hasFallthroughDest()) {
+    *getTrailingObjects<FallthroughStmt *>() = fallthroughStmt.get();
+  }
+
+  MutableArrayRef<CaseLabelItem> items{getTrailingObjects<CaseLabelItem>(),
+                                       Bits.CaseStmt.NumPatterns};
+
+  // At the beginning mark all of our var decls as being owned by this
+  // statement. In the typechecker we wireup the case stmt var decl list since
+  // we know everything is lined up/typechecked then.
+  for (unsigned i : range(Bits.CaseStmt.NumPatterns)) {
+    new (&items[i]) CaseLabelItem(caseLabelItems[i]);
+    items[i].getPattern()->markOwnedByStatement(this);
+  }
+  for (auto *vd : caseBodyVariables.getValueOr(MutableArrayRef<VarDecl *>())) {
+    vd->setParentPatternStmt(this);
   }
 }
 
-CaseStmt *CaseStmt::create(ASTContext &C, SourceLoc CaseLoc,
-                           ArrayRef<CaseLabelItem> CaseLabelItems,
-                           bool HasBoundDecls, SourceLoc ColonLoc, Stmt *Body,
-                           Optional<bool> Implicit) {
-  void *Mem = C.Allocate(totalSizeToAlloc<CaseLabelItem>(CaseLabelItems.size()),
-                         alignof(CaseStmt));
-  return ::new (Mem) CaseStmt(CaseLoc, CaseLabelItems, HasBoundDecls, ColonLoc,
-                              Body, Implicit);
+CaseStmt *CaseStmt::create(ASTContext &ctx, SourceLoc caseLoc,
+                           ArrayRef<CaseLabelItem> caseLabelItems,
+                           SourceLoc unknownAttrLoc, SourceLoc colonLoc,
+                           Stmt *body,
+                           Optional<MutableArrayRef<VarDecl *>> caseVarDecls,
+                           Optional<bool> implicit,
+                           NullablePtr<FallthroughStmt> fallthroughStmt) {
+  void *mem =
+      ctx.Allocate(totalSizeToAlloc<FallthroughStmt *, CaseLabelItem>(
+                       fallthroughStmt.isNonNull(), caseLabelItems.size()),
+                   alignof(CaseStmt));
+  return ::new (mem) CaseStmt(caseLoc, caseLabelItems, unknownAttrLoc, colonLoc,
+                              body, caseVarDecls, implicit, fallthroughStmt);
 }
 
 SwitchStmt *SwitchStmt::create(LabeledStmtInfo LabelInfo, SourceLoc SwitchLoc,
                                Expr *SubjectExpr,
                                SourceLoc LBraceLoc,
-                               ArrayRef<CaseStmt *> Cases,
+                               ArrayRef<ASTNode> Cases,
                                SourceLoc RBraceLoc,
                                ASTContext &C) {
-  void *p = C.Allocate(totalSizeToAlloc<CaseStmt *>(Cases.size()),
+#ifndef NDEBUG
+  for (auto N : Cases)
+    assert((N.is<Stmt*>() && isa<CaseStmt>(N.get<Stmt*>())) ||
+           (N.is<Decl*>() && (isa<IfConfigDecl>(N.get<Decl*>()) ||
+                              isa<PoundDiagnosticDecl>(N.get<Decl*>()))));
+#endif
+
+  void *p = C.Allocate(totalSizeToAlloc<ASTNode>(Cases.size()),
                        alignof(SwitchStmt));
   SwitchStmt *theSwitch = ::new (p) SwitchStmt(LabelInfo, SwitchLoc,
                                                SubjectExpr, LBraceLoc,
                                                Cases.size(), RBraceLoc);
+
   std::uninitialized_copy(Cases.begin(), Cases.end(),
-                          theSwitch->getTrailingObjects<CaseStmt *>());
+                          theSwitch->getTrailingObjects<ASTNode>());
   return theSwitch;
+}
+
+// See swift/Basic/Statistic.h for declaration: this enables tracing Stmts, is
+// defined here to avoid too much layering violation / circular linkage
+// dependency.
+
+struct StmtTraceFormatter : public UnifiedStatsReporter::TraceFormatter {
+  void traceName(const void *Entity, raw_ostream &OS) const {
+    if (!Entity)
+      return;
+    const Stmt *S = static_cast<const Stmt *>(Entity);
+    OS << Stmt::getKindName(S->getKind());
+  }
+  void traceLoc(const void *Entity, SourceManager *SM,
+                clang::SourceManager *CSM, raw_ostream &OS) const {
+    if (!Entity)
+      return;
+    const Stmt *S = static_cast<const Stmt *>(Entity);
+    S->getSourceRange().print(OS, *SM, false);
+  }
+};
+
+static StmtTraceFormatter TF;
+
+template<>
+const UnifiedStatsReporter::TraceFormatter*
+FrontendStatsTracer::getTraceFormatter<const Stmt *>() {
+  return &TF;
 }

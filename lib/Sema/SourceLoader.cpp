@@ -2,23 +2,23 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// \brief A simple module loader that loads .swift source files.
+/// A simple module loader that loads .swift source files.
 ///
 //===----------------------------------------------------------------------===//
 
 #include "swift/Sema/SourceLoader.h"
 #include "swift/Subsystems.h"
-#include "swift/AST/AST.h"
 #include "swift/AST/DiagnosticsSema.h"
+#include "swift/AST/Module.h"
 #include "swift/Parse/DelayedParsingCallbacks.h"
 #include "swift/Parse/PersistentParserState.h"
 #include "swift/Basic/SourceManager.h"
@@ -42,7 +42,7 @@ static FileOrError findModule(ASTContext &ctx, StringRef moduleID,
     llvm::sys::path::append(inputFilename, moduleID);
     inputFilename.append(".swift");
     llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> FileBufOrErr =
-      llvm::MemoryBuffer::getFile(inputFilename.str());
+      ctx.SourceMgr.getFileSystem()->getBufferForFile(inputFilename.str());
 
     // Return if we loaded a file
     if (FileBufOrErr)
@@ -70,8 +70,30 @@ class SkipNonTransparentFunctions : public DelayedParsingCallbacks {
 
 } // unnamed namespace
 
-Module *SourceLoader::loadModule(SourceLoc importLoc,
-                             ArrayRef<std::pair<Identifier, SourceLoc>> path) {
+void SourceLoader::collectVisibleTopLevelModuleNames(
+    SmallVectorImpl<Identifier> &names) const {
+  // TODO: Implement?
+}
+
+bool SourceLoader::canImportModule(std::pair<Identifier, SourceLoc> ID) {
+  // Search the memory buffers to see if we can find this file on disk.
+  FileOrError inputFileOrError = findModule(Ctx, ID.first.str(),
+                                            ID.second);
+  if (!inputFileOrError) {
+    auto err = inputFileOrError.getError();
+    if (err != std::errc::no_such_file_or_directory) {
+      Ctx.Diags.diagnose(ID.second, diag::sema_opening_import,
+                         ID.first, err.message());
+    }
+
+    return false;
+  }
+  return true;
+}
+
+ModuleDecl *SourceLoader::loadModule(SourceLoc importLoc,
+                                     ArrayRef<std::pair<Identifier,
+                                     SourceLoc>> path) {
   // FIXME: Swift submodules?
   if (path.size() > 1)
     return nullptr;
@@ -92,7 +114,9 @@ Module *SourceLoader::loadModule(SourceLoc importLoc,
   std::unique_ptr<llvm::MemoryBuffer> inputFile =
     std::move(inputFileOrError.get());
 
-  addDependency(inputFile->getBufferIdentifier());
+  if (dependencyTracker)
+    dependencyTracker->addDependency(inputFile->getBufferIdentifier(),
+                                     /*isSystem=*/false);
 
   // Turn off debugging while parsing other modules.
   llvm::SaveAndRestore<bool> turnOffDebug(Ctx.LangOpts.DebugConstraintSolver,
@@ -105,8 +129,8 @@ Module *SourceLoader::loadModule(SourceLoc importLoc,
   else
     bufferID = Ctx.SourceMgr.addNewSourceBuffer(std::move(inputFile));
 
-  auto *importMod = Module::create(moduleID.first, Ctx);
-  if (EnableResilience)
+  auto *importMod = ModuleDecl::create(moduleID.first, Ctx);
+  if (EnableLibraryEvolution)
     importMod->setResilienceStrategy(ResilienceStrategy::Resilient);
   Ctx.LoadedModules[moduleID.first] = importMod;
 
@@ -115,17 +139,19 @@ Module *SourceLoader::loadModule(SourceLoc importLoc,
     implicitImportKind = SourceFile::ImplicitModuleImportKind::None;
 
   auto *importFile = new (Ctx) SourceFile(*importMod, SourceFileKind::Library,
-                                          bufferID, implicitImportKind);
+                                          bufferID, implicitImportKind,
+                                          Ctx.LangOpts.CollectParsedToken,
+                                          Ctx.LangOpts.BuildSyntaxTree);
   importMod->addFile(*importFile);
 
   bool done;
-  PersistentParserState persistentState;
+  PersistentParserState persistentState(Ctx);
   SkipNonTransparentFunctions delayCallbacks;
   parseIntoSourceFile(*importFile, bufferID, &done, nullptr, &persistentState,
                       SkipBodies ? &delayCallbacks : nullptr);
   assert(done && "Parser returned early?");
   (void)done;
-  
+
   if (SkipBodies)
     performDelayedParsing(importMod, persistentState, nullptr);
 
@@ -134,9 +160,9 @@ Module *SourceLoader::loadModule(SourceLoc importLoc,
   if (SkipBodies)
     performNameBinding(*importFile);
   else
-    performTypeChecking(*importFile, persistentState.getTopLevelContext(), 
+    performTypeChecking(*importFile, persistentState.getTopLevelContext(),
                         None);
-
+  importMod->setHasResolvedImports();
   return importMod;
 }
 

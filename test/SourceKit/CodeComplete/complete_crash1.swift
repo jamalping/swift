@@ -1,4 +1,5 @@
-// RUN: %complete-test -tok=TOK1 -hide-none %s -- %s
+// XFAIL: broken_std_regex
+// RUN: %complete-test -tok=TOK1 -hide-none %s
 
 import QuartzCore
 

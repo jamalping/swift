@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -31,11 +31,12 @@ using namespace swift;
 // least two values to compare.
 static bool gatherValues(SILFunction &Fn, std::vector<SILValue> &Values) {
   for (auto &BB : Fn) {
-    for (auto *Arg : BB.getBBArgs())
+    for (auto *Arg : BB.getArguments())
       Values.push_back(SILValue(Arg));
-    for (auto &II : BB)
-      if (II.hasValue())
-        Values.push_back(&II);
+    for (auto &II : BB) {
+      for (auto result : II.getResults())
+        Values.push_back(result);
+    }
   }
   return Values.size() > 1;
 }
@@ -81,7 +82,7 @@ class MemBehaviorDumper : public SILModuleTransform {
               bool Write = AA->mayWriteToMemory(&I, V);
               bool SideEffects = AA->mayHaveSideEffects(&I, V);
               llvm::outs() << "PAIR #" << PairCount++ << ".\n"
-                           << "  " << SILValue(&I) << "  " << V
+                           << "  " << I << "  " << V
                            << "  r=" << Read << ",w=" << Write
                            << ",se=" << SideEffects << "\n";
             }
@@ -92,7 +93,6 @@ class MemBehaviorDumper : public SILModuleTransform {
     }
   }
 
-  StringRef getName() override { return "Memory Behavior Dumper"; }
 };
 
 } // end anonymous namespace

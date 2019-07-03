@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -17,6 +17,7 @@
 #include "swift/SILOptimizer/Analysis/IVAnalysis.h"
 #include "swift/SILOptimizer/Analysis/PostOrderAnalysis.h"
 #include "swift/SILOptimizer/Analysis/ClassHierarchyAnalysis.h"
+#include "swift/SILOptimizer/Analysis/ProtocolConformanceAnalysis.h"
 #include "swift/AST/Module.h"
 #include "swift/AST/SILOptions.h"
 #include "swift/SIL/SILModule.h"
@@ -54,4 +55,8 @@ SILAnalysis *swift::createClassHierarchyAnalysis(SILModule *M) {
 
 SILAnalysis *swift::createBasicCalleeAnalysis(SILModule *M) {
   return new BasicCalleeAnalysis(M);
+}
+
+SILAnalysis *swift::createProtocolConformanceAnalysis(SILModule *M) {
+  return new ProtocolConformanceAnalysis(M);
 }

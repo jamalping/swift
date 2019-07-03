@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -26,13 +26,13 @@ struct SingleRawComment {
     BlockDoc,      ///< \code /** stuff */ \endcode
   };
 
-  const CharSourceRange Range;
-  const StringRef RawText;
+  CharSourceRange Range;
+  StringRef RawText;
 
   unsigned Kind : 8;
   unsigned StartColumn : 16;
   unsigned StartLine;
-  const unsigned EndLine;
+  unsigned EndLine;
 
   SingleRawComment(CharSourceRange Range, const SourceManager &SourceMgr);
   SingleRawComment(StringRef RawText, unsigned StartColumn);
@@ -67,6 +67,8 @@ struct RawComment {
   bool isEmpty() const {
     return Comments.empty();
   }
+
+  CharSourceRange getCharSourceRange();
 };
 
 struct CommentInfo {

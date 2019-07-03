@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift -enable-objc-interop
 
 protocol P { }
 @objc protocol OP { }
@@ -16,8 +16,8 @@ func fAO<T : AnyObject>(_ t: T) { }
 func fAOE(_ t: AnyObject) { }
 func fT<T>(_ t: T) { }
 
-func testPassExistential(_ p: P, op: OP, opp: protocol<OP, P>, cp: CP, sp: SP, any: Any, ao: AnyObject) {
-  fP(p) // expected-error{{cannot invoke 'fP' with an argument list of type '(P)'}} // expected-note{{expected an argument list of type '(T)'}}
+func testPassExistential(_ p: P, op: OP, opp: OP & P, cp: CP, sp: SP, any: Any, ao: AnyObject) {
+  fP(p) // expected-error{{protocol type 'P' cannot conform to 'P' because only concrete types can conform to protocols}}
   fAO(p) // expected-error{{cannot invoke 'fAO' with an argument list of type '(P)'}} // expected-note{{expected an argument list of type '(T)'}}
   fAOE(p) // expected-error{{argument type 'P' does not conform to expected type 'AnyObject'}}
   fT(p)
@@ -31,14 +31,14 @@ func testPassExistential(_ p: P, op: OP, opp: protocol<OP, P>, cp: CP, sp: SP, a
   fAOE(cp)
   fT(cp)
 
-  fP(opp) // expected-error{{cannot invoke 'fP' with an argument list of type '(protocol<OP, P>)'}} // expected-note{{expected an argument list of type '(T)'}}
-  fOP(opp) // expected-error{{cannot invoke 'fOP' with an argument list of type '(protocol<OP, P>)'}} // expected-note{{expected an argument list of type '(T)'}}
-  fAO(opp) // expected-error{{cannot invoke 'fAO' with an argument list of type '(protocol<OP, P>)'}} // expected-note{{expected an argument list of type '(T)'}}
+  fP(opp) // expected-error{{protocol type 'OP & P' cannot conform to 'P' because only concrete types can conform to protocols}}
+  fOP(opp) // expected-error{{protocol type 'OP & P' cannot conform to 'OP' because only concrete types can conform to protocols}}
+  fAO(opp) // expected-error{{cannot invoke 'fAO' with an argument list of type '(OP & P)'}} // expected-note{{expected an argument list of type '(T)'}}
   fAOE(opp)
   fT(opp)
 
   fOP(sp)
-  fSP(sp) // expected-error{{cannot invoke 'fSP' with an argument list of type '(SP)'}} // expected-note{{expected an argument list of type '(T)'}}
+  fSP(sp) // expected-error{{'SP' cannot be used as a type conforming to protocol 'SP' because 'SP' has static requirements}}
   fAO(sp)
   fAOE(sp)
   fT(sp)
@@ -53,17 +53,17 @@ class GP<T : P> {}
 class GOP<T : OP> {}
 class GCP<T : CP> {}
 class GSP<T : SP> {}
-class GAO<T : AnyObject> {}
+class GAO<T : AnyObject> {} // expected-note 2{{requirement specified as 'T' : 'AnyObject'}}
 
 func blackHole(_ t: Any) {}
 
 func testBindExistential() {
-  blackHole(GP<P>()) // expected-error{{using 'P' as a concrete type conforming to protocol 'P' is not supported}}
+  blackHole(GP<P>()) // expected-error{{protocol type 'P' cannot conform to 'P' because only concrete types can conform to protocols}}
   blackHole(GOP<OP>())
-  blackHole(GCP<CP>()) // expected-error{{using 'CP' as a concrete type conforming to protocol 'CP' is not supported}}
-  blackHole(GAO<P>()) // expected-error{{type 'P' does not conform to protocol 'AnyObject'}}
+  blackHole(GCP<CP>()) // expected-error{{protocol type 'CP' cannot conform to 'CP' because only concrete types can conform to protocols}}
+  blackHole(GAO<P>()) // expected-error{{'GAO' requires that 'P' be a class type}}
   blackHole(GAO<OP>())
-  blackHole(GAO<CP>()) // expected-error{{using 'CP' as a concrete type conforming to protocol 'AnyObject' is not supported}}
+  blackHole(GAO<CP>()) // expected-error{{'GAO' requires that 'CP' be a class type}}
   blackHole(GSP<SP>()) // expected-error{{'SP' cannot be used as a type conforming to protocol 'SP' because 'SP' has static requirements}}
   blackHole(GAO<AnyObject>())
 }
@@ -73,7 +73,7 @@ protocol Mine {}
 class M1: Mine {}
 class M2: Mine {}
 extension Collection where Iterator.Element : Mine {
-    final func takeAll() {}
+    func takeAll() {}
 }
 
 func foo() {
@@ -85,5 +85,5 @@ func foo() {
   // generic no overloads error path. The error should actually talk
   // about the return type, and this can happen in other contexts as well;
   // <rdar://problem/21900971> tracks improving QoI here.
-  allMine.takeAll() // expected-error{{using 'Mine' as a concrete type conforming to protocol 'Mine' is not supported}}
+  allMine.takeAll() // expected-error{{protocol type 'Mine' cannot conform to 'Mine' because only concrete types can conform to protocols}}
 }

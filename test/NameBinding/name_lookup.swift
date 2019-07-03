@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift -typo-correction-limit 100
 
 class ThisBase1 {
   init() { }
@@ -13,7 +13,7 @@ class ThisBase1 {
   }
 
   func baseFunc0() {}
-  func baseFunc1(_ a: Int) {}
+  func baseFunc1(_ a: Int) {} // expected-note 2 {{found this candidate}}
 
   subscript(i: Int) -> Double {
     get {
@@ -35,7 +35,7 @@ class ThisBase1 {
 
   class func baseStaticFunc0() {}
 
-  struct BaseNestedStruct {}
+  struct BaseNestedStruct {} // expected-note {{did you mean 'BaseNestedStruct'?}}
   class BaseNestedClass {
     init() { }
   }
@@ -43,7 +43,7 @@ class ThisBase1 {
     case BaseUnionX(Int)
   }
 
-  typealias BaseNestedTypealias = Int
+  typealias BaseNestedTypealias = Int // expected-note {{did you mean 'BaseNestedTypealias'?}}
 }
 
 class ThisDerived1 : ThisBase1 {
@@ -85,7 +85,7 @@ class ThisDerived1 : ThisBase1 {
   class DerivedNestedClass {
     init() { }
   }
-  enum DerivedNestedUnion {
+  enum DerivedNestedUnion { // expected-note {{did you mean 'DerivedNestedUnion'?}}
     case DerivedUnionX(Int)
   }
 
@@ -200,8 +200,8 @@ class ThisDerived1 : ThisBase1 {
 
     super.derivedExtProp = 42 // expected-error {{value of type 'ThisBase1' has no member 'derivedExtProp'}}
     super.derivedExtFunc0() // expected-error {{value of type 'ThisBase1' has no member 'derivedExtFunc0'}}
-    super.derivedExtStaticVar = 42 // expected-error {{value of type 'ThisBase1' has no member 'derivedExtStaticVar'}}
-    super.derivedExtStaticProp = 42 // expected-error {{value of type 'ThisBase1' has no member 'derivedExtStaticProp'}}
+    super.derivedExtStaticVar = 42 // expected-error {{value of type 'ThisBase1' has no member 'derivedExtStaticVar'; did you mean 'baseExtStaticVar'?}}
+    super.derivedExtStaticProp = 42 // expected-error {{value of type 'ThisBase1' has no member 'derivedExtStaticProp'; did you mean 'baseExtStaticProp'?}}
     super.derivedExtStaticFunc0() // expected-error {{value of type 'ThisBase1' has no member 'derivedExtStaticFunc0'}}
 
     var ds2 = super.DerivedNestedStruct() // expected-error {{value of type 'ThisBase1' has no member 'DerivedNestedStruct'}}
@@ -222,12 +222,15 @@ class ThisDerived1 : ThisBase1 {
   class func staticTestSelf1() {
     self.baseInstanceVar = 42 // expected-error {{member 'baseInstanceVar' cannot be used on type 'ThisDerived1'}}
     self.baseProp = 42 // expected-error {{member 'baseProp' cannot be used on type 'ThisDerived1'}}
-    self.baseFunc0() // expected-error {{missing argument}}
-    self.baseFunc0(ThisBase1())() // expected-error {{'(ThisBase1) -> () -> ()' is not convertible to 'ThisDerived1 -> () -> ()'}}
+    self.baseFunc0() // expected-error {{instance member 'baseFunc0' cannot be used on type 'ThisDerived1'}}
+    self.baseFunc0(ThisBase1())() // expected-error {{'ThisBase1' is not convertible to 'ThisDerived1'}}
     
     self.baseFunc0(ThisDerived1())()
-    self.baseFunc1(42) // expected-error {{cannot convert value of type 'Int' to expected argument type 'ThisBase1'}}
-    self.baseFunc1(ThisBase1())(42) // expected-error {{'(ThisBase1) -> (Int) -> ()' is not convertible to 'ThisDerived1 -> (Int) -> ()'}}
+    self.baseFunc1(42) // expected-error {{instance member 'baseFunc1' cannot be used on type 'ThisDerived1'}}
+    // TODO(diagnostics): Constraint system is not currently set up to handle this case because overload choice
+    // would have a type of `(A) -> (Int) -> Void` which then gets fixed up to be `(B) -> (Int) -> Void` when
+    // the choice is attempted.
+    self.baseFunc1(ThisBase1())(42) // expected-error {{ambiguous reference to member 'baseFunc1'}}
     self.baseFunc1(ThisDerived1())(42)
     self[0] = 42.0 // expected-error {{instance member 'subscript' cannot be used on type 'ThisDerived1'}}
     self.baseStaticVar = 42
@@ -235,7 +238,7 @@ class ThisDerived1 : ThisBase1 {
     self.baseStaticFunc0()
 
     self.baseExtProp = 42 // expected-error {{member 'baseExtProp' cannot be used on type 'ThisDerived1'}}
-    self.baseExtFunc0() // expected-error {{missing argument}}
+    self.baseExtFunc0() // expected-error {{instance member 'baseExtFunc0' cannot be used on type 'ThisDerived1'}}
     self.baseExtStaticVar = 42
     self.baseExtStaticProp = 42 // expected-error {{member 'baseExtStaticProp' cannot be used on type 'ThisDerived1'}}
     self.baseExtStaticFunc0()
@@ -252,7 +255,7 @@ class ThisDerived1 : ThisBase1 {
 
     self.derivedInstanceVar = 42 // expected-error {{member 'derivedInstanceVar' cannot be used on type 'ThisDerived1'}}
     self.derivedProp = 42 // expected-error {{member 'derivedProp' cannot be used on type 'ThisDerived1'}}
-    self.derivedFunc0() // expected-error {{missing argument}}
+    self.derivedFunc0() // expected-error {{instance member 'derivedFunc0' cannot be used on type 'ThisDerived1'}}
     self.derivedFunc0(ThisBase1())() // expected-error {{cannot convert value of type 'ThisBase1' to expected argument type 'ThisDerived1'}}
     self.derivedFunc0(ThisDerived1())()
     self.derivedStaticVar = 42
@@ -260,7 +263,7 @@ class ThisDerived1 : ThisBase1 {
     self.derivedStaticFunc0()
 
     self.derivedExtProp = 42 // expected-error {{member 'derivedExtProp' cannot be used on type 'ThisDerived1'}}
-    self.derivedExtFunc0() // expected-error {{missing argument}}
+    self.derivedExtFunc0() // expected-error {{instance member 'derivedExtFunc0' cannot be used on type 'ThisDerived1'}}
     self.derivedExtStaticVar = 42
     self.derivedExtStaticProp = 42 // expected-error {{member 'derivedExtStaticProp' cannot be used on type 'ThisDerived1'}}
     self.derivedExtStaticFunc0()
@@ -291,9 +294,9 @@ class ThisDerived1 : ThisBase1 {
   class func staticTestSuper1() {
     super.baseInstanceVar = 42 // expected-error {{member 'baseInstanceVar' cannot be used on type 'ThisBase1'}}
     super.baseProp = 42 // expected-error {{member 'baseProp' cannot be used on type 'ThisBase1'}}
-    super.baseFunc0() // expected-error {{missing argument}}
+    super.baseFunc0() // expected-error {{instance member 'baseFunc0' cannot be used on type 'ThisBase1'}}
     super.baseFunc0(ThisBase1())()
-    super.baseFunc1(42) // expected-error {{cannot convert value of type 'Int' to expected argument type 'ThisBase1'}}
+    super.baseFunc1(42) // expected-error {{instance member 'baseFunc1' cannot be used on type 'ThisBase1'}}
     super.baseFunc1(ThisBase1())(42)
     super[0] = 42.0 // expected-error {{instance member 'subscript' cannot be used on type 'ThisBase1'}}
     super.baseStaticVar = 42
@@ -301,7 +304,7 @@ class ThisDerived1 : ThisBase1 {
     super.baseStaticFunc0()
 
     super.baseExtProp = 42 // expected-error {{member 'baseExtProp' cannot be used on type 'ThisBase1'}}
-    super.baseExtFunc0() // expected-error {{missing argument}}
+    super.baseExtFunc0() // expected-error {{instance member 'baseExtFunc0' cannot be used on type 'ThisBase1'}}
     super.baseExtStaticVar = 42 
     super.baseExtStaticProp = 42 // expected-error {{member 'baseExtStaticProp' cannot be used on type 'ThisBase1'}}
     super.baseExtStaticFunc0()
@@ -321,9 +324,9 @@ class ThisDerived1 : ThisBase1 {
 
     super.derivedExtProp = 42 // expected-error {{type 'ThisBase1' has no member 'derivedExtProp'}}
     super.derivedExtFunc0() // expected-error {{type 'ThisBase1' has no member 'derivedExtFunc0'}}
-    super.derivedExtStaticVar = 42 // expected-error {{type 'ThisBase1' has no member 'derivedExtStaticVar'}}
-    super.derivedExtStaticProp = 42 // expected-error {{type 'ThisBase1' has no member 'derivedExtStaticProp'}}
-    super.derivedExtStaticFunc0() // expected-error {{type 'ThisBase1' has no member 'derivedExtStaticFunc0'}}
+    super.derivedExtStaticVar = 42 // expected-error {{type 'ThisBase1' has no member 'derivedExtStaticVar'; did you mean 'baseExtStaticVar'?}}
+    super.derivedExtStaticProp = 42 // expected-error {{type 'ThisBase1' has no member 'derivedExtStaticProp'; did you mean 'baseExtStaticProp'?}}
+    super.derivedExtStaticFunc0() // expected-error {{type 'ThisBase1' has no member 'derivedExtStaticFunc0'; did you mean 'baseExtStaticFunc0'?}}
 
     var ds2 = super.DerivedNestedStruct() // expected-error {{type 'ThisBase1' has no member 'DerivedNestedStruct'}}
     var dc2 = super.DerivedNestedClass() // expected-error {{type 'ThisBase1' has no member 'DerivedNestedClass'}}
@@ -331,11 +334,11 @@ class ThisDerived1 : ThisBase1 {
     var do3 = super.DerivedNestedUnion.DerivedUnionX(24) // expected-error {{type 'ThisBase1' has no member 'DerivedNestedUnion'}}
     var dt2 = super.DerivedNestedTypealias(42) // expected-error {{type 'ThisBase1' has no member 'DerivedNestedTypealias'}}
 
-    var des2 = super.DerivedExtNestedStruct() // expected-error {{type 'ThisBase1' has no member 'DerivedExtNestedStruct'}}
-    var dec2 = super.DerivedExtNestedClass() // expected-error {{type 'ThisBase1' has no member 'DerivedExtNestedClass'}}
+    var des2 = super.DerivedExtNestedStruct() // expected-error {{type 'ThisBase1' has no member 'DerivedExtNestedStruct'; did you mean 'BaseExtNestedStruct'?}}
+    var dec2 = super.DerivedExtNestedClass() // expected-error {{type 'ThisBase1' has no member 'DerivedExtNestedClass'; did you mean 'BaseExtNestedClass'?}}
     var deo2 = super.DerivedExtUnionX(24) // expected-error {{type 'ThisBase1' has no member 'DerivedExtUnionX'}}
-    var deo3 = super.DerivedExtNestedUnion.DerivedExtUnionX(24) // expected-error {{type 'ThisBase1' has no member 'DerivedExtNestedUnion'}}
-    var det2 = super.DerivedExtNestedTypealias(42) // expected-error {{type 'ThisBase1' has no member 'DerivedExtNestedTypealias'}}
+    var deo3 = super.DerivedExtNestedUnion.DerivedExtUnionX(24) // expected-error {{type 'ThisBase1' has no member 'DerivedExtNestedUnion'; did you mean 'BaseExtNestedUnion'?}}
+    var det2 = super.DerivedExtNestedTypealias(42) // expected-error {{type 'ThisBase1' has no member 'DerivedExtNestedTypealias'; did you mean 'BaseExtNestedTypealias'?}}
 
     super.Type // expected-error {{type 'ThisBase1' has no member 'Type'}}
   }
@@ -351,26 +354,26 @@ extension ThisBase1 {
 
   func baseExtFunc0() {}
 
-  var baseExtStaticVar: Int // expected-error {{extensions may not contain stored properties}}
+  var baseExtStaticVar: Int // expected-error {{extensions must not contain stored properties}} // expected-note 2 {{'baseExtStaticVar' declared here}}
 
-  var baseExtStaticProp: Int {
+  var baseExtStaticProp: Int { // expected-note 2 {{'baseExtStaticProp' declared here}}
     get {
       return 42
     }
     set {}
   }
 
-  class func baseExtStaticFunc0() {}
+  class func baseExtStaticFunc0() {} // expected-note {{'baseExtStaticFunc0' declared here}}
 
-  struct BaseExtNestedStruct {}
-  class BaseExtNestedClass {
+  struct BaseExtNestedStruct {} // expected-note {{did you mean 'BaseExtNestedStruct'?}} // expected-note {{'BaseExtNestedStruct' declared here}}
+  class BaseExtNestedClass { // expected-note {{'BaseExtNestedClass' declared here}}
     init() { }
   }
-  enum BaseExtNestedUnion {
+  enum BaseExtNestedUnion { // expected-note {{'BaseExtNestedUnion' declared here}}
     case BaseExtUnionX(Int)
   }
 
-  typealias BaseExtNestedTypealias = Int
+  typealias BaseExtNestedTypealias = Int // expected-note {{did you mean 'BaseExtNestedTypealias'?}} // expected-note {{'BaseExtNestedTypealias' declared here}}
 }
 
 extension ThisDerived1 {
@@ -383,7 +386,7 @@ extension ThisDerived1 {
 
   func derivedExtFunc0() {}
 
-  var derivedExtStaticVar: Int // expected-error {{extensions may not contain stored properties}}
+  var derivedExtStaticVar: Int // expected-error {{extensions must not contain stored properties}}
 
   var derivedExtStaticProp: Int {
     get {
@@ -398,7 +401,7 @@ extension ThisDerived1 {
   class DerivedExtNestedClass {
     init() { }
   }
-  enum DerivedExtNestedUnion {
+  enum DerivedExtNestedUnion { // expected-note {{did you mean 'DerivedExtNestedUnion'?}}
     case DerivedExtUnionX(Int)
   }
 
@@ -457,7 +460,7 @@ protocol MyProto {
 
 // <rdar://problem/14488311>
 struct DefaultArgumentFromExtension {
-  func g(_ x: (DefaultArgumentFromExtension) -> () -> () = f) {
+  func g(_ x: @escaping (DefaultArgumentFromExtension) -> () -> () = f) {
     let f = 42
     var x2 = x
     x2 = f // expected-error{{cannot assign value of type 'Int' to type '(DefaultArgumentFromExtension) -> () -> ()'}}
@@ -485,9 +488,149 @@ class Test19935319 {
   func getFoo() -> Int {}
 }
 
+class Test19935319G<T> {
+  let i = getFoo()
+  // expected-error@-1 {{cannot use instance member 'getFoo' within property initializer; property initializers run before 'self' is available}}
+  func getFoo() -> Int { return 42 }
+}
+
+// <rdar://problem/27013358> Crash using instance member as default parameter
+class rdar27013358 {
+  let defaultValue = 1
+  func returnTwo() -> Int {
+    return 2
+  }
+  init(defaulted value: Int = defaultValue) {} // expected-error {{cannot use instance member 'defaultValue' as a default parameter}}
+  init(another value: Int = returnTwo()) {} // expected-error {{cannot use instance member 'returnTwo' as a default parameter}}
+}
+
+class rdar27013358G<T> {
+  let defaultValue = 1
+  func returnTwo() -> Int {
+    return 2
+  }
+  init(defaulted value: Int = defaultValue) {} // expected-error {{cannot use instance member 'defaultValue' as a default parameter}}
+  init(another value: Int = returnTwo()) {} // expected-error {{cannot use instance member 'returnTwo' as a default parameter}}
+}
+
 // <rdar://problem/23904262> QoI: ivar default initializer cannot reference other default initialized ivars?
 class r23904262 {
   let x = 1
   let y = x // expected-error {{cannot use instance member 'x' within property initializer; property initializers run before 'self' is available}}
 }
 
+
+// <rdar://problem/21677702> Static method reference in static var doesn't work
+class r21677702 {
+  static func method(value: Int) -> Int { return value }
+  static let x = method(value: 123)
+  static let y = method(123) // expected-error {{missing argument label 'value:' in call}}
+}
+
+
+// <rdar://problem/31762378> lazy properties don't have to use "self." in their initializers.
+class r16954496 {
+  func bar() {}
+  lazy var x: Array<() -> Void> = [bar]
+}
+
+
+
+// <rdar://problem/27413116> [Swift] Using static constant defined in enum when in switch statement doesn't compile
+enum MyEnum {
+  case one
+  case two
+  case oneTwoThree
+
+  static let kMyConstant = "myConstant"
+}
+
+switch "someString" {
+case MyEnum.kMyConstant: // this causes a compiler error
+  print("yay")
+case MyEnum.self.kMyConstant: // this works fine
+  print("hmm")
+default:
+  break
+}
+
+func foo() {
+  _ = MyEnum.One // expected-error {{enum type 'MyEnum' has no case 'One'; did you mean 'one'}}{{14-17=one}}
+  _ = MyEnum.Two // expected-error {{enum type 'MyEnum' has no case 'Two'; did you mean 'two'}}{{14-17=two}}
+  _ = MyEnum.OneTwoThree // expected-error {{enum type 'MyEnum' has no case 'OneTwoThree'; did you mean 'oneTwoThree'}}{{14-25=oneTwoThree}}
+}
+
+enum MyGenericEnum<T> {
+  case one(T)
+  case oneTwo(T)
+}
+
+func foo1() {
+  _ = MyGenericEnum<Int>.One // expected-error {{enum type 'MyGenericEnum<Int>' has no case 'One'; did you mean 'one'}}{{26-29=one}}
+  _ = MyGenericEnum<Int>.OneTwo // expected-error {{enum type 'MyGenericEnum<Int>' has no case 'OneTwo'; did you mean 'oneTwo'}}{{26-32=oneTwo}}
+}
+
+// SR-4082
+func foo2() {
+  let x = 5
+  if x < 0, let x = Optional(1) { } // expected-warning {{immutable value 'x' was never used; consider replacing with '_' or removing it}}
+}
+
+struct Person {
+  let name: String?
+}
+
+struct Company { // expected-note 2{{'Company' declared here}}
+  let owner: Person?
+}
+
+func test1() {
+  let example: Company? = Company(owner: Person(name: "Owner"))
+  if let person = aCompany.owner, // expected-error {{use of unresolved identifier 'aCompany'; did you mean 'Company'?}}
+     let aCompany = example {
+    _ = person
+  }
+}
+
+func test2() {
+  let example: Company? = Company(owner: Person(name: "Owner"))
+  guard let person = aCompany.owner, // expected-error {{use of unresolved identifier 'aCompany'; did you mean 'Company'?}}
+        let aCompany = example else { return }
+}
+
+func test3() {
+  var c: String? = "c" // expected-note {{'c' declared here}}
+  if let a = b = c, let b = c { // expected-error {{use of unresolved identifier 'b'; did you mean 'c'?}}
+    _ = b
+  }
+}
+
+// rdar://problem/22587551
+class ShadowingGenericParameter<T> {
+  typealias T = Int
+  func foo (t : T) {}
+}
+
+_ = ShadowingGenericParameter<String>().foo(t: "hi")
+
+// rdar://problem/51266778
+struct PatternBindingWithTwoVars1 { var x = 3, y = x }
+// expected-error@-1 {{cannot use instance member 'x' within property initializer; property initializers run before 'self' is available}}
+
+struct PatternBindingWithTwoVars2 { var x = y, y = 3 }
+// expected-error@-1 {{type 'PatternBindingWithTwoVars2' has no member 'y'}}
+// expected-note@-2 {{did you mean 'x'?}}
+// expected-note@-3 {{did you mean 'y'?}}
+
+// This one should be accepted, but for now PatternBindingDecl validation
+// circularity detection is not fine grained enough.
+struct PatternBindingWithTwoVars3 { var x = y, y = x }
+// expected-error@-1 {{type 'PatternBindingWithTwoVars3' has no member 'y'}}
+// expected-note@-2 {{did you mean 'x'?}}
+// expected-note@-3 {{did you mean 'y'?}}
+
+// https://bugs.swift.org/browse/SR-9015
+func sr9015() {
+  let closure1 = { closure2() } // expected-error {{let 'closure1' references itself}}
+  let closure2 = { closure1() }
+}

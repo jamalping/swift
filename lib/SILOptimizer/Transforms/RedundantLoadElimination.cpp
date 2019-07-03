@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -85,7 +85,7 @@
 #include "swift/SILOptimizer/PassManager/Transforms.h"
 #include "swift/SILOptimizer/Utils/CFG.h"
 #include "swift/SILOptimizer/Utils/Local.h"
-#include "swift/SILOptimizer/Utils/LSBase.h"
+#include "swift/SILOptimizer/Utils/LoadStoreOptUtils.h"
 #include "swift/SILOptimizer/Utils/SILSSAUpdater.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/MapVector.h"
@@ -98,12 +98,9 @@ using namespace swift;
 
 STATISTIC(NumForwardedLoads, "Number of loads forwarded");
 
-/// Return the deallocate stack instructions corresponding to the given
-/// AllocStackInst.
-static SILInstruction *findAllocStackInst(SILInstruction *I) {
-  if (DeallocStackInst *DSI = dyn_cast<DeallocStackInst>(I))
-    return dyn_cast<SILInstruction>(DSI->getOperand());
-  return nullptr;
+static AllocStackInst *findAllocStackInst(DeallocStackInst *I) {
+  // It's allowed to be undef in unreachable code.
+  return dyn_cast<AllocStackInst>(I->getOperand());
 }
 
 /// ComputeAvailSetMax - If we ignore all unknown writes, what is the max
@@ -149,15 +146,18 @@ static bool inline isPerformingRLE(RLEKind Kind) {
 /// general sense but are inert from a load store perspective.
 static bool isRLEInertInstruction(SILInstruction *Inst) {
   switch (Inst->getKind()) {
-  case ValueKind::StrongRetainInst:
-  case ValueKind::StrongRetainUnownedInst:
-  case ValueKind::UnownedRetainInst:
-  case ValueKind::RetainValueInst:
-  case ValueKind::DeallocStackInst:
-  case ValueKind::CondFailInst:
-  case ValueKind::IsUniqueInst:
-  case ValueKind::IsUniqueOrPinnedInst:
-  case ValueKind::FixLifetimeInst:
+#define ALWAYS_OR_SOMETIMES_LOADABLE_CHECKED_REF_STORAGE(Name, ...) \
+  case SILInstructionKind::Name##RetainInst: \
+  case SILInstructionKind::StrongRetain##Name##Inst:
+#include "swift/AST/ReferenceStorage.def"
+  case SILInstructionKind::StrongRetainInst:
+  case SILInstructionKind::RetainValueInst:
+  case SILInstructionKind::DeallocStackInst:
+  case SILInstructionKind::CondFailInst:
+  case SILInstructionKind::IsEscapingClosureInst:
+  case SILInstructionKind::IsUniqueInst:
+  case SILInstructionKind::FixLifetimeInst:
+  case SILInstructionKind::CopyUnownedValueInst:
     return true;
   default:
     return false;
@@ -179,7 +179,7 @@ namespace {
 constexpr unsigned MaxLSLocationBBMultiplicationNone = 128*128;
 
 /// we could run optimistic RLE on functions with less than 64 basic blocks
-/// and 64 locations which is a sizeable function.
+/// and 64 locations which is a sizable function.
 constexpr unsigned MaxLSLocationBBMultiplicationPessimistic = 64*64;
 
 /// forward declaration.
@@ -205,27 +205,27 @@ private:
   /// A bit vector for which the ith bit represents the ith LSLocation in
   /// LocationVault. If the bit is set, then the location currently has an
   /// downward visible value at the beginning of the basic block.
-  llvm::SmallBitVector ForwardSetIn;
+  SmallBitVector ForwardSetIn;
 
   /// A bit vector for which the ith bit represents the ith LSLocation in
   /// LocationVault. If the bit is set, then the location currently has an
   /// downward visible value at the end of the basic block.
-  llvm::SmallBitVector ForwardSetOut;
+  SmallBitVector ForwardSetOut;
 
   /// A bit vector for which the ith bit represents the ith LSLocation in
   /// LocationVault. If we ignore all unknown write, what's the maximum set
   /// of available locations at the current position in the basic block.
-  llvm::SmallBitVector ForwardSetMax;
+  SmallBitVector ForwardSetMax;
 
   /// A bit vector for which the ith bit represents the ith LSLocation in
   /// LocationVault. If the bit is set, then the basic block generates a
   /// value for the location.
-  llvm::SmallBitVector BBGenSet;
+  SmallBitVector BBGenSet;
 
   /// A bit vector for which the ith bit represents the ith LSLocation in
   /// LocationVault. If the bit is set, then the basic block kills the
   /// value for the location.
-  llvm::SmallBitVector BBKillSet;
+  SmallBitVector BBKillSet;
 
   /// This is map between LSLocations and their available values at the
   /// beginning of this basic block.
@@ -237,7 +237,7 @@ private:
 
   /// Keeps a list of replaceable instructions in the current basic block as
   /// well as their SILValue replacement.
-  llvm::DenseMap<SILInstruction *, SILValue> RedundantLoads;
+  llvm::DenseMap<SingleValueInstruction *, SILValue> RedundantLoads;
 
   /// LSLocation read or written has been extracted, expanded and mapped to the
   /// bit position in the bitvector. Update it in the ForwardSetIn of the
@@ -273,9 +273,9 @@ private:
                     SILValue Val, RLEKind Kind);
 
   /// BitVector manipulation functions.
-  void startTrackingLocation(llvm::SmallBitVector &BV, unsigned B);
-  void stopTrackingLocation(llvm::SmallBitVector &BV, unsigned B);
-  bool isTrackingLocation(llvm::SmallBitVector &BV, unsigned B);
+  void startTrackingLocation(SmallBitVector &BV, unsigned B);
+  void stopTrackingLocation(SmallBitVector &BV, unsigned B);
+  bool isTrackingLocation(SmallBitVector &BV, unsigned B);
   void startTrackingValue(ValueTableMap &VM, unsigned L, unsigned V);
   void stopTrackingValue(ValueTableMap &VM, unsigned B);
 
@@ -352,7 +352,9 @@ public:
 
   /// Returns the redundant loads and their replacement in the currently basic
   /// block.
-  llvm::DenseMap<SILInstruction *, SILValue> &getRL() { return RedundantLoads; }
+  llvm::DenseMap<SingleValueInstruction *, SILValue> &getRL() {
+    return RedundantLoads;
+  }
 
   /// Look into the value for the given LSLocation at end of the basic block,
   /// return one of the three ValueState type.
@@ -386,10 +388,10 @@ public:
   void processUnknownWriteInstForRLE(RLEContext &Ctx, SILInstruction *I);
 
 
-  void processDeallocStackInst(RLEContext &Ctx, SILInstruction *I,
+  void processDeallocStackInst(RLEContext &Ctx, DeallocStackInst *I,
                                RLEKind Kind);
-  void processDeallocStackInstForGenKillSet(RLEContext &Ctx, SILInstruction *I);
-  void processDeallocStackInstForRLE(RLEContext &Ctx, SILInstruction *I);
+  void processDeallocStackInstForGenKillSet(RLEContext &Ctx, DeallocStackInst *I);
+  void processDeallocStackInstForRLE(RLEContext &Ctx, DeallocStackInst *I);
 
   /// Process LoadInst. Extract LSLocations from LoadInst.
   void processLoadInst(RLEContext &Ctx, LoadInst *LI, RLEKind Kind);
@@ -400,6 +402,10 @@ public:
   /// Returns a *single* forwardable SILValue for the given LSLocation right
   /// before the InsertPt instruction.
   SILValue reduceValuesAtEndOfBlock(RLEContext &Ctx, LSLocation &L);
+
+#ifndef NDEBUG
+  void dump(RLEContext &Ctx);
+#endif
 };
 
 } // end anonymous namespace
@@ -409,8 +415,6 @@ public:
 //===----------------------------------------------------------------------===//
 
 namespace {
-
-using BBValueMap = llvm::DenseMap<SILBasicBlock *, SILValue>;
 
 /// This class stores global state that we use when computing redundant load and
 /// their replacement in each basic block.
@@ -440,8 +444,8 @@ private:
   /// order of the given function.
   PostOrderFunctionInfo *PO;
 
-  /// The epilogue release matcher we are using.
-  ConsumedArgToEpilogueReleaseMatcher& ERM;
+  /// Epilogue release analysis.
+  EpilogueARCFunctionInfo *EAFI;
 
   /// Keeps all the locations for the current function. The BitVector in each
   /// BlockState is then laid on top of it to keep track of which LSLocation
@@ -477,19 +481,28 @@ private:
   /// walked, i.e. when the we generate the genset and killset.
   llvm::DenseSet<SILBasicBlock *> BBWithLoads;
 
+  /// If set, RLE ignores loads from that array type.
+  NominalTypeDecl *ArrayType;
+
+#ifndef NDEBUG
+  SILPrintContext printCtx;
+#endif
+
 public:
   RLEContext(SILFunction *F, SILPassManager *PM, AliasAnalysis *AA,
              TypeExpansionAnalysis *TE, PostOrderFunctionInfo *PO,
-             ConsumedArgToEpilogueReleaseMatcher &ERM);
+             EpilogueARCFunctionInfo *EAFI, bool disableArrayLoads);
 
   RLEContext(const RLEContext &) = delete;
-  RLEContext(RLEContext &&) = default;
+  RLEContext(RLEContext &&) = delete;
+  RLEContext &operator=(const RLEContext &) = delete;
+  RLEContext &operator=(RLEContext &&) = delete;
   ~RLEContext() = default;
 
   /// Entry point to redundant load elimination.
   bool run();
 
-  ConsumedArgToEpilogueReleaseMatcher &getERM() const { return ERM; };
+  SILFunction *getFunction() const { return Fn; }
 
   /// Use a set of ad hoc rules to tell whether we should run a pessimistic
   /// one iteration data flow on the function.
@@ -516,6 +529,9 @@ public:
 
   /// Returns the current type expansion analysis we are .
   TypeExpansionAnalysis *getTE() const { return TE; }
+
+  /// Returns current epilogue release function info we are using.
+  EpilogueARCFunctionInfo *getEAFI() const { return EAFI; }
 
   /// Returns the SILValue base to bit index.
   LSLocationBaseMap &getBM() { return BaseToLocIndex; }
@@ -544,6 +560,17 @@ public:
   /// Transitively collect all the values that make up this location and
   /// create a SILArgument out of them.
   SILValue computePredecessorLocationValue(SILBasicBlock *BB, LSLocation &L);
+
+  /// Returns the LoadInst if \p Inst is a load inst we want to handle.
+  LoadInst *isLoadInstToHandle(SILInstruction *Inst) {
+    if (auto *LI = dyn_cast<LoadInst>(Inst)) {
+      if (!ArrayType ||
+          LI->getType().getNominalOrBoundGenericNominal() != ArrayType) {
+        return LI;
+      }
+    }
+    return nullptr;
+  }
 };
 
 } // end anonymous namespace
@@ -556,15 +583,15 @@ void BlockState::stopTrackingValue(ValueTableMap &VM, unsigned B) {
   VM.erase(B);
 }
  
-bool BlockState::isTrackingLocation(llvm::SmallBitVector &BV, unsigned B) {
+bool BlockState::isTrackingLocation(SmallBitVector &BV, unsigned B) {
   return BV.test(B);
 }
  
-void BlockState::startTrackingLocation(llvm::SmallBitVector &BV, unsigned B) {
+void BlockState::startTrackingLocation(SmallBitVector &BV, unsigned B) {
   BV.set(B);
 }
  
-void BlockState::stopTrackingLocation(llvm::SmallBitVector &BV, unsigned B) {
+void BlockState::stopTrackingLocation(SmallBitVector &BV, unsigned B) {
   BV.reset(B);
 }
 
@@ -584,7 +611,7 @@ void BlockState::mergePredecessorsAvailSetMax(RLEContext &Ctx) {
 
 void BlockState::mergePredecessorAvailSet(RLEContext &Ctx) {
   // Clear the state if the basic block has no predecessor.
-  if (BB->getPreds().begin() == BB->getPreds().end()) {
+  if (BB->getPredecessorBlocks().begin() == BB->getPredecessorBlocks().end()) {
     ForwardSetIn.reset();
     return;
   }
@@ -599,7 +626,7 @@ void BlockState::mergePredecessorAvailSet(RLEContext &Ctx) {
 
 void BlockState::mergePredecessorAvailSetAndValue(RLEContext &Ctx) {
   // Clear the state if the basic block has no predecessor.
-  if (BB->getPreds().begin() == BB->getPreds().end()) {
+  if (BB->getPredecessorBlocks().begin() == BB->getPredecessorBlocks().end()) {
     ForwardSetIn.reset();
     ForwardValIn.clear();
     return;
@@ -712,7 +739,9 @@ bool BlockState::setupRLE(RLEContext &Ctx, SILInstruction *I, SILValue Mem) {
   // replace it with, we can record it for now and forwarded it after all the
   // forwardable values are recorded in the function.
   //
-  RedundantLoads[I] = TheForwardingValue;
+  RedundantLoads[cast<SingleValueInstruction>(I)] = TheForwardingValue;
+
+  LLVM_DEBUG(llvm::dbgs() << "FORWARD " << TheForwardingValue << "  to" << *I);
   return true;
 }
 
@@ -968,7 +997,7 @@ void BlockState::processUnknownWriteInst(RLEContext &Ctx, SILInstruction *I,
                                          RLEKind Kind) {
   // If this is a release on a guaranteed parameter, it can not call deinit,
   // which might read or write memory.
-  if (isIntermediateRelease(I, Ctx.getERM()))
+  if (isIntermediateRelease(I, Ctx.getEAFI()))
     return;
 
   // Are we computing the genset and killset ?
@@ -987,7 +1016,7 @@ void BlockState::processUnknownWriteInst(RLEContext &Ctx, SILInstruction *I,
 }
 
 void BlockState::
-processDeallocStackInstForGenKillSet(RLEContext &Ctx, SILInstruction *I) {
+processDeallocStackInstForGenKillSet(RLEContext &Ctx, DeallocStackInst *I) {
   SILValue ASI = findAllocStackInst(I);
   for (unsigned i = 0; i < LocationNum; ++i) {
     LSLocation &R = Ctx.getLocation(i);
@@ -1000,7 +1029,7 @@ processDeallocStackInstForGenKillSet(RLEContext &Ctx, SILInstruction *I) {
 }
 
 void BlockState::
-processDeallocStackInstForRLE(RLEContext &Ctx, SILInstruction *I) {
+processDeallocStackInstForRLE(RLEContext &Ctx, DeallocStackInst *I) {
   SILValue ASI = findAllocStackInst(I);
   for (unsigned i = 0; i < LocationNum; ++i) {
     LSLocation &R = Ctx.getLocation(i);
@@ -1013,7 +1042,7 @@ processDeallocStackInstForRLE(RLEContext &Ctx, SILInstruction *I) {
 }
 
 void BlockState::
-processDeallocStackInst(RLEContext &Ctx, SILInstruction *I, RLEKind Kind) {
+processDeallocStackInst(RLEContext &Ctx, DeallocStackInst *I, RLEKind Kind) {
   // Are we computing the genset and killset ?
   if (isComputeAvailGenKillSet(Kind)) {
     processDeallocStackInstForGenKillSet(Ctx, I);
@@ -1041,7 +1070,7 @@ void BlockState::processInstructionWithKind(RLEContext &Ctx,
 
   // This is a LoadInst. Let's see if we can find a previous loaded, stored
   // value to use instead of this load.
-  if (auto *LI = dyn_cast<LoadInst>(Inst)) {
+  if (auto *LI = Ctx.isLoadInstToHandle(Inst)) {
     processLoadInst(Ctx, LI, Kind);
     return;
   }
@@ -1064,9 +1093,11 @@ void BlockState::processInstructionWithKind(RLEContext &Ctx,
   // that it and its operands cannot alias a load we have visited,
   // invalidate that load.
   if (Inst->mayWriteToMemory()) {
+    LLVM_DEBUG(llvm::dbgs() << "WRITE " << *Inst);
     processUnknownWriteInst(Ctx, Inst, Kind);
     return;
   }
+  LLVM_DEBUG(llvm::dbgs() << "READ " << *Inst);
 }
 
 RLEContext::ProcessKind
@@ -1095,7 +1126,7 @@ getProcessFunctionKind(unsigned LoadCount, unsigned StoreCount) {
   llvm::DenseSet<SILBasicBlock *> HandledBBs;
   for (SILBasicBlock *B : PO->getReversePostOrder()) {
     ++BBCount;
-    for (auto X : B->getPreds()) {
+    for (auto X : B->getPredecessorBlocks()) {
       if (HandledBBs.find(X) == HandledBBs.end()) {
         RunOneIteration = false;
         break;
@@ -1120,14 +1151,54 @@ getProcessFunctionKind(unsigned LoadCount, unsigned StoreCount) {
   return ProcessKind::ProcessMultipleIterations;
 }
 
+#ifndef NDEBUG
+void BlockState::dump(RLEContext &Ctx) {
+  for (unsigned i = 0; i < LocationNum; ++i) {
+    if (!isTrackingLocation(ForwardSetMax, i))
+      continue;
+
+    llvm::dbgs() << "Loc #" << i << ":" << (BBGenSet[i] ? " Gen" : "")
+                 << (BBKillSet[i] ? " Kill" : "");
+    if (!ForwardSetIn.empty() && ForwardSetIn.test(i)) {
+      llvm::dbgs() << " IN ";
+      ValueTableMap::const_iterator inIter = ForwardValIn.find(i);
+      if (inIter != ForwardValIn.end()) {
+        if (SILValue base = Ctx.getValue(inIter->second).getBase())
+          llvm::dbgs() << base;
+        else
+          llvm::dbgs() << "no base";
+      }
+    }
+    if (!ForwardSetOut.empty() && ForwardSetOut.test(i)) {
+      llvm::dbgs() << " OUT ";
+      ValueTableMap::const_iterator outIter = ForwardValOut.find(i);
+      if (outIter != ForwardValOut.end()) {
+        if (SILValue base = Ctx.getValue(outIter->second).getBase())
+          llvm::dbgs() << base;
+        else
+          llvm::dbgs() << "no base";
+      }
+    }
+    llvm::dbgs() << "\n";
+  }
+}
+#endif
+
 //===----------------------------------------------------------------------===//
 //                          RLEContext Implementation
 //===----------------------------------------------------------------------===//
 
 RLEContext::RLEContext(SILFunction *F, SILPassManager *PM, AliasAnalysis *AA,
                        TypeExpansionAnalysis *TE, PostOrderFunctionInfo *PO,
-                       ConsumedArgToEpilogueReleaseMatcher &ERM)
-    : Fn(F), PM(PM), AA(AA), TE(TE), PO(PO), ERM(ERM) {
+                       EpilogueARCFunctionInfo *EAFI, bool disableArrayLoads)
+    : Fn(F), PM(PM), AA(AA), TE(TE), PO(PO), EAFI(EAFI),
+      ArrayType(disableArrayLoads ?
+                F->getModule().getASTContext().getArrayDecl() : nullptr)
+#ifndef NDEBUG
+      ,
+      printCtx(llvm::dbgs(), /*Verbose=*/false, /*Sorted=*/true)
+#endif
+{
 }
 
 LSLocation &RLEContext::getLocation(const unsigned index) {
@@ -1193,12 +1264,12 @@ BlockState::ValueState BlockState::getValueStateAtEndOfBlock(RLEContext &Ctx,
 
 SILValue RLEContext::computePredecessorLocationValue(SILBasicBlock *BB,
                                                      LSLocation &L) {
-  BBValueMap Values;
+  llvm::SmallVector<std::pair<SILBasicBlock *, SILValue>, 8> Values;
   llvm::DenseSet<SILBasicBlock *> HandledBBs;
   llvm::SmallVector<SILBasicBlock *, 8> WorkList;
 
   // Push in all the predecessors to get started.
-  for (auto Pred : BB->getPreds()) {
+  for (auto Pred : BB->getPredecessorBlocks()) {
     WorkList.push_back(Pred);
   }
 
@@ -1222,14 +1293,14 @@ SILValue RLEContext::computePredecessorLocationValue(SILBasicBlock *BB,
     // locations, collect and reduce them into a single value in the current
     // basic block.
     if (Forwarder.isConcreteValues(*this, L)) {
-      Values[CurBB] = Forwarder.reduceValuesAtEndOfBlock(*this, L);
+      Values.push_back({CurBB, Forwarder.reduceValuesAtEndOfBlock(*this, L)});
       continue;
     }
 
     // This BlockState does not contain concrete value for any of the expanded
     // locations, collect in this block's predecessors.
     if (Forwarder.isCoverValues(*this, L)) {
-      for (auto Pred : CurBB->getPreds()) {
+      for (auto Pred : CurBB->getPredecessorBlocks()) {
         if (HandledBBs.find(Pred) != HandledBBs.end())
           continue;
         WorkList.push_back(Pred);
@@ -1246,7 +1317,7 @@ SILValue RLEContext::computePredecessorLocationValue(SILBasicBlock *BB,
 
     // Reduce the available values into a single SILValue we can use to forward
     SILInstruction *IPt = CurBB->getTerminator();
-    Values[CurBB] = LSValue::reduce(L, &BB->getModule(), LSValues, IPt);
+    Values.push_back({CurBB, LSValue::reduce(L, &BB->getModule(), LSValues, IPt)});
   }
 
   // Finally, collect all the values for the SILArgument, materialize it using
@@ -1262,7 +1333,7 @@ SILValue RLEContext::computePredecessorLocationValue(SILBasicBlock *BB,
 bool RLEContext::collectLocationValues(SILBasicBlock *BB, LSLocation &L,
                                        LSLocationValueMap &Values,
                                        ValueTableMap &VM) {
-  LSLocationSet CSLocs;
+  LSLocationList CSLocs;
   LSLocationList Locs;
   LSLocation::expand(L, &BB->getModule(), Locs, TE);
 
@@ -1273,7 +1344,7 @@ bool RLEContext::collectLocationValues(SILBasicBlock *BB, LSLocation &L,
     Values[X] = getValue(VM[getLocationBit(X)]);
     if (!Values[X].isCoveringValue())
       continue;
-    CSLocs.insert(X);
+    CSLocs.push_back(X);
   }
 
   // For locations which we do not have concrete values for in this basic
@@ -1305,6 +1376,10 @@ bool RLEContext::collectLocationValues(SILBasicBlock *BB, LSLocation &L,
 
 void RLEContext::processBasicBlocksForGenKillSet() {
   for (SILBasicBlock *BB : PO->getReversePostOrder()) {
+    LLVM_DEBUG(llvm::dbgs() << "PROCESS " << printCtx.getID(BB)
+                            << " for Gen/Kill:\n";
+               BB->print(llvm::dbgs(), printCtx));
+
     BlockState &S = getBlockState(BB);
 
     // Compute the AvailSetMax at the beginning of the basic block.
@@ -1326,6 +1401,7 @@ void RLEContext::processBasicBlocksForGenKillSet() {
 
       S.processInstructionWithKind(*this, &*I, RLEKind::ComputeAvailGenKillSet);
     }
+    LLVM_DEBUG(S.dump(*this));
   }
 }
 
@@ -1344,6 +1420,8 @@ void RLEContext::processBasicBlocksWithGenKillSet() {
   }
   while (!WorkList.empty()) {
     SILBasicBlock *BB = WorkList.pop_back_val();
+    LLVM_DEBUG(llvm::dbgs() << "PROCESS " << printCtx.getID(BB)
+                            << " with Gen/Kill.\n");
     HandledBBs.erase(BB);
 
     // Intersection.
@@ -1360,11 +1438,15 @@ void RLEContext::processBasicBlocksWithGenKillSet() {
         WorkList.push_back(X);
       }
     }
+    LLVM_DEBUG(Forwarder.dump(*this));
   }
 }
 
 void RLEContext::processBasicBlocksForAvailValue() {
   for (SILBasicBlock *BB : PO->getReversePostOrder()) {
+    LLVM_DEBUG(llvm::dbgs() << "PROCESS " << printCtx.getID(BB)
+                            << " for available.\n");
+
     BlockState &Forwarder = getBlockState(BB);
 
     // Merge the predecessors. After merging, BlockState now contains
@@ -1381,11 +1463,16 @@ void RLEContext::processBasicBlocksForAvailValue() {
     // the available BitVector here as they should have been initialized and
     // stabilized in the processBasicBlocksWithGenKillSet.
     Forwarder.updateForwardValOut();
+
+    LLVM_DEBUG(Forwarder.dump(*this));
   }
 }
 
 void RLEContext::processBasicBlocksForRLE(bool Optimistic) {
   for (SILBasicBlock *BB : PO->getReversePostOrder()) {
+    LLVM_DEBUG(llvm::dbgs() << "PROCESS " << printCtx.getID(BB)
+                            << " for RLE.\n");
+
     // If we know this is not a one iteration function which means its
     // forward sets have been computed and converged, 
     // and this basic block does not even have LoadInsts, there is no point
@@ -1400,6 +1487,8 @@ void RLEContext::processBasicBlocksForRLE(bool Optimistic) {
     // lists of available LSLocations and their values that reach the
     // beginning of the basic block along all paths.
     Forwarder.mergePredecessorAvailSetAndValue(*this);
+
+    LLVM_DEBUG(Forwarder.dump(*this));
 
     // Perform the actual redundant load elimination.
     Forwarder.processBasicBlockWithKind(*this, RLEKind::PerformRLE);
@@ -1477,6 +1566,11 @@ bool RLEContext::run() {
                           BBToProcess.find(&B) != BBToProcess.end());
   }
 
+  LLVM_DEBUG(for (unsigned i = 0; i < LocationVault.size(); ++i) {
+    llvm::dbgs() << "LSLocation #" << i;
+    getLocation(i).print(llvm::dbgs(), &Fn->getModule());
+  });
+
   if (Optimistic)
     runIterativeRLE();
 
@@ -1485,7 +1579,7 @@ bool RLEContext::run() {
   processBasicBlocksForRLE(Optimistic);
 
   // Finally, perform the redundant load replacements.
-  llvm::DenseSet<SILInstruction *> InstsToDelete;
+  llvm::SmallVector<SILInstruction *, 16> InstsToDelete;
   bool SILChanged = false;
   for (auto &B : *Fn) {
     auto &State = BBToLocState[&B];
@@ -1499,14 +1593,17 @@ bool RLEContext::run() {
     // NOTE: we could end up with different SIL depending on the ordering load
     // forwarding is performed.
     for (auto I = B.rbegin(), E = B.rend(); I != E; ++I) {
-      auto Iter = Loads.find(&*I);
+      auto V = dyn_cast<SingleValueInstruction>(&*I);
+      if (!V)
+        continue;
+      auto Iter = Loads.find(V);
       if (Iter == Loads.end())
         continue;
-      DEBUG(llvm::dbgs() << "Replacing  " << SILValue(Iter->first) << "With "
-            << Iter->second);
+      LLVM_DEBUG(llvm::dbgs() << "Replacing  " << SILValue(Iter->first)
+                              << "With " << Iter->second);
       SILChanged = true;
       Iter->first->replaceAllUsesWith(Iter->second);
-      InstsToDelete.insert(Iter->first);
+      InstsToDelete.push_back(Iter->first);
       ++NumForwardedLoads;
     }
   }
@@ -1518,7 +1615,7 @@ bool RLEContext::run() {
     // used as the replacement Value, i.e. F.second, for some other RLE pairs.
     //
     // TODO: we should fix this, otherwise we are missing RLE opportunities.
-    if (!X->use_empty())
+    if (X->hasUsesOfAnyResult())
       continue;
     recursivelyDeleteTriviallyDeadInstructions(X, true);
   }
@@ -1533,21 +1630,30 @@ namespace {
 
 class RedundantLoadElimination : public SILFunctionTransform {
 
-  StringRef getName() override { return "SIL Redundant Load Elimination"; }
+private:
+  bool disableArrayLoads;
+
+public:
+
+  RedundantLoadElimination(bool disableArrayLoads)
+    : disableArrayLoads(disableArrayLoads) { }
 
   /// The entry point to the transformation.
   void run() override {
     SILFunction *F = getFunction();
-    DEBUG(llvm::dbgs() << "*** RLE on function: " << F->getName() << " ***\n");
+    // FIXME: Handle ownership.
+    if (F->hasOwnership())
+      return;
+
+    LLVM_DEBUG(llvm::dbgs() << "*** RLE on function: " << F->getName()
+                            << " ***\n");
 
     auto *AA = PM->getAnalysis<AliasAnalysis>();
     auto *TE = PM->getAnalysis<TypeExpansionAnalysis>();
     auto *PO = PM->getAnalysis<PostOrderAnalysis>()->get(F);
-    auto *RCFI = PM->getAnalysis<RCIdentityAnalysis>()->get(F);
+    auto *EAFI = PM->getAnalysis<EpilogueARCAnalysis>()->get(F);
 
-    ConsumedArgToEpilogueReleaseMatcher ERM(RCFI, F);
-
-    RLEContext RLE(F, PM, AA, TE, PO, ERM);
+    RLEContext RLE(F, PM, AA, TE, PO, EAFI, disableArrayLoads);
     if (RLE.run()) {
       invalidateAnalysis(SILAnalysis::InvalidationKind::Instructions);
     }
@@ -1556,6 +1662,10 @@ class RedundantLoadElimination : public SILFunctionTransform {
 
 } // end anonymous namespace
 
+SILTransform *swift::createEarlyRedundantLoadElimination() {
+  return new RedundantLoadElimination(/*disableArrayLoads=*/true);
+}
+
 SILTransform *swift::createRedundantLoadElimination() {
-  return new RedundantLoadElimination();
+  return new RedundantLoadElimination(/*disableArrayLoads=*/false);
 }

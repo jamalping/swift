@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -21,6 +21,7 @@
 #include "swift/AST/Decl.h"
 #include "swift/AST/Module.h"
 #include "swift/AST/PrettyStackTrace.h"
+#include "swift/AST/Types.h"
 #include "swift/Basic/PrimitiveParsing.h"
 #include "swift/Basic/SourceManager.h"
 #include "swift/Markup/Markup.h"
@@ -56,11 +57,11 @@ static SingleRawComment::CommentKind getCommentKind(StringRef Comment) {
 SingleRawComment::SingleRawComment(CharSourceRange Range,
                                    const SourceManager &SourceMgr)
     : Range(Range), RawText(SourceMgr.extractText(Range)),
-      Kind(static_cast<unsigned>(getCommentKind(RawText))),
-      EndLine(SourceMgr.getLineNumber(Range.getEnd())) {
+      Kind(static_cast<unsigned>(getCommentKind(RawText))) {
   auto StartLineAndColumn = SourceMgr.getLineAndColumn(Range.getStart());
   StartLine = StartLineAndColumn.first;
   StartColumn = StartLineAndColumn.second;
+  EndLine = SourceMgr.getLineNumber(Range.getEnd());
 }
 
 SingleRawComment::SingleRawComment(StringRef RawText, unsigned StartColumn)
@@ -107,8 +108,11 @@ static RawComment toRawComment(ASTContext &Context, CharSourceRange Range) {
   unsigned Offset = SourceMgr.getLocOffsetInBuffer(Range.getStart(), BufferID);
   unsigned EndOffset = SourceMgr.getLocOffsetInBuffer(Range.getEnd(), BufferID);
   LangOptions FakeLangOpts;
-  Lexer L(FakeLangOpts, SourceMgr, BufferID, nullptr, /*InSILMode=*/false,
-          CommentRetentionMode::ReturnAsTokens, Offset, EndOffset);
+  Lexer L(FakeLangOpts, SourceMgr, BufferID, nullptr, LexerMode::Swift,
+          HashbangMode::Disallowed,
+          CommentRetentionMode::ReturnAsTokens,
+          TriviaRetentionMode::WithoutTrivia,
+          Offset, EndOffset);
   SmallVector<SingleRawComment, 16> Comments;
   Token Tok;
   while (true) {
@@ -160,8 +164,8 @@ static const Decl* getGroupDecl(const Decl *D) {
   // Extensions always exist in the same group with the nominal.
   if (auto ED = dyn_cast_or_null<ExtensionDecl>(D->getDeclContext()->
                                                 getInnermostTypeContext())) {
-    if (auto ExtTy = ED->getExtendedType())
-      GroupD = ExtTy->getAnyNominal();
+    if (auto ExtNominal = ED->getExtendedNominal())
+      GroupD = ExtNominal;
   }
   return GroupD;
 }
@@ -203,44 +207,17 @@ Optional<unsigned> Decl::getSourceOrder() const {
   return None;
 }
 
-static StringRef extractBriefComment(ASTContext &Context, RawComment RC,
-                                     const Decl *D) {
-  PrettyStackTraceDecl StackTrace("extracting brief comment for", D);
+CharSourceRange RawComment::getCharSourceRange() {
+  if (this->isEmpty()) {
+    return CharSourceRange();
+  }
 
-  if (!D->canHaveComment())
-    return StringRef();
-
-  swift::markup::MarkupContext MC;
-  auto DC = getDocComment(MC, D);
-  if (!DC.hasValue())
-    return StringRef();
-
-  auto Brief = DC.getValue()->getBrief();
-  if (!Brief.hasValue())
-    return StringRef();
-
-  SmallString<256> BriefStr("");
-  llvm::raw_svector_ostream OS(BriefStr);
-  swift::markup::printInlinesUnder(Brief.getValue(), OS);
-  if (OS.str().empty())
-    return StringRef();
-
-  return Context.AllocateCopy(OS.str());
-}
-
-StringRef Decl::getBriefComment() const {
-  if (!this->canHaveComment())
-    return StringRef();
-
-  auto &Context = getASTContext();
-  if (Optional<StringRef> Comment = Context.getBriefComment(this))
-    return Comment.getValue();
-
-  StringRef Result;
-  auto RC = getRawComment();
-  if (!RC.isEmpty())
-    Result = extractBriefComment(Context, RC, this);
-
-  Context.setBriefComment(this, Result);
-  return Result;
+  auto Start = this->Comments.front().Range.getStart();
+  if (Start.isInvalid()) {
+    return CharSourceRange();
+  }
+  auto End = this->Comments.back().Range.getEnd();
+  auto Length = static_cast<const char *>(End.getOpaquePointerValue()) -
+                static_cast<const char *>(Start.getOpaquePointerValue());
+  return CharSourceRange(Start, Length);
 }

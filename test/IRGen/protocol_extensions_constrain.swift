@@ -1,4 +1,4 @@
-// RUN: %target-swift-frontend -emit-ir %s | FileCheck %s
+// RUN: %target-swift-frontend -emit-ir %s | %FileCheck %s
 
 // rdar://20532214 -- Wrong code for witness method lookup lets executable crash
 
@@ -27,7 +27,7 @@ public struct C2 : P2 {
 }
 
 extension P2 where Self.Index : P3 {
-  final public var bar: Bool {
+  public var bar: Bool {
 	  let i = startIndex
     return i.foo(i)
   }
@@ -37,4 +37,4 @@ let s = C2()
 
 s.bar
 
-// CHECK: call {{.*}} @_TWPV29protocol_extensions_constrain2C3S_2P3S_
+// CHECK: call {{.*}} @"$s29protocol_extensions_constrain2C3VAA2P3AAWP"

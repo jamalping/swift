@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -87,6 +87,15 @@ public:
     return !static_cast<bool>(set - *this);
   }
 
+  /// Check if this option set contains the exact same options as the given set.
+  bool containsOnly(OptionSet set) {
+    return Storage == set.Storage;
+  }
+
+  // '==' and '!=' are deliberately not defined because they provide a pitfall
+  // where someone might use '==' but really want 'contains'. If you actually
+  // want '==' behavior, use 'containsOnly'.
+
   /// Produce the union of two option sets.
   friend OptionSet operator|(OptionSet lhs, OptionSet rhs) {
     return OptionSet(lhs.Storage | rhs.Storage);
@@ -114,7 +123,7 @@ public:
     return OptionSet(lhs.Storage & ~rhs.Storage);
   }
 
-  /// Produce the intersection of two option sets.
+  /// Produce the difference of two option sets.
   friend OptionSet &operator-=(OptionSet &lhs, OptionSet rhs) {
     lhs.Storage &= ~rhs.Storage;
     return lhs;

@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift -enable-objc-interop
 
 // Test function requirements within protocols, as well as conformance to
 // said protocols.
@@ -23,7 +23,7 @@ struct X1b : P1 {
 protocol P2 {
   associatedtype Assoc : P1 // expected-note{{ambiguous inference of associated type 'Assoc': 'X1a' vs. 'X1b'}}
   // expected-note@-1{{protocol requires nested type 'Assoc'}}
-  func f1(_ x: Assoc) // expected-note{{protocol requires function 'f1' with type 'Assoc -> ()'}} expected-note{{protocol requires function 'f1' with type 'Assoc -> ()'}}
+  func f1(_ x: Assoc) // expected-note{{protocol requires function 'f1' with type '(X2w.Assoc) -> ()'}} expected-note{{protocol requires function 'f1' with type '(X2y.Assoc) -> ()'}}
 }
 
 // Exact match.
@@ -74,7 +74,7 @@ struct X2x : P2 { // expected-error{{type 'X2x' does not conform to protocol 'P2
 // Mismatch in parameter types
 struct X2y : P2 { // expected-error{{type 'X2y' does not conform to protocol 'P2'}}
   typealias Assoc = X1a
-  func f1(x: X1b) { } // expected-note{{candidate has non-matching type '(x: X1b) -> ()'}}
+  func f1(x: X1b) { }
 }
 
 // Ambiguous deduction
@@ -84,11 +84,11 @@ struct X2z : P2 { // expected-error{{type 'X2z' does not conform to protocol 'P2
 }
 
 // Protocol with prefix unary function
-prefix operator ~~ {}
+prefix operator ~~
 
 protocol P3 {
   associatedtype Assoc : P1
-  prefix func ~~(_: Self) -> Assoc // expected-note{{protocol requires function '~~' with type 'X3z -> Assoc'}}
+  static prefix func ~~(_: Self) -> Assoc // expected-note{{protocol requires function '~~' with type '(X3z) -> X3z.Assoc'}}
 }
 
 // Global operator match
@@ -96,7 +96,7 @@ struct X3a : P3 {
   typealias Assoc = X1a
 }
 
-prefix func ~~(_: X3a) -> X1a {} // expected-note{{candidate has non-matching type '(X3a) -> X1a'}} expected-note{{candidate is prefix, not postfix as required}}
+prefix func ~~(_: X3a) -> X1a {}
 
 // FIXME: Add example with overloaded prefix/postfix
 
@@ -105,13 +105,13 @@ struct X3z : P3 { // expected-error{{type 'X3z' does not conform to protocol 'P3
   typealias Assoc = X1a
 }
 
-postfix func ~~(_: X3z) -> X1a {} // expected-note{{candidate is postfix, not prefix as required}} expected-note{{candidate has non-matching type '(X3z) -> X1a'}}
+postfix func ~~(_: X3z) -> X1a {} // expected-note{{candidate is postfix, not prefix as required}}
 
 // Protocol with postfix unary function
-postfix operator ~~ {}
+postfix operator ~~
 protocol P4 {
   associatedtype Assoc : P1
-  postfix func ~~ (_: Self) -> Assoc // expected-note{{protocol requires function '~~' with type 'X4z -> Assoc'}}
+  static postfix func ~~ (_: Self) -> Assoc // expected-note{{protocol requires function '~~' with type '(X4z) -> X4z.Assoc'}}
 }
 
 // Global operator match
@@ -119,14 +119,14 @@ struct X4a : P4 {
   typealias Assoc = X1a
 }
 
-postfix func ~~(_: X4a) -> X1a {} // expected-note{{candidate has non-matching type '(X4a) -> X1a'}} expected-note{{candidate is postfix, not prefix as required}}
+postfix func ~~(_: X4a) -> X1a {}
 
 // Prefix/postfix mismatch.
 struct X4z : P4 { // expected-error{{type 'X4z' does not conform to protocol 'P4'}}
   typealias Assoc = X1a
 }
 
-prefix func ~~(_: X4z) -> X1a {} // expected-note{{candidate has non-matching type '(X4z) -> X1a'}} expected-note{{candidate is prefix, not postfix as required}}
+prefix func ~~(_: X4z) -> X1a {} // expected-note{{candidate is prefix, not postfix as required}}
 
 // Objective-C protocol
 @objc protocol P5 {
@@ -169,7 +169,8 @@ func f(_ args: T1) {
 
 f(T0(1, "Hi"))
 
-infix operator ~>> { precedence 255 }
+infix operator ~>> : MaxPrecedence
+precedencegroup MaxPrecedence { higherThan: BitwiseShiftPrecedence }
 
 func ~>> (x: Int, args: T0) {}
 func ~>> (x: Int, args: T1) {}
@@ -178,8 +179,8 @@ func ~>> (x: Int, args: T1) {}
 3~>>T1(2, "Hi")
 
 protocol Crankable {
-  func ~>> (x: Self, args: T0)
-  func ~>> (x: Self, args: T1)
+  static func ~>> (x: Self, args: T0)
+  static func ~>> (x: Self, args: T1)
 }
 
 extension Int : Crankable {}
@@ -187,11 +188,34 @@ extension Int : Crankable {}
 // Invalid witnesses.
 protocol P6 {
   func foo(_ x: Int)
-  func bar(x: Int) // expected-note{{protocol requires function 'bar(x:)' with type '(x: Int) -> ()'}}
+  func bar(x: Int) // expected-note{{protocol requires function 'bar(x:)' with type '(Int) -> ()'}}
 }
 struct X6 : P6 { // expected-error{{type 'X6' does not conform to protocol 'P6'}}
   func foo(_ x: Missing) { } // expected-error{{use of undeclared type 'Missing'}}
-  func bar() { } // expected-note{{candidate has non-matching type '() -> ()'}}
+  func bar() { }
+}
+
+protocol P6Ownership {
+  func thunk__shared(_ x: __shared Int)
+  func mismatch__shared(_ x: Int)
+  func mismatch__owned(x: Int)
+  func thunk__owned__owned(x: __owned Int)
+
+  __consuming func inherits__consuming(x: Int)
+  func mismatch__consuming(x: Int)
+  __consuming func mismatch__consuming_mutating(x: Int) // expected-note {{protocol requires function 'mismatch__consuming_mutating(x:)' with type '(Int) -> ()'}}
+  mutating func mismatch__mutating_consuming(x: Int)
+}
+struct X6Ownership : P6Ownership { // expected-error{{type 'X6Ownership' does not conform to protocol 'P6Ownership'}}
+  func thunk__shared(_ x: Int) { } // OK
+  func mismatch__shared(_ x: __shared Int) { } // OK
+  func mismatch__owned(x: __owned Int) { } // OK
+  func thunk__owned__owned(x: Int) { } // OK
+
+  func inherits__consuming(x: Int) { } // OK
+  __consuming func mismatch__consuming(x: Int) { } // OK
+  mutating func mismatch__consuming_mutating(x: Int) { } // expected-note {{candidate is marked 'mutating' but protocol does not allow it}}
+  __consuming func mismatch__mutating_consuming(x: Int) { } // OK - '__consuming' acts as a counterpart to 'nonmutating'
 }
 
 protocol P7 {
@@ -201,7 +225,7 @@ protocol P7 {
 struct X7 : P7 { }
 
 // Selecting the most specialized witness.
-prefix operator %%% {}
+prefix operator %%%
 
 protocol P8 {
   func foo()
@@ -210,7 +234,7 @@ protocol P8 {
 prefix func %%% <T : P8>(x: T) -> T { }
 
 protocol P9 : P8 {
-  prefix func %%% (x: Self) -> Self
+  static prefix func %%% (x: Self) -> Self
 }
 
 struct X9 : P9 {
@@ -231,7 +255,7 @@ struct X10 : P10 {
 }
 
 protocol P11 {
-  func ==(x: Self, y: Self) -> Bool
+  static func ==(x: Self, y: Self) -> Bool
 }
 
 protocol P12 {
@@ -242,7 +266,14 @@ protocol P12 {
 struct XIndexType : P11 { }
 
 struct X12 : P12 { // expected-error{{type 'X12' does not conform to protocol 'P12'}}
-  func getIndex() -> XIndexType { return XIndexType() } // expected-note{{inferred type 'XIndexType' (by matching requirement 'getIndex()') is invalid: does not conform to 'P1'}}
+  func getIndex() -> XIndexType { return XIndexType() } // expected-note{{candidate would match and infer 'Index' = 'XIndexType' if 'XIndexType' conformed to 'P1'}}
 }
 
 func ==(x: X12.Index, y: X12.Index) -> Bool { return true }
+
+protocol P13 {}
+protocol P14 {
+  static prefix func %%%(_: Self.Type)
+}
+prefix func %%%<P: P13>(_: P.Type) { }
+struct X13: P14, P13 { }

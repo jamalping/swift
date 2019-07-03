@@ -1,3 +1,4 @@
+#include "swift/AST/Module.h"
 #include "swift/Basic/LangOptions.h"
 #include "swift/Basic/SourceManager.h"
 #include "swift/Parse/Lexer.h"
@@ -38,7 +39,7 @@ public:
     case swift::tok::X: return #X; break;
 #define POUND(X, Y) \
     case swift::tok::pound_##X: return "pound_" #X; break;
-  #include "swift/Parse/Tokens.def"
+  #include "swift/Syntax/TokenKinds.def"
 
   #define OTHER(X) \
   case swift::tok::X: return #X; break;
@@ -81,7 +82,7 @@ public:
   }
   
   std::vector<Token> parseAndGetSplitTokens(unsigned BufID) {
-    swift::ParserUnit PU(SM, BufID, LangOpts, "unknown");
+    swift::ParserUnit PU(SM, SourceFileKind::Main, BufID, LangOpts, "unknown");
 
     bool Done = false;
     while (!Done) {
@@ -98,6 +99,7 @@ public:
                            BufID, 
                            /* Offset = */ 0,
                            /* EndOffset = */ 0,
+                           /* Diags = */nullptr,
                            /* KeepComments = */ true,
                            /* TokenizeInterpolatedString = */ true,
                            SplitTokens);
@@ -155,7 +157,7 @@ TEST_F(TokenizerTest, ProperlySplitTokens) {
      "integer_literal: 100\n"
      "r_brace: }\n"
      "kw_func: func\n"
-     "identifier: ⊕\n"
+     "oper_binary_spaced: ⊕\n"
      "oper_binary_unspaced: <\n"
      "identifier: T\n"
      "oper_binary_unspaced: >\n"

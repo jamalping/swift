@@ -2,31 +2,33 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
-// This implements the object representation of the standard ErrorProtocol
+// This implements the object representation of the standard Error
 // protocol type, which represents recoverable errors in the language. This
 // implementation is used when ObjC interop is disabled; the ObjC-interoperable
 // version is implemented in ErrorObject.mm.
 //
 //===----------------------------------------------------------------------===//
 
+#include "swift/Runtime/Config.h"
+
+#if !SWIFT_OBJC_INTEROP
+
 #include <stdio.h>
 #include "swift/Runtime/Debug.h"
 #include "ErrorObject.h"
 #include "Private.h"
 
-#if !SWIFT_OBJC_INTEROP
-
 using namespace swift;
 
-/// Determine the size and alignment of an ErrorProtocol box containing the given
+/// Determine the size and alignment of an Error box containing the given
 /// type.
 static std::pair<size_t, size_t>
 _getErrorAllocatedSizeAndAlignmentMask(const Metadata *type) {
@@ -43,8 +45,8 @@ _getErrorAllocatedSizeAndAlignmentMask(const Metadata *type) {
   return {size, alignMask};
 }
 
-/// Destructor for an ErrorProtocol box.
-static void _destroyErrorObject(HeapObject *obj) {
+/// Destructor for an Error box.
+static SWIFT_CC(swift) void _destroyErrorObject(SWIFT_CONTEXT HeapObject *obj) {
   auto error = static_cast<SwiftError *>(obj);
   
   // Destroy the value inside.
@@ -56,22 +58,20 @@ static void _destroyErrorObject(HeapObject *obj) {
   swift_deallocObject(obj, sizeAndAlign.first, sizeAndAlign.second);
 }
 
-/// Heap metadata for ErrorProtocol boxes.
-static const FullMetadata<HeapMetadata> ErrorProtocolMetadata{
-  HeapMetadataHeader{{_destroyErrorObject}, {&_TWVBo}},
-  Metadata{MetadataKind::ErrorObject},
+/// Heap metadata for Error boxes.
+static const FullMetadata<HeapMetadata> ErrorMetadata{
+  HeapMetadataHeader{{_destroyErrorObject}, {&VALUE_WITNESS_SYM(Bo)}},
+  HeapMetadata(MetadataKind::ErrorObject),
 };
 
-SWIFT_CC(swift) SWIFT_RUNTIME_EXPORT
-extern "C"
-BoxPair::Return
+BoxPair
 swift::swift_allocError(const swift::Metadata *type,
                         const swift::WitnessTable *errorConformance,
                         OpaqueValue *initialValue,
                         bool isTake) {
   auto sizeAndAlign = _getErrorAllocatedSizeAndAlignmentMask(type);
   
-  auto allocated = swift_allocObject(&ErrorProtocolMetadata,
+  auto allocated = swift_allocObject(&ErrorMetadata,
                                      sizeAndAlign.first, sizeAndAlign.second);
   
   auto error = reinterpret_cast<SwiftError*>(allocated);
@@ -94,7 +94,7 @@ swift::swift_allocError(const swift::Metadata *type,
 void
 swift::swift_deallocError(SwiftError *error, const Metadata *type) {
   auto sizeAndAlign = _getErrorAllocatedSizeAndAlignmentMask(type);
-  swift_deallocObject(error, sizeAndAlign.first, sizeAndAlign.second);
+  swift_deallocUninitializedObject(error, sizeAndAlign.first, sizeAndAlign.second);
 }
 
 void
@@ -106,6 +106,11 @@ swift::swift_getErrorValue(const SwiftError *errorObject,
   out->errorConformance = errorObject->errorConformance;
 }
 
-void swift::swift_willThrow(SwiftError *object) { }
+/// Breakpoint hook for debuggers.
+SWIFT_CC(swift) void
+swift::swift_willThrow(SWIFT_CONTEXT void *unused,
+                       SWIFT_ERROR_RESULT SwiftError **error) {
+  // do nothing
+}
 
 #endif

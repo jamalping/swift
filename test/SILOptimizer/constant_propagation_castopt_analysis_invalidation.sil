@@ -19,13 +19,13 @@ private class Foo2 : Foo {
 }
 
 // static Swift.Process._argc : Swift.Int32
-sil_global [fragile] @_TZvOs7Process5_argcVs5Int32 : $Int32
+sil_global [serialized] @_TZvOs7Process5_argcVs5Int32 : $Int32
 
 // globalinit_33_1BDF70FFC18749BAB495A73B459ED2F0_token5
-sil_global private_external [fragile] @globalinit_33_1BDF70FFC18749BAB495A73B459ED2F0_token5 : $Builtin.Word
+sil_global private_external [serialized] @globalinit_33_1BDF70FFC18749BAB495A73B459ED2F0_token5 : $Builtin.Word
 
 // static Swift.Process._unsafeArgv : Swift.UnsafeMutablePointer<Swift.UnsafeMutablePointer<Swift.Int8>>
-sil_global [fragile] @_TZvOs7Process11_unsafeArgvGVs20UnsafeMutablePointerGS0_Vs4Int8__ : $UnsafeMutablePointer<UnsafeMutablePointer<Int8>>
+sil_global [serialized] @_TZvOs7Process11_unsafeArgvGVs20UnsafeMutablePointerGS0_Vs4Int8__ : $UnsafeMutablePointer<UnsafeMutablePointer<Int8>>
 
 // main
 sil @main : $@convention(c) (Int32, UnsafeMutablePointer<UnsafeMutablePointer<Int8>>) -> Int32 {
@@ -45,7 +45,7 @@ bb0(%0 : $Int32, %1 : $UnsafeMutablePointer<UnsafeMutablePointer<Int8>>):
 }
 
 // Swift._didEnterMain (Swift.Int32, argv : Swift.UnsafeMutablePointer<Swift.UnsafeMutablePointer<Swift.Int8>>) -> ()
-sil [transparent] [fragile] @_TFs13_didEnterMainFTVs5Int324argvGVs20UnsafeMutablePointerGS0_Vs4Int8___T_ : $@convention(thin) (Int32, UnsafeMutablePointer<UnsafeMutablePointer<Int8>>) -> ()
+sil [transparent] [serialized] @_TFs13_didEnterMainFTVs5Int324argvGVs20UnsafeMutablePointerGS0_Vs4Int8___T_ : $@convention(thin) (Int32, UnsafeMutablePointer<UnsafeMutablePointer<Int8>>) -> ()
 
 // main.(Foo in _9ACC0692747077F216D14C36CD927671).speak (main.(Foo in _9ACC0692747077F216D14C36CD927671))() -> ()
 sil private @_TFC4mainP33_9ACC0692747077F216D14C36CD9276713Foo5speakfS0_FT_T_ : $@convention(method) (@guaranteed Foo) -> () {
@@ -202,7 +202,7 @@ bb4(%12 : $Foo2):                                 // Preds: bb3
   br bb6                                          // id: %17
 
 bb5:                                              // Preds: bb3
-  %18 = class_method %0 : $Foo, #Foo.speak!1 : Foo -> () -> () , $@convention(method) (@guaranteed Foo) -> () // user: %19
+  %18 = class_method %0 : $Foo, #Foo.speak!1 : Foo -> () -> (), $@convention(method) (@guaranteed Foo) -> () // user: %19
   %19 = apply %18(%0) : $@convention(method) (@guaranteed Foo) -> ()
   br bb6                                          // id: %20
 
@@ -213,7 +213,7 @@ bb6:                                              // Preds: bb4 bb5
 }
 
 // globalinit_33_1BDF70FFC18749BAB495A73B459ED2F0_func5
-sil private_external [fragile] @globalinit_33_1BDF70FFC18749BAB495A73B459ED2F0_func5 : $@convention(thin) () -> () {
+sil private_external [serialized] @globalinit_33_1BDF70FFC18749BAB495A73B459ED2F0_func5 : $@convention(thin) () -> () {
 bb0:
   %0 = global_addr @_TZvOs7Process11_unsafeArgvGVs20UnsafeMutablePointerGS0_Vs4Int8__ : $*UnsafeMutablePointer<UnsafeMutablePointer<Int8>> // user: %4
   %1 = integer_literal $Builtin.Int8, 0           // user: %2
@@ -225,13 +225,13 @@ bb0:
 }
 
 sil_vtable Foo {
-  #Foo.speak!1: _TFC4mainP33_9ACC0692747077F216D14C36CD9276713Foo5speakfS0_FT_T_	// main.(Foo in _9ACC0692747077F216D14C36CD927671).speak (main.(Foo in _9ACC0692747077F216D14C36CD927671))() -> ()
-  #Foo.deinit!deallocator: _TFC4mainP33_9ACC0692747077F216D14C36CD9276713FooD	// main.(Foo in _9ACC0692747077F216D14C36CD927671).__deallocating_deinit
-  #Foo.init!initializer.1: _TFC4mainP33_9ACC0692747077F216D14C36CD9276713FoocfMS0_FT_S0_	// main.(Foo in _9ACC0692747077F216D14C36CD927671).init (main.(Foo in _9ACC0692747077F216D14C36CD927671).Type)() -> main.(Foo in _9ACC0692747077F216D14C36CD927671)
+  #Foo.speak!1: @_TFC4mainP33_9ACC0692747077F216D14C36CD9276713Foo5speakfS0_FT_T_	// main.(Foo in _9ACC0692747077F216D14C36CD927671).speak (main.(Foo in _9ACC0692747077F216D14C36CD927671))() -> ()
+  #Foo.deinit!deallocator.1: @_TFC4mainP33_9ACC0692747077F216D14C36CD9276713FooD	// main.(Foo in _9ACC0692747077F216D14C36CD927671).__deallocating_deinit
+  #Foo.init!initializer.1: @_TFC4mainP33_9ACC0692747077F216D14C36CD9276713FoocfMS0_FT_S0_	// main.(Foo in _9ACC0692747077F216D14C36CD927671).init (main.(Foo in _9ACC0692747077F216D14C36CD927671).Type)() -> main.(Foo in _9ACC0692747077F216D14C36CD927671)
 }
 
 sil_vtable Foo2 {
-  #Foo.speak!1: _TFC4mainP33_9ACC0692747077F216D14C36CD9276714Foo25speakfS0_FT_T_	// main.(Foo2 in _9ACC0692747077F216D14C36CD927671).speak (main.(Foo2 in _9ACC0692747077F216D14C36CD927671))() -> ()
-  #Foo.init!initializer.1: _TFC4mainP33_9ACC0692747077F216D14C36CD9276714Foo2cfMS0_FT_S0_	// main.(Foo2 in _9ACC0692747077F216D14C36CD927671).init (main.(Foo2 in _9ACC0692747077F216D14C36CD927671).Type)() -> main.(Foo2 in _9ACC0692747077F216D14C36CD927671)
-  #Foo2.deinit!deallocator: _TFC4mainP33_9ACC0692747077F216D14C36CD9276714Foo2D	// main.(Foo2 in _9ACC0692747077F216D14C36CD927671).__deallocating_deinit
+  #Foo.speak!1: @_TFC4mainP33_9ACC0692747077F216D14C36CD9276714Foo25speakfS0_FT_T_	// main.(Foo2 in _9ACC0692747077F216D14C36CD927671).speak (main.(Foo2 in _9ACC0692747077F216D14C36CD927671))() -> ()
+  #Foo.init!initializer.1: @_TFC4mainP33_9ACC0692747077F216D14C36CD9276714Foo2cfMS0_FT_S0_	// main.(Foo2 in _9ACC0692747077F216D14C36CD927671).init (main.(Foo2 in _9ACC0692747077F216D14C36CD927671).Type)() -> main.(Foo2 in _9ACC0692747077F216D14C36CD927671)
+  #Foo2.deinit!deallocator.1: @_TFC4mainP33_9ACC0692747077F216D14C36CD9276714Foo2D	// main.(Foo2 in _9ACC0692747077F216D14C36CD927671).__deallocating_deinit
 }

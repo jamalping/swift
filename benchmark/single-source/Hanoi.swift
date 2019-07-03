@@ -2,22 +2,27 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
 // This test checks performance of Swift hanoi tower.
 // <rdar://problem/22151932>
-import Foundation
 import TestsUtils
+
+public let Hanoi = BenchmarkInfo(
+  name: "Hanoi",
+  runFunction: run_Hanoi,
+  tags: [.validation, .algorithm],
+  legacyFactor: 10)
 
 struct Move {
    var from: String
-   var to  : String
+   var to: String
    init(from:String, to:String) {
       self.from = from
       self.to = to
@@ -41,7 +46,7 @@ class TowersOfHanoi {
 
 @inline(never)
 public func run_Hanoi(_ N: Int) {
-  for _ in 1...100*N {
+  for _ in 1...10*N {
     let hanoi: TowersOfHanoi = TowersOfHanoi()
     hanoi.solve(10, start: "A", auxiliary: "B", end: "C")
   }

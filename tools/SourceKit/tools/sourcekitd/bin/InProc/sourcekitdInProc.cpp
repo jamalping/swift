@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -15,14 +15,16 @@
 #include "SourceKit/Support/Concurrency.h"
 #include "SourceKit/Support/UIdent.h"
 
+#include "llvm/ADT/SmallString.h"
 #include "llvm/Support/Mutex.h"
 #include "llvm/Support/Path.h"
 
 // FIXME: Portability ?
 #include <Block.h>
-#include <dispatch/dispatch.h>
 
-#ifdef LLVM_ON_WIN32
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <windows.h>
 #else
 #include <dlfcn.h>
@@ -79,9 +81,19 @@ UIdent sourcekitd::UIdentFromSKDUID(sourcekitd_uid_t uid) {
 }
 
 std::string sourcekitd::getRuntimeLibPath() {
-  // FIXME: Move to an LLVM API. Note that libclang does the same thing.
-#ifdef LLVM_ON_WIN32
-#error Not implemented
+#if defined(_WIN32)
+  MEMORY_BASIC_INFORMATION mbi;
+  llvm::SmallString<128> libPath;
+  char path[MAX_PATH + 1];
+  if (!VirtualQuery(static_cast<void *>(sourcekitd_initialize), &mbi,
+                    sizeof(mbi)))
+    llvm_unreachable("call to VirtualQuery failed");
+  if (!GetModuleFileNameA(static_cast<HINSTANCE>(mbi.AllocationBase), path,
+                          MAX_PATH))
+    llvm_unreachable("call to GetModuleFileNameA failed");
+  libPath = llvm::sys::path::parent_path(llvm::sys::path::parent_path(path));
+  llvm::sys::path::append(libPath, "lib");
+  return libPath.str();
 #else
   // This silly cast below avoids a C++ warning.
   Dl_info info;
@@ -94,7 +106,7 @@ std::string sourcekitd::getRuntimeLibPath() {
 }
 
 void sourcekitd::set_interrupted_connection_handler(
-                          sourcekitd_interrupted_connection_handler_t handler) {
+                          llvm::function_ref<void()> handler) {
 }
 
 //===----------------------------------------------------------------------===//
@@ -102,16 +114,15 @@ void sourcekitd::set_interrupted_connection_handler(
 //===----------------------------------------------------------------------===//
 
 sourcekitd_response_t sourcekitd_send_request_sync(sourcekitd_object_t req) {
-  dispatch_semaphore_t sema = dispatch_semaphore_create(0);
+  Semaphore sema(0);
 
   sourcekitd_response_t ReturnedResp;
   sourcekitd::handleRequest(req, [&](sourcekitd_response_t resp) {
     ReturnedResp = resp;
-    dispatch_semaphore_signal(sema);
+    sema.signal();
   });
 
-  dispatch_semaphore_wait(sema, DISPATCH_TIME_FOREVER);
-  dispatch_release(sema);
+  sema.wait();
   return ReturnedResp;
 }
 
@@ -123,7 +134,7 @@ void sourcekitd_send_request(sourcekitd_object_t req,
   sourcekitd_request_retain(req);
   receiver = Block_copy(receiver);
   WorkQueue::dispatchConcurrent([=]{
-    sourcekitd::handleRequest(req, [&](sourcekitd_response_t resp) {
+    sourcekitd::handleRequest(req, [=](sourcekitd_response_t resp) {
       // The receiver accepts ownership of the response.
       receiver(resp);
       Block_release(receiver);
@@ -154,15 +165,12 @@ sourcekitd_set_notification_handler(sourcekitd_response_receiver_t receiver) {
 }
 
 void sourcekitd::postNotification(sourcekitd_response_t Notification) {
-  sourcekitd_response_receiver_t receiver = Block_copy(NotificationReceiver);
-  if (!receiver) {
-    sourcekitd_response_dispose(Notification);
-    return;
-  }
-
   WorkQueue::dispatchOnMain([=]{
+    if (!NotificationReceiver) {
+      sourcekitd_response_dispose(Notification);
+      return;
+    }
     // The receiver accepts ownership of the notification object.
-    receiver(Notification);
-    Block_release(receiver);
+    NotificationReceiver(Notification);
   });
 }
